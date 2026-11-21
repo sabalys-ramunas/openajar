@@ -111,7 +111,12 @@ jobs:
         env:
           # empty unless the secret is set: then npm signs in by OIDC (trusted publishing)
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        # A version npm already has (published by hand, or a re-run) is done, not a failure.
+        run: |
+          if npm view "openajar@${TAG#v}" version >/dev/null 2>&1; then
+            echo "openajar ${TAG#v} is already on npm"; exit 0
+          fi
+          npm publish --provenance --access public
 
   registry:
     name: MCP Registry
