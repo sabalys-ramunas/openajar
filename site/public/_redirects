@@ -1,0 +1,3 @@
+# The install line on the page: curl -fsSL https://openajar.com/install.sh | sh
+# It always runs the installer from the main branch of the public repository, as the README's line does.
+/install.sh https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/scripts/install.sh 302

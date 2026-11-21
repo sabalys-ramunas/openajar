@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
@@ -572,3 +573,21 @@ def mcp_bridge(name: Annotated[str, typer.Argument(help="Connection name, as sho
     from openajar.client.bridge import run
 
     raise typer.Exit(run(name))
+
+
+@app.command("mcp")
+def mcp_command(
+    home: Annotated[Path | None, typer.Option("--home", hidden=True,
+                                              help="The local node's folder (default: ~/.openajar).")] = None,
+    start_only: Annotated[bool, typer.Option("--start-only", hidden=True,
+                                             help="Only start the local service, then exit.")] = False,
+) -> None:
+    """openajar as a stdio MCP server, for any MCP client that starts a command (Cursor, Claude Desktop,
+    Codex, `npx -y openajar`, `uvx openajar mcp`). It talks to openajar on this computer and starts it
+    when it is stopped. Not set up yet? It still answers, and tells the agent and you what to run.
+    Only MCP messages go to stdout; it exits when stdin closes."""
+    from openajar.client import mcp_command as command
+
+    if start_only:
+        raise typer.Exit(command.start_only(home))
+    raise typer.Exit(command.run(home))

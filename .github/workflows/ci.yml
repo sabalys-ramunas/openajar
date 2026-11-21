@@ -114,6 +114,9 @@ jobs:
       # token files match their script, and the contrast and colour-blind checks pass.
       - run: pnpm test
       - run: pnpm build
+      # The npm launcher (integrations/npm): node's own test runner, no dependencies.
+      - run: npm test
+        working-directory: integrations/npm
 
   typecheck:
     name: type check and generated files

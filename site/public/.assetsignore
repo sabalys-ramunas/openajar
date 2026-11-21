@@ -1,0 +1,4 @@
+# Files in public/ that are not uploaded as assets. wrangler never uploads this file itself, and reads
+# _headers and _redirects as settings. The .well-known folder is NOT listed: it must be served
+# (/.well-known/mcp-registry-auth proves the domain to the MCP Registry).
+.DS_Store

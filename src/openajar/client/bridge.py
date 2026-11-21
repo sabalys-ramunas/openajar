@@ -341,23 +341,38 @@ def run(name: str) -> int:
     from openajar.client.errors import ClientError
     from openajar.client.ops import Client
 
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda *_: os._exit(0))  # the client is shutting us down: nothing left to say
+    quit_on_signals()
     client = Client(out=log)
     try:
         conn = client.get(name)
     except ClientError as exc:
         log(f"{exc.message}" + (f"; {exc.hint}" if exc.hint else ""))
         return 1
+    serve_connection(client, conn)
+    return 0  # serve_connection never returns
+
+
+def quit_on_signals() -> None:
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: os._exit(0))  # the client is shutting us down: nothing left to say
+
+
+def make_bridge(client: Any, conn: Any) -> Bridge:
+    """The bridge to the connection `conn` (an openajar.client.state.Connection), its token from this
+    computer's store."""
     store = client.tokens(conn.token_store)
     reopen = None
     if not conn.local:
         def reopen() -> None:
             client.service(conn.service).restart(conn.name)
     path = MCP_PATH + (f"?toolsets={','.join(conn.toolsets)}" if conn.toolsets else "")
-    bridge = Bridge(name=conn.name, host=conn.host, port=conn.local_port, path=path,
-                    token=lambda: store.get(conn.name), reopen=reopen)
-    code = bridge.serve()
+    return Bridge(name=conn.name, host=conn.host, port=conn.local_port, path=path,
+                  token=lambda: store.get(conn.name), reopen=reopen)
+
+
+def serve_connection(client: Any, conn: Any, stdin: IO[bytes] | None = None) -> None:
+    """Bridge stdio to `conn` until the client closes stdin, then exit the process."""
+    code = make_bridge(client, conn).serve(stdin)
     with contextlib.suppress(OSError, ValueError):
         sys.stdout.flush()
         sys.stderr.flush()

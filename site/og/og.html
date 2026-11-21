@@ -1,0 +1,40 @@
+<!doctype html>
+<!-- The source of public/og.png (1200 by 630). Render it with site/og/render.py; see site/README.md. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>openajar social image</title>
+<style>
+@font-face { font-family: 'Geist'; font-weight: 100 900; src: url(../public/fonts/geist.woff2) format('woff2'); }
+@font-face { font-family: 'Geist Mono'; font-weight: 100 900; src: url(../public/fonts/geist-mono.woff2) format('woff2'); }
+* { box-sizing: border-box; margin: 0; }
+html, body { width: 1200px; height: 630px; overflow: hidden; }
+body {
+  position: relative; font-family: 'Geist', sans-serif; color: #fff; -webkit-font-smoothing: antialiased;
+  background:
+    linear-gradient(90deg, rgb(8 12 34 / 0.78) 0%, rgb(8 12 34 / 0.5) 46%, rgb(8 12 34 / 0.05) 100%),
+    #0a1030 url(../public/img/dawn-1600.webp) 20% 100% / cover;
+}
+.text { position: absolute; left: 72px; top: 64px; width: 560px; }
+.brand { display: flex; align-items: center; gap: 14px; font-size: 30px; font-weight: 600; letter-spacing: -0.02em; }
+.brand img { width: 52px; height: 52px; }
+h1 { margin-top: 60px; font-size: 60px; text-wrap: balance; line-height: 1.04; font-weight: 600; letter-spacing: -0.042em; }
+p { margin-top: 22px; font-size: 24px; line-height: 1.4; color: rgb(255 255 255 / 0.84); letter-spacing: -0.01em; }
+.url { position: absolute; left: 72px; bottom: 56px; display: inline-flex; align-items: center; gap: 10px; padding: 10px 20px 10px 16px; border-radius: 999px;
+  background: rgb(10 13 30 / 0.62); border: 1px solid rgb(255 255 255 / 0.18); font: 500 22px/28px 'Geist Mono', monospace; }
+.url i { width: 10px; height: 10px; border-radius: 50%; background: #a08aff; box-shadow: 0 0 0 4px rgb(160 138 255 / 0.25); }
+.shot { position: absolute; left: 660px; top: 118px; width: 720px; border-radius: 14px; overflow: hidden; border: 1px solid rgb(255 255 255 / 0.16);
+  box-shadow: 0 40px 80px -30px rgb(0 0 0 / 0.75); }
+.shot img { display: block; width: 100%; }
+</style>
+</head>
+<body>
+  <div class="text">
+    <div class="brand"><img src="../public/icon.svg" alt="">openajar</div>
+    <h1>A computer of its own for your AI agent</h1>
+    <p>Watch it work, and take over with one click. Free and open source.</p>
+  </div>
+  <div class="url"><i></i>openajar.com</div>
+  <div class="shot"><img src="../public/img/live-view-2000.webp" alt=""></div>
+</body>
+</html>

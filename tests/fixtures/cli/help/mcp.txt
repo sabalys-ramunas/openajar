@@ -1,0 +1,13 @@
+
+ Usage: openajar mcp [OPTIONS]
+
+ openajar as a stdio MCP server, for any MCP client that starts a command
+ (Cursor, Claude Desktop, Codex, `npx -y openajar`, `uvx openajar mcp`). It
+ talks to openajar on this computer and starts it when it is stopped. Not set
+ up yet? It still answers, and tells the agent and you what to run. Only MCP
+ messages go to stdout; it exits when stdin closes.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

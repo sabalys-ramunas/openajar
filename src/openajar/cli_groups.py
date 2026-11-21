@@ -61,6 +61,7 @@ VISIBLE: tuple[tuple[str, str, str], ...] = (
     ("connect", START, "Let the agents on your computer use a node."),
     ("status", START, "Is it up, and which lanes it has (--check: what is wrong)."),
     ("open", START, "Watch a lane live and take control (--terminal: a dashboard)."),
+    ("mcp", START, "openajar as a stdio MCP server, for any MCP client."),
     ("run", BUILD, "Run a command on the node against this working tree."),
     ("expose", BUILD, "Your laptop's dev server, opened in one browser lane."),
     ("local", START, "openajar on this computer: start, stop, status, logs."),
@@ -334,6 +335,8 @@ def _visible_commands(m: _Mounted) -> list[CommandInfo]:
                                            optional=("lane",),
                                            missing="open needs a lane id, for example `openajar open "
                                                    "biz-a/instagram` (or --terminal for the dashboard)")))
+    if "mcp" in commands:
+        out.append(_cmd(commands["mcp"], rich_help_panel=START, short_help=panels["mcp"][1]))
     # the commands for your own code: run a command there, your dev server in a lane, a lane's port here
     for name in ("run", "expose"):
         if name in commands:

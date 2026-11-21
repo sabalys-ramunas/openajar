@@ -1,6 +1,6 @@
 [project]
 name = "openajar"
-version = "0.5.2"
+version = "0.5.3"
 description = "Self-hosted cloud dev environments for AI coding agents: a disposable VM with a terminal and a real browser for Claude Code, Codex and any MCP client."
 readme = "README.md"
 license = "Apache-2.0"
@@ -104,6 +104,20 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openajar"]
+
+# The sdist PyPI carries: the package and what its wheel is built from, never the rest of the repository
+# (tests, the web app's sources, research notes). The web app comes from the release's prebuilt copy
+# (`openajar web install`, openajar.setup.webapp), as it does for the installer.
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src/openajar",
+  "/deploy/environments",
+  "/README.md",
+  "/LICENSE",
+  "/NOTICE",
+  "/CHANGELOG.md",
+  "/pyproject.toml",
+]
 
 # The docker provider's image (Dockerfile, entrypoint) inside the package, so `openajar environments
 # setup --build` works from an install without the checkout (openajar.environments.cli._image_source).

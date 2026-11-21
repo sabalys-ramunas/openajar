@@ -17,6 +17,7 @@
 │ connect       Let the agents on your computer use a node.                    │
 │ status        Is it up, and which lanes it has (--check: what is wrong).     │
 │ open          Watch a lane live and take control (--terminal: a dashboard).  │
+│ mcp           openajar as a stdio MCP server, for any MCP client.            │
 │ local         openajar on this computer: start, stop, status, logs.          │
 │ web           The web app in your browser: install, update, remove.          │
 ╰──────────────────────────────────────────────────────────────────────────────╯

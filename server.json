@@ -1,0 +1,41 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.openajar/openajar",
+  "title": "openajar",
+  "description": "A computer for your agent: a cloud VM with a terminal, a real browser and your repo.",
+  "version": "0.5.3",
+  "websiteUrl": "https://openajar.com",
+  "repository": {
+    "url": "https://github.com/sabalys-ramunas/openajar",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "openajar",
+      "version": "0.5.3",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "description": "Serve MCP on stdio (the `openajar mcp` command)."
+        }
+      ]
+    },
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "openajar",
+      "version": "0.5.3",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

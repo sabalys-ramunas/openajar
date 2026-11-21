@@ -6,6 +6,24 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-21
+
+### Added
+
+- openajar.com: the project's website (site/, a Cloudflare Worker with static assets), with the short install line
+  `curl -fsSL https://openajar.com/install.sh | sh` (a redirect to scripts/install.sh on main).
+
+- `openajar mcp`: openajar as a stdio MCP server, for any MCP client that starts a command (Cursor, Claude
+  Desktop, the MCP marketplaces). It bridges to openajar on this computer, as `openajar mcp-bridge local`
+  does for Codex, and starts the local service first when it is stopped. On a computer where openajar was
+  never set up, it still answers: its instructions and its one tool tell the agent what to run (the install
+  line, `openajar setup`, and that VMs need a Hetzner Cloud token or Docker), and it says the same on stderr.
+- openajar is ready for three registries: PyPI (`uvx openajar mcp`; the sdist now carries only the package),
+  npm (`npx -y openajar`, a dependency-free launcher in integrations/npm that runs the installed CLI, or
+  explains what to install when there is none) and the MCP Registry as `com.openajar/openajar` (server.json).
+  glama.json names the maintainer for glama.ai. The publish workflow puts each release on all three by
+  trusted publishing, after scripts/check_release_versions.py checks that every copy has the tag's version.
+
 ### Changed
 
 - The unit tests no longer pass or fail on the runner's speed: they wait for what they expect for up to

@@ -96,7 +96,7 @@ def _help(args: list[str]) -> str:
 def test_top_level_help_fits_on_one_screen_and_starts_with_the_task(monkeypatch):
     monkeypatch.setattr(typer.rich_utils, "MAX_WIDTH", 80)
     text = _help([])
-    assert len(text.splitlines()) <= 43  # 40, then `environments` (docs/design/environments.md), `local`, `web`
+    assert len(text.splitlines()) <= 44  # 40, then `environments` (docs/design/environments.md), `local`, `web`, `mcp`
     assert "openajar setup" in text.split("Options")[0]
     assert "—" not in text
 

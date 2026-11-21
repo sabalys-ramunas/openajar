@@ -1,0 +1,41 @@
+{
+  "name": "openajar",
+  "version": "0.5.3",
+  "description": "A computer for your agent: a VM with a terminal and a real browser, as an MCP server. Runs the openajar CLI.",
+  "mcpName": "com.openajar/openajar",
+  "license": "Apache-2.0",
+  "author": "Ramunas Sabalys",
+  "homepage": "https://openajar.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sabalys-ramunas/openajar.git",
+    "directory": "integrations/npm"
+  },
+  "bugs": {
+    "url": "https://github.com/sabalys-ramunas/openajar/issues"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "ai-agents",
+    "claude-code",
+    "codex",
+    "dev-environment",
+    "remote-browser"
+  ],
+  "bin": {
+    "openajar": "bin/openajar.js"
+  },
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

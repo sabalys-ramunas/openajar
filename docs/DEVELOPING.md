@@ -765,7 +765,10 @@ A release is a `vX.Y.Z` tag on the public repository's `main`, with a GitHub rel
 installer (`scripts/install.sh`) installs the newest such tag unless `OPENAJAR_GIT_REF` names
 another ref, so people get a release, never whatever `main` is today. To cut one:
 
-1. Set the version in `pyproject.toml` and `src/openajar/__init__.py` (and `uv lock`).
+1. Set the version in `pyproject.toml`, `src/openajar/__init__.py`, `integrations/npm/package.json` and
+   `server.json` (its own `version` and each package's), then `uv lock`.
+   `python3 scripts/check_release_versions.py --tag vX.Y.Z` says whether they all agree with the tag
+   (tests/unit/test_release_versions.py checks that they agree with each other).
 2. In `CHANGELOG.md`, rename `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD` and open a new empty
    `[Unreleased]` above it.
 3. Push to `main`, wait for CI to pass there, then tag it and make the release as a **draft**:
@@ -785,6 +788,44 @@ another ref, so people get a release, never whatever `main` is today. To cut one
    release published before its web app was attached, or with immutability off, has no installable web app.
    Publishing also starts `env-image`, which pushes the docker provider's machine image
    (`ghcr.io/<owner>/agentos-env:X.Y.Z`).
+
+6. Publishing the release also starts `publish` (.github/workflows/publish.yml), which puts the same
+   version on the three registries, in this order:
+   - **PyPI** (`openajar`, sdist and wheel): trusted publishing, no token. It checks the versions
+     again, builds with `uv build`, tries the wheel (`openajar --version`, `openajar mcp` answers
+     initialize), then publishes from the GitHub environment `pypi`. The long description is
+     README.md, whose `<!-- mcp-name: com.openajar/openajar -->` line is what the MCP Registry
+     reads to accept the PyPI package.
+   - **npm** (`openajar`, integrations/npm): `npm test`, then `npm publish --provenance --access
+     public`, signed in by trusted publishing (OIDC), or by the `NPM_TOKEN` secret when it is set.
+     The registry accepts the package by its `mcpName` in package.json.
+   - **the MCP Registry** (`com.openajar/openajar`, server.json): it waits until PyPI and npm serve the
+     version, runs `mcp-publisher validate`, signs in as the domain (`mcp-publisher login http --domain
+     openajar.com --private-key` with the `MCP_REGISTRY_KEY` secret) and runs `mcp-publisher publish`.
+   Check each one after: https://pypi.org/project/openajar/, https://www.npmjs.com/package/openajar and
+   `curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=com.openajar/openajar"`.
+   When one job fails, fix the cause and use Re-run failed jobs (or Actions > publish > Run workflow
+   with the tag): PyPI skips files it already has, and npm and the registry refuse a version they
+   already have, so a job that passed is not run again.
+
+   Set up once, before the first release:
+   - PyPI: on https://pypi.org/manage/account/publishing/, a pending trusted publisher for the project
+     `openajar`: the repository github.com/sabalys-ramunas/openajar, workflow `publish.yml`,
+     environment `pypi`. In the repository, Settings > Environments > New environment `pypi` (add yourself as a
+     required reviewer to approve each upload).
+   - npm: publish 0.5.2 (or the first version) once by hand from `integrations/npm` (`npm login`, then
+     `npm publish --access public`), then on npmjs.com > openajar > Settings > Trusted publishing add
+     GitHub Actions for the repository github.com/sabalys-ramunas/openajar and the workflow
+     `publish.yml`. Until then, an automation token in the `NPM_TOKEN` secret works too.
+   - The MCP Registry: an Ed25519 key pair (`openssl genpkey -algorithm Ed25519 -out key.pem`). Serve
+     `v=MCPv1; k=ed25519; p=<public key>` at
+     `https://openajar.com/.well-known/mcp-registry-auth` (the public key: `openssl pkey -in key.pem
+     -pubout -outform DER | tail -c 32 | base64`), and put the private key, as hex, in the
+     `MCP_REGISTRY_KEY` secret (`openssl pkey -in key.pem -noout -text | grep -A3 "priv:" | tail -n +2 |
+     tr -d ' :\n'`).
+   - MCP marketplaces: glama.json at the repository root names the maintainer for glama.ai. The other
+     directories (Smithery, mcp.so, PulseMCP and the like) read the MCP Registry or take a link to the
+     repository; each lists the server as a command: `npx -y openajar`, or `uvx openajar mcp`.
 
 Before 1.0, a minor version may change tools or settings; say so in the release notes.
 

@@ -1,0 +1,148 @@
+name: publish
+
+# openajar on the three registries, for each published release (docs/DEVELOPING.md "Releases"):
+#   PyPI               the `openajar` package (sdist and wheel), by trusted publishing: no token secret.
+#                      PyPI trusts this workflow (publish.yml) in the GitHub environment `pypi`.
+#   npm                the `openajar` launcher (integrations/npm), with provenance. Trusted publishing
+#                      (OIDC) when npm trusts this workflow; else the NPM_TOKEN secret.
+#   the MCP Registry   server.json as com.openajar/openajar, signed in by the openajar.com domain
+#                      (the MCP_REGISTRY_KEY secret; https://openajar.com/.well-known/mcp-registry-auth).
+# The registry checks that both packages exist and name the server (the README's mcp-name line, the
+# package.json's mcpName), so it goes last. Every version (pyproject.toml, src/openajar/__init__.py,
+# package.json, server.json) must be the tag's: scripts/check_release_versions.py stops the run before
+# anything is published when one is not.
+#
+# It runs when a release is published, or by hand for a tag (Actions > publish > Run workflow) to finish
+# a run that failed halfway: PyPI skips files it already has, npm and the registry refuse a version they
+# have, so run again only the job that failed (Re-run failed jobs).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release tag to publish (vX.Y.Z)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  MCP_PUBLISHER_VERSION: "1.8.1"
+  # sha256 of mcp-publisher_linux_amd64.tar.gz in github.com/modelcontextprotocol/registry's release v1.8.1
+  MCP_PUBLISHER_SHA256: "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc"
+
+jobs:
+  build:
+    name: check the versions, build the Python package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - name: Every version is the tag's
+        run: python3 scripts/check_release_versions.py --tag "$TAG"
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - name: Build the sdist and the wheel
+        run: uv build --out-dir dist
+      - name: The wheel installs and serves MCP
+        run: |
+          uv venv /tmp/try
+          VIRTUAL_ENV=/tmp/try uv pip install "$(ls dist/*.whl)"
+          /tmp/try/bin/openajar --version | grep -qx "${TAG#v}"
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+            | HOME=$(mktemp -d) /tmp/try/bin/openajar mcp | grep -q '"serverInfo"'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: python-dist
+          path: dist/
+          if-no-files-found: error
+
+  pypi:
+    name: PyPI
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/project/openajar/
+    permissions:
+      id-token: write  # trusted publishing
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: python-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          skip-existing: true
+
+  npm:
+    name: npm
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      id-token: write  # provenance, and trusted publishing
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # trusted publishing needs npm 11.5.1 or later; Node 22 brings npm 10
+      - run: npm install -g npm@11.6.2
+      - name: Test the launcher
+        working-directory: integrations/npm
+        run: npm test
+      - name: Publish
+        working-directory: integrations/npm
+        env:
+          # empty unless the secret is set: then npm signs in by OIDC (trusted publishing)
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
+
+  registry:
+    name: MCP Registry
+    needs: [pypi, npm]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL -o /tmp/mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  /tmp/mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf /tmp/mcp-publisher.tar.gz -C /tmp mcp-publisher
+      - name: Wait until PyPI and npm serve this version
+        run: |
+          v="${TAG#v}"
+          for _ in $(seq 1 30); do
+            if curl -fsS "https://pypi.org/pypi/openajar/$v/json" >/dev/null \
+              && curl -fsS "https://registry.npmjs.org/openajar/$v" >/dev/null; then exit 0; fi
+            sleep 10
+          done
+          echo "::error::openajar $v is not on PyPI and npm yet"; exit 1
+      - name: Validate server.json
+        run: /tmp/mcp-publisher validate
+      - name: Sign in as openajar.com and publish
+        env:
+          MCP_REGISTRY_KEY: ${{ secrets.MCP_REGISTRY_KEY }}
+        run: |
+          /tmp/mcp-publisher login http --domain openajar.com --private-key "$MCP_REGISTRY_KEY"
+          /tmp/mcp-publisher publish

@@ -1,8 +1,10 @@
 <p align="center">
-  <img src="assets/icon.svg" width="96" height="96" alt="openajar logo">
+  <img src="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/icon.svg" width="96" height="96" alt="openajar logo">
 </p>
 
 <h1 align="center">openajar</h1>
+
+<!-- mcp-name: com.openajar/openajar -->
 
 <p align="center">
   <strong>A computer for your agent, with a browser, a terminal and a disk that stay.</strong><br>
@@ -18,6 +20,7 @@
 </p>
 
 <p align="center">
+  <a href="https://openajar.com">Website</a> ·
   <a href="#install">Install</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#signed-in-without-showing-a-password">Logins</a> ·
@@ -30,12 +33,12 @@
 <br>
 
 <p align="center">
-  <img src="assets/readme/live-view.png" width="100%" alt="The openajar live view: the agent's computer as a card on a dark stage. Its desktop shows a top bar that says Claude Code is using the browser, and a browser window on a launch checklist page, where a violet pointer labelled Claude Code has just ticked Welcome email. Under the card, one pill says Claude Code has control, with a Take over button, and next to it the record, full screen and More buttons.">
+  <img src="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/live-view.png" width="100%" alt="The openajar live view: the agent's computer as a card on a dark stage. Its desktop shows a top bar that says Claude Code is using the browser, and a browser window on a launch checklist page, where a violet pointer labelled Claude Code has just ticked Welcome email. Under the card, one pill says Claude Code has control, with a Take over button, and next to it the record, full screen and More buttons.">
 </p>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/how-it-works-dark.svg">
-  <img src="assets/readme/how-it-works-light.svg" width="100%" alt="How openajar works. 1: you ask your agent in Claude Code, Codex or T3 Code, on your laptop as today. 2: it gets its own computer, a VM with a terminal, a real browser and your repository, ready in about two minutes. 3: you get the result, a screenshot as proof and a pull request, and the computer is saved when idle and back tomorrow for cents a month.">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/how-it-works-dark.svg">
+  <img src="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/how-it-works-light.svg" width="100%" alt="How openajar works. 1: you ask your agent in Claude Code, Codex or T3 Code, on your laptop as today. 2: it gets its own computer, a VM with a terminal, a real browser and your repository, ready in about two minutes. 3: you get the result, a screenshot as proof and a pull request, and the computer is saved when idle and back tomorrow for cents a month.">
 </picture>
 
 > openajar was called agentos until November 2026 (legacy-name). Your setup keeps working: see
@@ -68,7 +71,7 @@ One command on macOS or Linux. It installs the latest release, then walks you th
 terminal.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/scripts/install.sh | sh
+curl -fsSL https://openajar.com/install.sh | sh
 ```
 
 Setup takes about five minutes: paste a Hetzner Cloud token (or use Docker), reuse your GitHub
@@ -76,7 +79,7 @@ login, and it connects Claude Code and Codex for you (and `ssh` to your agents' 
 can be skipped and changed later.
 
 <p align="center">
-  <img src="assets/readme/setup.png" width="100%" alt="openajar setup in a terminal: the install line, a welcome that says nothing bills until a VM opens, a quick start, then five steps (VMs on Hetzner Cloud with the token checked and a dev snapshot built, the GitHub login from gh, how environments stay with saves when idle chosen, Claude Code, Codex and the skills connected, and ssh from your shell), a health check where every row says ready, and the line All set. Nothing bills until an agent opens a VM.">
+  <img src="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/setup.png" width="100%" alt="openajar setup in a terminal: the install line, a welcome that says nothing bills until a VM opens, a quick start, then five steps (VMs on Hetzner Cloud with the token checked and a dev snapshot built, the GitHub login from gh, how environments stay with saves when idle chosen, Claude Code, Codex and the skills connected, and ssh from your shell), a health check where every row says ready, and the line All set. Nothing bills until an agent opens a VM.">
 </p>
 
 > [!TIP]
@@ -100,7 +103,7 @@ can be skipped and changed later.
 The installer puts `uv` and `openajar` in `~/.local/bin`, never asks for `sudo`, and is safe to run
 again: it updates openajar in place, and restarts the local service when it runs, so it runs the new
 version on the same port. To install a branch or an older release, set `OPENAJAR_GIT_REF`
-(for example `OPENAJAR_GIT_REF=v0.5.1`).
+(for example `OPENAJAR_GIT_REF=v0.5.3`).
 
 <!-- legacy-name: begin (the old name, for people upgrading from it) -->
 Coming from agentos 0.3 or 0.4? Run the same install line. It replaces the `agentos` command with
@@ -225,7 +228,19 @@ What this defends against, and what it does not: [docs/THREAT-MODEL.md](docs/THR
 | **Claude Code** | connected by `openajar setup`, with the openajar skills |
 | **Codex** | connected by `openajar setup` |
 | **T3 Code** | nothing more: it uses Claude Code's and Codex's settings, and shows the live view in its preview pane |
-| **Any MCP client** (Cursor, for example) | by hand: Streamable HTTP at `http://127.0.0.1:7410/mcp`, with the token setup keeps for your agents |
+| **Any MCP client** (Cursor, Claude Desktop, for example) | add a stdio server that runs `openajar mcp` (or `npx -y openajar`, or `uvx openajar mcp`); or by hand: Streamable HTTP at `http://127.0.0.1:7410/mcp`, with the token setup keeps for your agents |
+
+For a client that starts a command, the server entry is the same everywhere:
+
+```json
+{ "mcpServers": { "openajar": { "command": "openajar", "args": ["mcp"] } } }
+```
+
+`openajar mcp` talks to openajar on your computer and starts its service when it is stopped. On a
+computer where openajar is not set up yet, it still answers, and tells the agent (and you) what to run.
+`npx -y openajar` does the same through the installed CLI, and says what to install when there is none.
+It is also listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as
+`com.openajar/openajar`.
 
 ## The web app
 
@@ -237,7 +252,7 @@ screen. The round record button saves what you see as a video on your computer, 
 is made in your browser and never uploaded.
 
 <p align="center">
-  <img src="assets/readme/live-view-clip.webp" width="100%" alt="A clip recorded with the live view's record button: Claude Code ticks three items on a launch checklist, its violet pointer gliding from one to the next, types a note for the team, runs a command in its terminal window while the pointer steps aside, and ticks the last item.">
+  <img src="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/live-view-clip.webp" width="100%" alt="A clip recorded with the live view's record button: Claude Code ticks three items on a launch checklist, its violet pointer gliding from one to the next, types a note for the team, runs a command in its terminal window while the pointer steps aside, and ticks the last item.">
 </p>
 
 openajar has a web app at `http://127.0.0.1:7410/`. **Home** says in a sentence or two what your agents
@@ -257,13 +272,13 @@ installer again updates it with openajar. To leave it out, answer no, or add it 
 its live view link, and `openajar environments list` in the terminal.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/home-dark.webp">
-  <img src="assets/readme/home-light.webp" width="100%" alt="Home in the openajar web app, on demo data. On the left, the sidebar on a night blue: Home, Needs you, Computers and What happened, then Your business (Accounts, Jobs that repeat, Brand), For developers (Runs and checks, Site APIs) and Settings. In the window at the top, over a sunrise picture: 3 jobs are running on 2 machines, 2 runs failed and 1 is running again, a Reddit account switched off for safety and another asked to slow down, 30 things that need you, and three of them as cards (a refund and two payments waiting for a yes, each with a Look button). Under it, Working now: six environments as cards, each a small picture of its screen with its state and time left.">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/home-dark.webp">
+  <img src="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/home-light.webp" width="100%" alt="Home in the openajar web app, on demo data. On the left, the sidebar on a night blue: Home, Needs you, Computers and What happened, then Your business (Accounts, Jobs that repeat, Brand), For developers (Runs and checks, Site APIs) and Settings. In the window at the top, over a sunrise picture: 3 jobs are running on 2 machines, 2 runs failed and 1 is running again, a Reddit account switched off for safety and another asked to slow down, 30 things that need you, and three of them as cards (a refund and two payments waiting for a yes, each with a Look button). Under it, Working now: six environments as cards, each a small picture of its screen with its state and time left.">
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/environment-dark.webp">
-  <img src="assets/readme/environment-light.webp" width="100%" alt="One environment in the openajar web app of Northwind Group, from a test run on Docker: its title Autumn sale page with a Working chip, the agent that opened it (Claude Code), Saves when idle and the repository northwind/shop, then its live screen on a dark stage. The desktop shows a browser on the shop page the agent started (Autumn sale, with three prices) and a dock, and the pill under it says Claude Code has control, with Take over, full window and More. Beside it, the time left and the cost so far, what it is doing (it started npm run dev, opened the page, read it and took a picture of it), and its branch. Below, Proofs with the screenshot it kept (the sale page at phone width: Autumn sale, twenty percent off until Sunday, and the three prices), what it did in five steps (npm test among them), the terminal and its code.">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/environment-dark.webp">
+  <img src="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/environment-light.webp" width="100%" alt="One environment in the openajar web app of Northwind Group, from a test run on Docker: its title Autumn sale page with a Working chip, the agent that opened it (Claude Code), Saves when idle and the repository northwind/shop, then its live screen on a dark stage. The desktop shows a browser on the shop page the agent started (Autumn sale, with three prices) and a dock, and the pill under it says Claude Code has control, with Take over, full window and More. Beside it, the time left and the cost so far, what it is doing (it started npm run dev, opened the page, read it and took a picture of it), and its branch. Below, Proofs with the screenshot it kept (the sale page at phone width: Autumn sale, twenty percent off until Sunday, and the three prices), what it did in five steps (npm test among them), the terminal and its code.">
 </picture>
 
 <details>
@@ -272,8 +287,8 @@ its live view link, and `openajar environments list` in the terminal.
 <br>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/environments-dark.webp">
-  <img src="assets/readme/environments-light.webp" width="100%" alt="Computers in the openajar web app, on demo data, with its two tabs, Environments and Machines. Environments shows Open 6, Saved 4 and Closed 7, a line that says 3 working, 1 starting, 2 idle, and the open ones as cards: a picture of each one's screen (a desktop with a terminal or a browser on it, or the sunrise while it starts) with its state and time left, its title, and the agent with what it is doing.">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/environments-dark.webp">
+  <img src="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/environments-light.webp" width="100%" alt="Computers in the openajar web app, on demo data, with its two tabs, Environments and Machines. Environments shows Open 6, Saved 4 and Closed 7, a line that says 3 working, 1 starting, 2 idle, and the open ones as cards: a picture of each one's screen (a desktop with a terminal or a browser on it, or the sunrise while it starts) with its state and time left, its title, and the agent with what it is doing.">
 </picture>
 
 The live view link works on its own, without the web app.
@@ -408,7 +423,7 @@ sudo openajar environments setup            # says what is still missing
 Then on your computer, with the node in `~/.ssh/config` as `mynode`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/scripts/install.sh | sh
+curl -fsSL https://openajar.com/install.sh | sh
 openajar connect mynode
 ```
 
