@@ -5,8 +5,8 @@ script). Everything the site serves is in `public/`:
 
 | File | What it is |
 |:--|:--|
-| `public/index.html` | the page: HTML with its CSS inline, light and dark from the system setting |
-| `public/main.js` | the copy buttons and the Take over demo (the page works without it) |
+| `public/index.html` | the page: HTML with its CSS inline. The top (the hero and How a task goes) is night in both themes; the rest is light or dark from the system setting |
+| `public/main.js` | the hero's scene (the agent at work on its computer, drawn in HTML and moved with transform and opacity only; still when the visitor asks for less motion, paused off screen and while taken over), the Take over button, the copy buttons, the recording's play button and the arrivals on scroll. The page reads the same without it |
 | `public/404.html` | what an unknown address shows, with a 404 status |
 | `public/_redirects` | `/install.sh` is a 302 to `scripts/install.sh` on the public repository's main branch |
 | `public/_headers` | security headers, cache times, and `text/plain` for the MCP Registry file |
@@ -55,8 +55,9 @@ uploading.
 
 ## The social image
 
-`og/og.html` is the source of `public/og.png`. After changing it (or the pictures it uses), render it
-again with the Google Chrome on your computer:
+`og/og.html` is the source of `public/og.png`. Its picture of the agent's computer is the page's own scene:
+`render.py` serves `public/`, photographs the scene in its finished state to `og/scene.png` (not kept in git),
+then renders `og.html`. After changing either, render it again with the Google Chrome on your computer:
 
 ```sh
 uv run --no-project --with playwright python site/og/render.py
@@ -65,6 +66,7 @@ uv run --no-project --with playwright python site/og/render.py
 ## Rules
 
 The page follows web/DESIGN.md (Dawn): its colours are Dawn's tokens, violet only for the agent, what
-is pressed and the one primary button, the Dawn picture only behind the night band and pictures of
-the screen. No em dash in anything a person reads. Pictures that show the product's old name stay
+is pressed and the one primary button, the Dawn picture only on the agent's screen (the hero's scene, the
+recording) and as the sunrise that ends the night band. Nothing moves all the time: the scene stops when it is
+off screen or taken over, and is a still picture for anyone who asks for less motion. No em dash in anything a person reads. Pictures that show the product's old name stay
 out: `assets/readme/setup.png` does, and the live view clip here is cropped to the screen for that reason.
