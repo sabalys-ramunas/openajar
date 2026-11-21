@@ -1,4 +1,4 @@
-"""`openajar mcp` (openajar.client.mcp_command): bridge to the local node when it runs, start it when it is
+"""`openajar mcp` (openajar.local.mcp_command): bridge to the local node when it runs, start it when it is
 stopped, and when openajar was never set up, still answer initialize and say what to run."""
 
 from __future__ import annotations
@@ -13,9 +13,9 @@ from pathlib import Path
 import pytest
 
 from openajar.client import bridge
-from openajar.client import mcp_command as command
 from openajar.client.state import Connection
 from openajar.local import home as local_home
+from openajar.local import mcp_command as command
 
 PORT = 7999
 

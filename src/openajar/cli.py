@@ -133,6 +133,8 @@ def errors(
 
 # `openajar setup`: the guided setup of local mode (openajar.setup.cli)
 app.command("setup")(setup_command)
+# `openajar mcp`: a stdio MCP server for any MCP client (openajar.local.mcp_command)
+app.command("mcp")(local_cli.mcp_command)
 
 
 def legacy_app() -> None:

@@ -148,6 +148,10 @@ jobs:
       - name: Sign in as openajar.com and publish
         env:
           MCP_REGISTRY_KEY: ${{ secrets.MCP_REGISTRY_KEY }}
+        # A version the registry already has (published by hand, or a re-run) is done, not a failure.
         run: |
+          if curl -fsS -o /dev/null "https://registry.modelcontextprotocol.io/v0/servers/com.openajar%2Fopenajar/versions/${TAG#v}"; then
+            echo "com.openajar/openajar ${TAG#v} is already in the MCP Registry"; exit 0
+          fi
           /tmp/mcp-publisher login http --domain openajar.com --private-key "$MCP_REGISTRY_KEY"
           /tmp/mcp-publisher publish
