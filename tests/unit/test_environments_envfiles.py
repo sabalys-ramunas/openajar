@@ -20,6 +20,14 @@ from openajar.vault.models import ENV_VAR_RE
 # ------------------------------------------------------------------ parsing
 
 
+# Made-up secrets, put together at run time so the source holds nothing a secret scanner (gitleaks,
+# GitHub push protection) takes for a real one.
+FAKE_STRIPE = "sk_" + "test_" + "51Habcdefghijklmnop1234567890"
+FAKE_STRIPE_2 = "sk_" + "test_" + "51Hzzzzzzzzzzzzzzzzz1234567890"
+FAKE_WHSEC = "whsec" + "_abcdefabcdef1234567890"
+FAKE_PASSWORD = "Hunter2" + "-Very-Private"
+
+
 def test_dotenv_syntax_quotes_export_comments_and_empty_values():
     text = (
         "# a comment\n"
@@ -68,11 +76,11 @@ def test_settings_are_plain(key, value):
 
 
 @pytest.mark.parametrize(("key", "value", "use"), [
-    ("STRIPE_SECRET_KEY", "sk_test_51Habcdefghijklmnop1234567890", ef.HEADER),
+    ("STRIPE_SECRET_KEY", FAKE_STRIPE, ef.HEADER),
     ("OPENAI_API_KEY", "anything", ef.HEADER),
     ("DATAFORSEO_PASSWORD", "hunter2", ef.HEADER),
     ("MY_TOKEN", "short", ef.HEADER),
-    ("STRIPE_WEBHOOK_SECRET", "whsec_abc123def456", ef.LOCAL),
+    ("STRIPE_WEBHOOK_SECRET", FAKE_WHSEC, ef.LOCAL),
     ("JWT_SECRET", "changeme", ef.LOCAL),
     ("SESSION_SECRET", "changeme", ef.LOCAL),
     ("SECRET_KEY", "django-insecure", ef.LOCAL),
@@ -105,14 +113,14 @@ def test_a_value_it_is_not_sure_about_is_a_secret(key, value):
 
 # ------------------------------------------------------------------ the plan
 
-SAMPLE = """\
+SAMPLE = f"""\
 NODE_ENV=development
 API_URL=http://localhost:3000
-STRIPE_SECRET_KEY=sk_test_51Habcdefghijklmnop1234567890
-STRIPE_WEBHOOK_SECRET=whsec_abcdefabcdef1234567890
+STRIPE_SECRET_KEY={FAKE_STRIPE}
+STRIPE_WEBHOOK_SECRET={FAKE_WHSEC}
 ZOHO_REFRESH_TOKEN=1000.f00dbabe.deadbeef1234
 DATAFORSEO_LOGIN=me@example.com
-DATAFORSEO_PASSWORD=Hunter2-Very-Private
+DATAFORSEO_PASSWORD={FAKE_PASSWORD}
 DATAFORSEO_API_URL=https://api.dataforseo.com/v3
 DATABASE_URL=postgres://app:Sup3rS3cretDb@localhost:5432/app
 MYSTERY=x9Kq2mPz7LwR4tYb
@@ -163,8 +171,8 @@ def test_the_person_overrides_per_key_with_patterns():
 
 
 def test_one_value_per_name_across_files():
-    a, b, c = (plan("STRIPE_SECRET_KEY=sk_test_51Habcdefghijklmnop1234567890\n") for _ in range(3))
-    c[0] = plan("STRIPE_SECRET_KEY=sk_test_51Hzzzzzzzzzzzzzzzzz1234567890\n")[0]
+    a, b, c = (plan(f"STRIPE_SECRET_KEY={FAKE_STRIPE}\n") for _ in range(3))
+    c[0] = plan(f"STRIPE_SECRET_KEY={FAKE_STRIPE_2}\n")[0]
     ef.across_files([a, b, c])
     assert [a[0].action, b[0].action, c[0].action] == [ef.BIND, ef.PLACEHOLDER, ef.HOLD]
 
