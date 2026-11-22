@@ -3,7 +3,7 @@
   "name": "com.openajar/openajar",
   "title": "openajar",
   "description": "A computer for your agent: a cloud VM with a terminal, a real browser and your repo.",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "websiteUrl": "https://openajar.com",
   "repository": {
     "url": "https://github.com/sabalys-ramunas/openajar",
@@ -14,7 +14,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "openajar",
-      "version": "0.5.3",
+      "version": "0.5.4",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -31,7 +31,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "openajar",
-      "version": "0.5.3",
+      "version": "0.5.4",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

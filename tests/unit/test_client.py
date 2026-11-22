@@ -171,8 +171,7 @@ def test_connect_sets_up_tunnel_keychain_and_claude(system, node, home):
         ["mcp", "remove", "--scope", "user", "openajar-mynode"],
         ["mcp", "add-json", "--scope", "user", "openajar-mynode",
          json.dumps({"type": "http", "url": f"http://localhost:{port}/mcp", "headersHelper": f"{helper} mynode"})],
-        ["mcp", "get", "agentos-mynode"],  # legacy-name: an entry under the name before the rename is looked for
-    ]
+    ]  # an entry under the name before the rename is looked for in ~/.claude.json, without running claude
     assert {c["cwd"] for c in system.calls("claude")} == {str(home)}
     assert system.claude_servers()["user:openajar-mynode"]["headersHelper"] == f"{helper} mynode"
 
@@ -242,11 +241,106 @@ def test_the_old_claude_entry_goes_when_the_new_one_is_already_there(system, nod
     url = servers["user:openajar-mynode"]["url"].replace("localhost", "127.0.0.1")
     servers["user:agentos-mynode"] = {"type": "http", "url": url,  # legacy-name
                                       "headersHelper": "~/.config/agentos/bin/agentos-mcp-headers mynode"}  # legacy-name
-    (system.state / "claude.json").write_text(json.dumps(servers))
+    system.set_claude_servers(servers)
     result = run("connect", "mynode")
     assert result.exit_code == 0, result.output
     assert list(system.claude_servers()) == ["user:openajar-mynode"]
-    assert "removed agentos-mynode, its name before the rename" in result.output  # legacy-name
+    assert "removed agentos-mynode from ~/.claude.json, its name before the rename" in result.output  # legacy-name
+
+
+# ---- every Claude Code profile (field run 2026-11-21: a session on CLAUDE_CONFIG_DIR=~/.claude_work had no tools) ----
+
+
+@pytest.fixture
+def profiles(tmp_path, home, monkeypatch):
+    """Two more Claude Code profiles: ~/.claude_work (a sibling folder with a .claude.json) holding an entry from
+    before the rename at a port where nothing listens any more, and the folder $CLAUDE_CONFIG_DIR names, outside
+    HOME and not used yet. Returns (work, named)."""
+    work, named = home / ".claude_work", tmp_path / "other-profile"
+    work.mkdir()
+    dead = free_port()
+    with socket.socket() as live:  # something listens here: an agentos-* entry that answers is never touched
+        live.bind(("127.0.0.1", 0))
+        live.listen()
+        (work / ".claude.json").write_text(json.dumps({"userID": "x", "mcpServers": {
+            "agentos-agentvm": {"type": "http", "url": f"http://localhost:{dead}/mcp"},  # legacy-name: a dead port
+            "agentos-mine": {"type": "http", "url": f"http://127.0.0.1:{live.getsockname()[1]}/mcp"},  # legacy-name
+            "agentos-far": {"type": "http", "url": "https://example.test/mcp"},  # legacy-name: not on this computer
+            "hermes": {"type": "stdio", "command": "hermes"}}}))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(named))
+        yield work, named
+
+
+def test_connect_registers_every_claude_profile_and_replaces_dead_old_entries(system, node, home, profiles):
+    work, named = profiles
+    result = run("connect", "mynode")
+    assert result.exit_code == 0, result.output
+    url = f"http://localhost:{port_of(home)}/mcp"
+    for profile in (None, work, named):
+        assert system.claude_servers(profile)["user:openajar-mynode"]["url"] == url, profile
+    # claude ran with each profile's CLAUDE_CONFIG_DIR, and without one for the default profile
+    assert {c.get("profile") for c in system.calls("claude")} == {None, str(work), str(named)}
+    left = system.claude_servers(work)
+    assert "user:agentos-agentvm" not in left  # legacy-name: on this computer, and nothing answers there
+    assert {"user:agentos-mine", "user:agentos-far", "user:hermes"} <= set(left)  # legacy-name: the owner's stay
+    assert json.loads((work / ".claude.json").read_text())["userID"] == "x"  # the rest of the file is untouched
+    out = " ".join(result.output.split())
+    assert f"In every Claude Code profile here: ~/.claude.json, {named}/.claude.json, ~/.claude_work/.claude.json" in out
+    assert "removed agentos-agentvm from ~/.claude_work/.claude.json, an entry from before the rename" in out
+    assert "restart them to see the tools" in out and "`openajar call <tool>`" in out
+    for dest in (home / ".claude", work, named):  # the skills go where each profile reads them
+        assert (dest / "skills/openajar-environment/SKILL.md").is_file(), dest
+
+    adds = len([a for a in system.argv("claude") if a[1] == "add-json"])
+    again = run("connect", "mynode")
+    assert again.exit_code == 0, again.output
+    assert "Claude Code: already registered openajar-mynode" in again.output
+    assert len([a for a in system.argv("claude") if a[1] == "add-json"]) == adds  # each profile had it already
+
+    gone = run("disconnect", "mynode")
+    assert gone.exit_code == 0, gone.output
+    for profile in (None, work, named):
+        assert "user:openajar-mynode" not in system.claude_servers(profile), profile
+    assert "Claude Code entry openajar-mynode from ~/.claude_work/.claude.json" in gone.output
+    assert not (work / "skills/openajar-environment").exists() and not (named / "skills/openajar-lanes").exists()
+
+
+def test_status_check_names_a_profile_whose_entry_does_not_answer(system, node, home, profiles, tmp_path,
+                                                                    monkeypatch):
+    from openajar.ops import cli as ops_cli
+
+    work, named = profiles
+    assert run("connect", "mynode").exit_code == 0
+    servers = system.claude_servers(work)
+    servers["user:openajar-mynode"]["url"] = f"http://127.0.0.1:{free_port()}/mcp"  # an address from an old setup
+    servers["user:agentos-agentvm"] = {"type": "http", "url": f"http://localhost:{free_port()}/mcp"}  # legacy-name
+    system.set_claude_servers(servers, work)
+    system.set_claude_servers({}, named)  # this profile lost the entry
+
+    monkeypatch.setenv("OPENAJAR_HOME", str(tmp_path / "not-a-node"))
+    doctor = CliRunner().invoke(ops_cli.app, ["doctor"])
+    assert doctor.exit_code == 1, doctor.output
+    out = " ".join(doctor.output.split())
+    assert EM_DASH not in doctor.output
+    assert "Claude Code ~/.claude_work/.claude.json" in out
+    assert "openajar-mynode points at http://127.0.0.1:" in out and "an old address where nothing answers" in out
+    assert "run `openajar connect mynode --name mynode` again (it writes the current address in every profile)" in out
+    assert "agentos-agentvm points at" in out and "no openajar connection here uses it" in out  # legacy-name
+    assert f"CLAUDE_CONFIG_DIR={work} claude mcp remove --scope user agentos-agentvm" in out  # legacy-name
+    assert f"Claude Code {named}/.claude.json" in out and "sessions started with this profile do not see the tools" in out
+    assert "openajar call <tool>" in out  # the way in until it is fixed
+
+    monkeypatch.delenv("OPENAJAR_HOME")
+    check = run("connect", "--check")
+    assert check.exit_code == 1
+    assert "FAIL Claude Code: ~/.claude_work/.claude.json: openajar-mynode points at" in check.output
+    assert "openajar call <tool>" in check.output
+
+    assert run("connect", "mynode").exit_code == 0  # connect fixes every profile
+    monkeypatch.setenv("OPENAJAR_HOME", str(tmp_path / "not-a-node"))
+    doctor = CliRunner().invoke(ops_cli.app, ["doctor", "--json"])
+    checks = {c["id"]: c for c in json.loads(doctor.output)["checks"]}
+    assert checks["claude_profiles"]["status"] == "pass", checks
 
 
 def test_toolsets_go_in_the_url_and_stay_until_changed(system, node, home):
@@ -769,8 +863,7 @@ def test_no_codex_and_no_skills_leave_them_alone(system, node, home):
 
 def test_check_says_what_is_wrong(system, node, home):
     assert run("connect", "mynode").exit_code == 0
-    system.claude_servers()  # Claude Code lost the entry
-    (system.state / "claude.json").write_text("{}")
+    system.set_claude_servers({})  # Claude Code lost the entry
     check = run("connect", "--check")
     assert check.exit_code == 1
     assert "FAIL Claude Code: no openajar-mynode entry" in check.output

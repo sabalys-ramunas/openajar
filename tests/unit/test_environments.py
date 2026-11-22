@@ -16,6 +16,7 @@ from test_policy_support import Clock, make_service
 from openajar.core.errors import PolicyDenied
 from openajar.core.models import Effect, utcnow
 from openajar.dev.lanes import FakeLaneManager
+from openajar.env.execs import in_bash
 from openajar.env.host import FakeHost
 from openajar.env.manager import EnvManager
 from openajar.env.models import ExecResult
@@ -409,10 +410,11 @@ async def test_the_browser_and_the_clone_come_up_at_once_and_each_step_is_logged
 async def test_an_open_the_cloud_has_no_room_for_says_what_was_tried_and_what_next(node):
     node["prov"].unavailable = set(node["prov"].prices)  # no room for any type, anywhere
     with pytest.raises(ToolCallError, match="environment_failed: capacity: environment e\\w+ did not start: Fake "
-                                            "has no room for cx23 in nbg1, fsn1 or hel1 now, nor for ") as err:
+                                            "has no room for cx23, cpx22, cpx42 or ccx23 in nbg1, fsn1 or hel1 now") as err:
         await opened(node)
     words = str(err.value)
-    assert 'try again in 5 minutes, or ask for size="medium"' in words and "\u2014" not in words
+    assert "try again in 5 minutes. Nothing bills" in words and "\u2014" not in words
+    assert "size=" not in words  # every type a bigger size would try just had no room: none is offered
     assert "Available now" not in words  # the provider does not say what has room: nothing is claimed
     env = node["mgr"].store.recent(1)[0]
     assert (env.state, env.error_reason, env.vm_state) == ("failed", "capacity", "none")
@@ -449,7 +451,8 @@ async def test_terminal_calls_without_on_go_to_the_environment_and_never_wait(no
     ctx.taint("untrusted", source="browser_snapshot")
     res = await call("terminal_exec", cmd="npm test", cwd="/work/shop")
     assert res["exit_code"] == 0 and res.get("status") != "approval_pending"
-    assert ("cd '/work/shop' 2>/dev/null || { echo openajar-no-such-folder >&2; exit 97; }\nnpm test", node["grant"].id) in node["machine"].ran
+    sent = in_bash("cd '/work/shop' 2>/dev/null || { echo openajar-no-such-folder >&2; exit 97; }\nnpm test")
+    assert (sent, node["grant"].id) in node["machine"].ran
     env = node["mgr"].get(out["id"])
     assert env.last_call_at is not None and [c.tool for c in env.calls][-1] == "terminal_exec"
     assert env.calls[-1].summary == "npm test"
@@ -779,13 +782,14 @@ async def test_a_restart_keeps_the_environment_and_the_reaper_brings_its_tunnel_
 
 async def test_the_budget_counts_the_hours_open_environments_have_booked(node):
     """An open environment can still bill to its time limit: the next open counts those hours, not
-    only what was spent so far. cx23 at EUR 0.006 an hour, cpx22 (EUR 0.0095) its fallback."""
+    only what was spent so far. cx23 at EUR 0.006 an hour; its dearer fallbacks are dropped when they do
+    not fit what is left, and never refuse an open the planned type fits."""
     mgr = node["mgr"]
-    mgr.settings = EnvSettings(monthly_eur=0.05, default_keep="none")
+    mgr.settings = EnvSettings(monthly_eur=0.04, default_keep="none")
     a = await opened(node, hours=4)                  # booked: 4 h x 0.006 = 0.024 (0.006 spent so far)
     assert a["state"] == "ready"
     with pytest.raises(ToolCallError, match="environment_limit") as err:
-        await opened(node, title="Second", session="chat-2", hours=4)  # up to 4 h x 0.0095 = 0.038 more
+        await opened(node, title="Second", session="chat-2", hours=4)  # 4 h x 0.006 = 0.024 more
     assert "booked" in str(err.value)
     assert len(mgr.store.open()) == 1
     await node["call"]("environment_close")

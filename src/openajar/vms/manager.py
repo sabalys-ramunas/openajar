@@ -58,8 +58,6 @@ IMAGE_BUILD_MAX = timedelta(hours=2)      # a build VM older than this is delete
 OFFERS_TTL = timedelta(minutes=30)        # server types and prices are read again after this
 LISTED_FRESH = timedelta(minutes=1)       # what has room now (listed_now) is read again after this
 PREFLIGHT_WAITS_S = (2.0, 4.0, 8.0)        # between tries of a short network check before a VM is made
-FALLBACKS = 2                             # other types tried when the provider is out of the cheapest
-FALLBACK_PRICE_FACTOR = 2.0               # never a fallback more than twice the picked price
 SPEC_KEYS = ("cores", "memory_gb", "disk_gb", "architecture", "cpu_type")  # a plan's `specs`
 HOME_ID_FILE = "home-id"                  # in vms/: this OPENAJAR_HOME's own id in the provider's labels
 
@@ -424,10 +422,10 @@ class VmManager(Pausing):
     async def plan(self, lane_id: str, *, profile: str | None = None, ttl_minutes: int | None = None,
                    size: dict | None = None, kept: bool = False, image: str | None = None) -> dict:
         """What a create would make, without making it (for the approval's summary). Unless the
-        profile or the caller names a server type, that is the cheapest type in the location with
-        at least the asked CPU, memory and disk, plus up to FALLBACKS next-cheapest ones to try if
-        the provider is out of it. `image`: the one the VM boots, when not the profile's (an
-        environment's snapshot): every type planned has a disk at least as big as its disk."""
+        profile or the caller names a server type, that is the cheapest type in the location with at least
+        the asked CPU, memory and disk, plus types of every family to try if the provider is out of it
+        (capacity.pick_fallbacks); a type by name the location does not sell is refused (capacity.not_sold).
+        `image`: the one the VM boots, when not the profile's: no type planned has a smaller disk than it."""
         parse_lane_id(lane_id)
         label, p = self._size(profile, size)
         if image:
@@ -442,6 +440,9 @@ class VmManager(Pausing):
             known = None
             with contextlib.suppress(OpenajarError):  # what it has, when the provider lists it (else unknown)
                 known = next((t for t in await self.offers(location) if t["name"] == p.server_type), None)
+            if known is None and (wrong := capacity.not_sold(await self._types_or_none(), p.server_type, location,
+                                                             getattr(prov, "name", ""))):
+                raise wrong
             specs = {k: known.get(k) for k in SPEC_KEYS} if known else None
             return {**out, "server_type": p.server_type, "price_hourly_eur": price, "specs": specs}
         image = await prov.image_info(p.image) if p.image.startswith("snapshot:") or p.image.isdigit() else None
@@ -451,10 +452,8 @@ class VmManager(Pausing):
             raise VmError(f"no server type in {location} has {p.words().removeprefix('the cheapest ')}"
                           + (f" for image {p.image}" if image else "") + "; see `openajar vm types`")
         first = fit[0]
-        alt = [t for t in fit[1:] if t["price"] <= first["price"] * FALLBACK_PRICE_FACTOR][:FALLBACKS]
         return {**out, "server_type": first["name"], "price_hourly_eur": first["price"],
-                "specs": {k: first.get(k) for k in SPEC_KEYS},
-                "fallbacks": [(t["name"], t["price"]) for t in alt]}
+                "specs": {k: first.get(k) for k in SPEC_KEYS}, "fallbacks": capacity.pick_fallbacks(first, fit)}
 
     async def create(self, lane_id: str, *, profile: str | None = None, ttl_minutes: int | None = None,
                      size: dict | None = None, plan: dict | None = None, purpose: str = "",
@@ -476,10 +475,10 @@ class VmManager(Pausing):
                              "once (vms.toml max_live); wait for one to be deleted")
             price = plan["price_hourly_eur"]
             budget = self.settings.monthly_budget_eur
-            if budget and price is not None:
-                price_max = max([price, *[q or 0 for _n, q in plan["fallbacks"]]])
-                worst = price_max * -(-plan["ttl_minutes"] // 60)
-                booked = self.booked_eur()
+            if budget and price is not None:  # the planned type must fit; a fallback that does not is not tried
+                hours, booked = -(-plan["ttl_minutes"] // 60), self.booked_eur()
+                worst = price * hours
+                plan = {**plan, "fallbacks": capacity.affordable(price, plan["fallbacks"], hours, budget - booked)}
                 if booked + worst > budget:
                     raise VmLimit(f"this VM could cost up to EUR {worst:.2f}; with EUR {booked:.2f} spent and booked "
                                   "by live VMs this month, that passes the monthly budget of "
@@ -521,6 +520,7 @@ class VmManager(Pausing):
         key_id = await prov.create_ssh_key(f"agentos-{rec.id}", k.client_pub, labels)
         tries = capacity.plan_tries((rec.server_type, rec.price_hourly_eur), list(rec.fallbacks), rec.location,
                                     await self._zones(), await self._types_or_none())
+        tried: list[tuple[str, str]] = []
 
         async def make(server_type: str, location: str) -> Any:
             return await prov.create_server(ServerSpec(
@@ -530,12 +530,14 @@ class VmManager(Pausing):
 
         try:
             server, server_type, location, price = await capacity.create_first(
-                getattr(prov, "name", ""), tries, make, vm_id=rec.id)
+                getattr(prov, "name", ""), tries, make, vm_id=rec.id, tried=tried)
         finally:
             with contextlib.suppress(Exception):  # the reaper removes it later if this fails
                 await prov.delete_ssh_key(key_id)
-        if (server_type, location) != (rec.server_type, rec.location):
-            rec.server_type, rec.location, rec.price_hourly_eur = server_type, location, price
+        if server_type != rec.server_type:  # what was planned stays on the record (the open result says the cost)
+            rec.asked = (rec.server_type, rec.price_hourly_eur)
+            log.info("VM %s: %s", rec.id, capacity.fell_back_words(rec.asked, server_type, price, tried))
+        rec.server_type, rec.location, rec.price_hourly_eur, rec.no_room = server_type, location, price, tried
         vmkeys.adopt(self.dir, rec.id, server)  # a provider's own login (Morph), in place of openajar's
         rec.provider_id, rec.host, rec.state = server.id, server.ipv4, "booting"
         rec.port, rec.ssh_user = server.ssh_port, server.ssh_user
@@ -973,7 +975,9 @@ class VmManager(Pausing):
                 "expires_at": _iso(rec.expires_at), "minutes_left": None if left is None else max(0, int(left // 60)),
                 "deleted_at": _iso(rec.deleted_at), "delete_reason": rec.delete_reason, "purpose": rec.purpose,
                 "created_by": rec.created_by, "price_hourly_eur": rec.price_hourly_eur,
-                "cost_eur_so_far": rec.cost_eur(now), "error": rec.error}
+                "cost_eur_so_far": rec.cost_eur(now), "error": rec.error,
+                **({"fell_back": capacity.fell_back_words(rec.asked, rec.server_type, rec.price_hourly_eur, rec.no_room)}
+                   if rec.asked else {})}
 
     def list(self, *, include_past: bool = False, limit: int = 30) -> list[dict]:
         recs = self.store.recent(limit) if include_past else self.store.live()

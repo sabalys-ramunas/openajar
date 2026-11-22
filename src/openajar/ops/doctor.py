@@ -76,6 +76,7 @@ class DoctorContext:
     # how they are read (openajar.client.state.connections_at): the CLI passes it in, since ops is a
     # layer below the client; without it this computer has none to check
     read_connections: Callable[[Path | None], list[Any]] | None = None
+    claude_profiles: Check | None = None  # the Claude Code profiles' entries (openajar.ops.cli passes it in)
 
     def __post_init__(self) -> None:
         self.home = Path(self.home)
@@ -932,9 +933,10 @@ CHECKS: dict[str, Check] = {
     "keepalive": check_keepalive,
     "effect_rules": check_effect_rules,
     "connections": check_connections,
+    "claude_profiles": lambda ctx: ctx.claude_profiles(ctx) if ctx.claude_profiles is not None else [],
     "web": check_web,
 }
-CLIENT_CHECKS = ["connections"]  # what runs on a computer that is not a node but connects to nodes
+CLIENT_CHECKS = ["connections", "claude_profiles"]  # what runs on a computer that is not a node but connects to nodes
 
 
 @dataclass

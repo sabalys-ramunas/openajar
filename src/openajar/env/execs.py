@@ -6,6 +6,7 @@ import asyncio
 import base64
 import contextlib
 import re
+import shlex
 import signal as _signal
 from typing import Any, BinaryIO
 
@@ -19,6 +20,28 @@ LEFTOVER_GRACE_S = 0.5
 SSH_LOST_RE = re.compile(r"^(ssh: |ssh_exchange_identification|kex_exchange_identification|mux_client_|"
                          r"Connection to \S+ closed|Connection (closed|reset) by|client_loop: |"
                          r"Read from remote host |Timeout, server \S+ not responding)", re.MULTILINE)
+
+
+# An agent's command (terminal_exec, every job) runs under bash when the machine has it, else under sh (a
+# container without bash). sh is dash on Ubuntu, which fails on bash syntax such as ${v:0:15}, arrays and
+# [[ ]] with "Bad substitution" (field report 2026-11-21). The node's own scripts keep /bin/sh -c.
+BASH = "/bin/bash"
+
+
+def in_bash(cmd: str) -> str:
+    """A command line for /bin/sh -c that runs `cmd` with bash -c when BASH is there, else with sh -c. exec,
+    so it stays one process (its pid, its exit status and signals are the command's shell's), and `c` is
+    not exported, so the command never sees it."""
+    return f'c={shlex.quote(cmd)}; [ -x {BASH} ] && exec {BASH} -c "$c"; exec /bin/sh -c "$c"'
+
+
+# colour and cursor codes, which dev servers print even into a log file (FORCE_COLOR), and one cut at the end
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[ -/]*[0-Z\\^-~]")
+ANSI_CUT_RE = re.compile(r"\x1b(?:\[[0-9;?]*[ -/]*|\][^\x07\x1b]*\x1b?|[ -/]*)\Z")
+
+
+def strip_ansi(text: str) -> str:
+    return ANSI_CUT_RE.sub("", ANSI_RE.sub("", text)) if "\x1b" in text else text
 
 
 def ssh_lost(exit_code: int | None, stderr: str | None) -> bool:

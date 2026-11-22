@@ -30,9 +30,9 @@ def source(name: str) -> str:
     return (resources.files("openajar.client") / "skills" / name / "SKILL.md").read_text()
 
 
-def state(home: Path) -> str:
-    """"installed", "outdated" or "missing", for every skill together."""
-    dest = skills_dir(home)
+def state(home: Path, dest: Path | None = None) -> str:
+    """"installed", "outdated" or "missing", for every skill together, in `dest` (default: skills_dir)."""
+    dest = dest or skills_dir(home)
     found = [(dest / n / "SKILL.md") for n in NAMES]
     if not all(p.is_file() for p in found):
         return "missing"
@@ -46,12 +46,12 @@ def ours(text: str, name: str, product: str = "openajar") -> bool:
     return bool(re.search(rf"^name: {re.escape(name)}\s*$", head, re.MULTILINE)) and product in head.lower()
 
 
-def remove_legacy(home: Path) -> list[str]:
+def remove_legacy(home: Path, dest: Path | None = None) -> list[str]:
     """The skills' folders from before the rename, where an older version wrote them (one the owner wrote
     under such a name stays). Returns the names removed."""
     removed = []
     for name in LEGACY_NAMES:
-        target = skills_dir(home) / name / "SKILL.md"
+        target = (dest or skills_dir(home)) / name / "SKILL.md"
         if target.is_file() and ours(target.read_text(), name, LEGACY_PRODUCT):
             target.unlink()
             try:
@@ -62,16 +62,18 @@ def remove_legacy(home: Path) -> list[str]:
     return removed
 
 
-def install(home: Path) -> str:
-    """Copy or update every skill. Returns "installed", "updated", "already installed", or says
-    which ones it kept because someone else wrote them."""
-    before = state(home)
-    remove_legacy(home)
+def install(home: Path, dest: Path | None = None) -> str:
+    """Copy or update every skill into `dest` (default: skills_dir; connect passes each Claude Code
+    profile's). Returns "installed", "updated", "already installed", or says which ones it kept because
+    someone else wrote them."""
+    dest = dest or skills_dir(home)
+    before = state(home, dest)
+    remove_legacy(home, dest)
     if before == "installed":
         return "already installed"
     kept = []
     for name in NAMES:
-        target = skills_dir(home) / name / "SKILL.md"
+        target = dest / name / "SKILL.md"
         if target.is_file() and target.read_text() != source(name) and not ours(target.read_text(), name):
             kept.append(name)  # the owner's own file under our name: never overwritten
             continue
@@ -96,10 +98,11 @@ def refresh(home: Path) -> str | None:
     return install(home)
 
 
-def remove(home: Path) -> list[str]:
-    removed = remove_legacy(home)
+def remove(home: Path, dest: Path | None = None) -> list[str]:
+    dest = dest or skills_dir(home)
+    removed = remove_legacy(home, dest)
     for name in NAMES:
-        target = skills_dir(home) / name / "SKILL.md"
+        target = dest / name / "SKILL.md"
         if target.is_file() and ours(target.read_text(), name):
             target.unlink()
             try:

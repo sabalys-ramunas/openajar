@@ -26,6 +26,7 @@ from openajar.client.choices import (
     ClientChoice,
     computer_name,
 )
+from openajar.client.claude import RESTART_NOTE
 from openajar.client.ops import Client
 from openajar.client.state import Connection
 from openajar.local import home as local_home
@@ -104,6 +105,8 @@ def register_clients(home: Path, port: int, *, claude: bool = True, codex: bool 
     local_home.mark_registered(home, skills)  # its serve keeps the skills it installed up to date, or none
     lines.append(f"Token {'stored in' if result.token_changed else 'already in'} {client.tokens(kind).describe(NAME)}")
     lines += [f"{line.client}: {line.state} {line.detail}".rstrip() for line in result.clients]
+    if result.claude_profiles:
+        lines.append(f"  {RESTART_NOTE}")
     if result.claude_lines:
         lines += ["To add it to Claude Code by hand:", *[f"  {line}" for line in result.claude_lines]]
     lines += [f"  {note}" for note in result.notes]

@@ -101,7 +101,8 @@ def _price(plan: dict) -> str:
         return ", free (a machine on this computer)"
     hours = -(-plan["ttl_minutes"] // 60)
     worst = max([price, *[q or 0 for _n, q in plan.get("fallbacks") or []]])
-    return f", EUR {price:.4f} an hour (at most EUR {worst * hours:.2f} for {plan['ttl_minutes']} min)"
+    dearer = f"; at most EUR {worst * hours:.2f} if only a dearer type has room" if worst > price else ""
+    return f", EUR {price:.4f} an hour (EUR {price * hours:.2f} for {plan['ttl_minutes']} min{dearer})"
 
 
 LINK_REUSE_S = 120.0  # an environment's live-view link is handed out again while it has this long left
@@ -259,7 +260,8 @@ def _open_result(ctx: ToolContext, mgr: EnvironmentManager, env: Environment, ha
                  bigger: list[dict] | None = None, *, opened: str = "new", applied: dict | None = None,
                  differs: list[str] | None = None) -> dict:
     s = mgr.summary(env)
-    machine = {**env.machine.model_dump(), "price_hourly_eur": env.price_hourly_eur, "bigger": bigger or []}
+    machine = {**env.machine.model_dump(), "price_hourly_eur": env.price_hourly_eur, "bigger": bigger or [],
+               **mgr.machine_notes(env)}  # fell_back: another type had room, and what it costs
     if bigger:
         machine["next"] = (f"environment_open(title=<a new title>, size=\"{bigger[0]['size']}\") opens a bigger "
                            "machine")
@@ -820,14 +822,15 @@ async def environment_forget(ctx: ToolContext, *, title: str, save_id: str | Non
     return out
 
 
-async def environment_port(ctx: ToolContext, *, port: int, on: str | None = None) -> dict:
-    """Open a dev server of your environment on the human's own computer, as a preview link: the VM's
-    port, forwarded over the environment's SSH connection to a free 127.0.0.1 port until it closes.
-    The url opens as is on openajar local; on a server node the human first runs `tunnel` (an ssh -L
-    line). environment()'s ports show it as `link`.
+async def environment_port(ctx: ToolContext, *, port: int | None = None, ports: list[int] | None = None,
+                           same_numbers: bool = False, on: str | None = None) -> dict:
+    """A dev server on your VM as a link on the human's own computer, forwarded over the environment's
+    SSH connection until it closes. On a server node the human first runs `tunnel` (an ssh -L line).
 
     Args:
-        port: The port your server listens on in the VM, like 3000 or 5173 (environment() lists them).
+        port: Your server's port in the VM, like 3000 or 5173 (environment() lists them).
+        ports: Several, for a page that calls another localhost port (its API).
+        same_numbers: The VM's port numbers here too, so those calls reach the VM.
         on: The on environment_open gave.
     """
     from openajar.environments import ports as env_ports
@@ -837,17 +840,42 @@ async def environment_port(ctx: ToolContext, *, port: int, on: str | None = None
     if env is None:
         raise NoEnvironment("this chat has no environment; environment_open first, then start your server")
     mgr.refuse_gone(env)
-    await ctx.authorize(Effect.READ, lane_id=None, summary=f"forward port {port} of environment {env.id} ({env.title})")
-    out = await env_ports.forward(mgr, env, port)
-    listening = {p.get("port") for p in await mgr.ports(env)}
-    mgr.record_call(env.terminal_lane, "environment_port", ok=True, summary=str(port))
-    ctx.trace("environment_port", lane=env.terminal_lane, environment=env.id, port=port, local=out["local_port"])
-    first = f"run `{out['tunnel']}` on their computer, then " if "tunnel" in out else ""
-    out["listening"] = port in listening
-    out["next"] = (f"give the human the url: they {first}open {out['url']} in their own browser"
-                   + ("" if out["listening"] else f". Nothing listens on port {port} yet: start the server "
-                      "(terminal_job_start, with --host 0.0.0.0 or 127.0.0.1) and the link works once it does"))
+    what = ", ".join(str(p) for p in [*([port] if port is not None else []), *(ports or [])])
+    await ctx.authorize(Effect.READ, lane_id=None, summary=f"forward port {what} of environment {env.id} ({env.title})")
+    out = await env_ports.share(mgr, env, port, ports, same_numbers)
+    mgr.record_call(env.terminal_lane, "environment_port", ok=True, summary=what)
+    ctx.trace("environment_port", lane=env.terminal_lane, environment=env.id, port=what,
+              local=out.get("local_port") or [f["local_port"] for f in out.get("forwards") or []])
     return out
+
+
+async def environment_app_restart(ctx: ToolContext, *, on: str | None = None) -> dict:
+    """Restart the app the repository's .openajar/environment.toml starts: its job and every process it
+    started stop, then `start` runs again as at environment_open (the file as it is now). Returns `app`
+    as the open does.
+
+    Args:
+        on: The on environment_open gave.
+    """
+    from openajar.environments.errors import EnvironmentNotReady
+
+    mgr = _mgr(ctx)
+    env = _find(ctx, on)
+    if env is None:
+        raise NoEnvironment("this chat has no environment; environment_open first")
+    mgr.refuse_gone(env)
+    if env.state != "ready":
+        raise EnvironmentNotReady(f"environment {env.id} is {env.state}; call environment() until it is ready")
+    await ctx.authorize(Effect.READ, lane_id=None, summary=f"restart the app of environment {env.id} ({env.title})")
+    app = await mgr.restart_app(env)
+    mgr.record_call(env.terminal_lane, "environment_app_restart", ok=True, summary=str(app.get("job_id") or ""))
+    ctx.trace("environment_app_restart", lane=env.terminal_lane, environment=env.id, job=app.get("job_id"))
+    if app.get("listening"):
+        words = f"it runs again as job {app.get('job_id')}, listening on port {app.get('port')}"
+        nxt = words + (f"; the human's link is app.link ({app['link']})" if app.get("link") else "")
+    else:
+        nxt = "it did not come up: read app.why and app.log_tail, fix it and restart again"
+    return {"app": app, "next": nxt}
 
 
 async def environment_pull_request(ctx: ToolContext, *, title: str, body: str | None = None,
@@ -913,6 +941,8 @@ def tool_specs(runtime: Any) -> list[ToolSpec]:
                  tags=(*t, "changes_state", "idempotent"), hidden_without="environments"),
         ToolSpec("environment_port", environment_port, Effect.READ, lane_arg=None, tags=(*t, "idempotent"),
                  hidden_without="environments"),
+        ToolSpec("environment_app_restart", environment_app_restart, Effect.READ, lane_arg=None,
+                 tags=(*t, "changes_state"), hidden_without="environments"),
         ToolSpec("environment_pull_request", environment_pull_request, Effect.READ, lane_arg=None,
                  tags=(*t, "changes_state", "idempotent"), hidden_without="environments"),
     ]

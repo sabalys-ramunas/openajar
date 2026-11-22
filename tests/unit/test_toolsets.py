@@ -80,7 +80,9 @@ CORE_MAX_TOOLS = 30  # the environment loop (28) and the two meta tools: docs/de
 # and no lists of returned fields the result shows anyway. `on` stays "The on environment_open gave":
 # "From environment_open." saved 50 tokens and a live Haiku run then left `on` out three times and passed
 # the open's id once. Measured 7,013 for 30 tools, plus about 2%.
-CORE_MAX_TOKENS = 7150
+# 7,175 for environment_port's ports and same_numbers (2026-11-22, about 25 tokens, its description cut to make
+# room): a page whose code calls its API on another localhost port broke silently behind a one-port link
+CORE_MAX_TOKENS = 7175
 
 CORE_TOOLS = {
     "environment_open", "environment", "environment_save", "environment_close", "environment_upload",

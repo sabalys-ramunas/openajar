@@ -11,7 +11,8 @@ calls.jsonl and keeps its state in JSON files:
 - security: a JSON keychain; `-i` reads commands from stdin like the real one.
 - launchctl / systemctl: start the job's program in the background, but only if it is
   one of these fakes; `print` / `is-active` report it.
-- claude: `mcp add-json | remove | get` against a JSON file.
+- claude: `mcp add-json | remove | get`, the user scope in the profile's .claude.json (CLAUDE_CONFIG_DIR's,
+  else ~/.claude.json), as the real one keeps it.
 """
 
 from __future__ import annotations
@@ -359,9 +360,39 @@ def systemctl():
 
 # ---- claude ----
 
+def profile_file():
+    """Where the real claude keeps user-scope servers: $CLAUDE_CONFIG_DIR/.claude.json, else ~/.claude.json."""
+    return os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.environ["HOME"], ".claude.json")
+
+
+def load_claude():
+    """Every scope's servers as "scope:name": the user scope from the profile's file, the others from state."""
+    servers = {k: v for k, v in load("claude.json", {}).items() if not k.startswith("user:")}
+    try:
+        with open(profile_file()) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        data = {}
+    servers.update({f"user:{name}": entry for name, entry in (data.get("mcpServers") or {}).items()})
+    return servers
+
+
+def save_claude(servers):
+    save("claude.json", {k: v for k, v in servers.items() if not k.startswith("user:")})
+    try:
+        with open(profile_file()) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        data = {"firstStartTime": "2026-01-01T00:00:00Z"}
+    data["mcpServers"] = {k.split(":", 1)[1]: v for k, v in servers.items() if k.startswith("user:")}
+    os.makedirs(os.path.dirname(profile_file()), exist_ok=True)
+    with open(profile_file(), "w") as f:
+        json.dump(data, f, indent=1)
+
+
 def claude():
-    record(cwd=os.getcwd())
-    servers = load("claude.json", {})
+    record(cwd=os.getcwd(), profile=os.environ.get("CLAUDE_CONFIG_DIR"))
+    servers = load_claude()
     if ARGS[:1] != ["mcp"]:
         die("fake claude: only `claude mcp` is faked", 2)
     sub, rest = ARGS[1], ARGS[2:]
@@ -380,7 +411,7 @@ def claude():
         if key in servers:
             die(f"MCP server {positional[0]} already exists in {scope} config", 1)
         servers[key] = json.loads(positional[1])
-        save("claude.json", servers)
+        save_claude(servers)
         print(f"Added {servers[key].get('type')} MCP server {positional[0]} to {scope} config")
         return
     if sub == "get":
@@ -393,7 +424,7 @@ def claude():
         if key not in servers:
             die(f"No {scope}-scoped MCP server found with name: {positional[0]}", 1)
         del servers[key]
-        save("claude.json", servers)
+        save_claude(servers)
         print(f"Removed MCP server {positional[0]} from {scope} config")
         return
     die(f"fake claude: unsupported mcp {sub}", 2)
@@ -507,8 +538,22 @@ class FakeSystem:
     def keychain(self) -> dict[str, str]:
         return self._load("keychain.json", {})
 
-    def claude_servers(self) -> dict[str, dict]:
-        return self._load("claude.json", {})
+    def claude_servers(self, profile: Path | None = None) -> dict[str, dict]:
+        """What the fake claude holds, as "scope:name": the user scope from the profile's .claude.json
+        (`profile` is its CLAUDE_CONFIG_DIR; default: ~/.claude.json), the other scopes from its state."""
+        out = {k: v for k, v in self._load("claude.json", {}).items() if not k.startswith("user:")}
+        path = (profile or Path(os.environ["HOME"])) / ".claude.json"
+        data = json.loads(path.read_text()) if path.exists() else {}
+        out.update({f"user:{name}": entry for name, entry in (data.get("mcpServers") or {}).items()})
+        return out
+
+    def set_claude_servers(self, servers: dict[str, dict], profile: Path | None = None) -> None:
+        """Put user-scope entries ("user:name") in a profile's .claude.json, as Claude Code would."""
+        path = (profile or Path(os.environ["HOME"])) / ".claude.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = json.loads(path.read_text()) if path.exists() else {}
+        data["mcpServers"] = {k.split(":", 1)[1]: v for k, v in servers.items() if k.startswith("user:")}
+        path.write_text(json.dumps(data))
 
     def launchd_jobs(self) -> dict[str, dict]:
         return self._load("launchd.json", {})

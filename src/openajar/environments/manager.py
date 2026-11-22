@@ -79,7 +79,7 @@ from openajar.environments.store import EnvironmentStore
 from openajar.environments.tunnels import Tunnel
 from openajar.environments.updates import Updates
 from openajar.environments.uploads import Uploads
-from openajar.environments.views import Views
+from openajar.environments.views import Views, only_modes
 from openajar.environments.waking import Waking
 from openajar.environments.warmpool import WarmPool
 from openajar.environments.watching import Watching
@@ -110,6 +110,9 @@ def unsaved_fix(unsaved: dict, workdir: str | None = None) -> str:
     """What to do about unsaved work, for the files git has and for the ones it has not. Commits that
     are only local can also go home without a push (the human said not to push): a git bundle of them,
     through environment_download."""
+    if only_modes(unsaved):  # a chmod +x from a setup script, say: nothing of the content is lost
+        return ("Nothing but file modes (chmod) differ from the commit: close with discard=true to drop them, or "
+                "commit and push them if the repository needs them")
     git = unsaved.get("dirty_files") or unsaved.get("unpushed") or unsaved.get("stashes") or unsaved.get("unreadable")
     steps = ["commit it and push every branch (git push origin <branch>; a stash goes onto a branch first)"] if git else []
     if unsaved.get("unpushed"):

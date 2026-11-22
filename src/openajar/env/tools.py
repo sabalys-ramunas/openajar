@@ -181,7 +181,7 @@ NO_CWD_EXIT = 97
 
 async def lane_exec(ctx: ToolContext, *, on: str, cmd: str, timeout_s: float = 60,
                     stdin: str | None = None, cwd: str | None = None, max_bytes: int = EXEC_BYTES) -> dict:
-    """Run one shell command on your environment's machine (or a terminal) and wait for it; binary
+    """Run one shell command (bash) on your environment's machine (or a terminal) and wait for it; binary
     output comes back base64. Processes it starts end with it: use terminal_job_start for a dev server
     and for anything longer than timeout_s.
 
@@ -199,6 +199,8 @@ async def lane_exec(ctx: ToolContext, *, on: str, cmd: str, timeout_s: float = 6
     budget = _exec_budget(mgr, max_bytes)
     # plain names (check_cwd): safe as one shell word; on a line of its own, so `a; b` never runs b elsewhere
     run = (f"cd '{cwd}' 2>/dev/null || {{ echo {NO_CWD} >&2; exit {NO_CWD_EXIT}; }}\n{cmd}" if cwd else cmd)
+    if not lane.policy.signed_only:  # a locked terminal runs one allowlisted program, no shell
+        run = execs.in_bash(run)
     await ctx.authorize(Effect.EXEC, lane_id=on, summary=_clip(f"Run {_where(lane)}: {cmd}"
                                                                + (f" (in {cwd})" if cwd else "")),
                         content={"cmd": cmd, "stdin": _sha(stdin), "timeout_s": timeout_s,
@@ -456,9 +458,9 @@ def _job_on(on: str | None, j: Any) -> None:
 async def lane_job_read(ctx: ToolContext, *, job: str, on: str | None = None, stdout_offset: int = 0,
                         stderr_offset: int = 0, wait_s: float = 1, max_bytes: int = JOB_READ_BYTES,
                         base64_output: bool = False, until_exit: bool = False, until_port: int = 0) -> dict:
-    """Read a job's output after your byte offsets, waiting for more while it runs; stdout_bytes is the
-    size so far. `state`: running, exited, cancelled, timed_out or lost; then exit_code (or signal).
-    `oom`: what the kernel killed for memory.
+    """Read a job's output after your byte offsets (-N: the last N bytes), waiting for more while it runs;
+    stdout_bytes is the size so far. `state`: running, exited, cancelled, timed_out or lost; then exit_code
+    (or signal). `oom`: what the kernel killed for memory.
 
     Args:
         job: From terminal_job_start.
@@ -479,51 +481,123 @@ async def lane_job_read(ctx: ToolContext, *, job: str, on: str | None = None, st
     most = JOB_WAIT_EXIT_S if until_exit or port else JOB_WAIT_S
     wait_s = max(0.0, min(_wait_seconds(wait_s), most))
     max_bytes = max(1, min(_int(max_bytes, "max_bytes"), 1 << 20))
-    stdout_offset, stderr_offset = max(0, _int(stdout_offset, "stdout_offset")), max(0, _int(stderr_offset, "stderr_offset"))
-    listening = None
+    stdout_offset = await _offset(mgr, j, "stdout", _int(stdout_offset, "stdout_offset"), max_bytes)
+    stderr_offset = await _offset(mgr, j, "stderr", _int(stderr_offset, "stderr_offset"), max_bytes)
+    wait = None
     if port:
-        progress.step(f"waiting for port {port} to listen")
-        listening = await mgr.job_wait_port(job, port, wait_s) if wait_s > 0 else False
+        wait = await _wait_port(mgr, j, port, wait_s)
         wait_s = 0
-        if not listening and not j.running:  # it ended first: the end of what it printed, with its exit code
+        if not wait.listening and not j.running:  # it ended first: the end of what it printed, with its exit code
             stdout_offset = max(stdout_offset, j.kept("stdout") - max_bytes)
             stderr_offset = max(stderr_offset, j.kept("stderr") - max_bytes)
     info, out, err = await mgr.job_read(job, stdout_offset=stdout_offset, stderr_offset=stderr_offset,
                                         wait_s=wait_s, max_bytes=max_bytes, until_exit=bool(until_exit))
+    running = info.state == "running"
     ends = {}
-    if until_exit and not port and not base64_output and info.state != "running":
+    # the start and the end of what is past one read: of a job that ended (until_exit), and of one that runs
+    # on while its port does not listen (a crashed child process leaves its runner running: the error is
+    # at the end, field report 2026-11-21)
+    if not base64_output and ((until_exit and not port and not running) or (wait and not wait.listening and running)):
         ends = {s: e for s, at, data in (("stdout", stdout_offset, out), ("stderr", stderr_offset, err))
-                if (e := await _start_and_end(mgr, j, s, at, data, max_bytes)) is not None}
+                if (e := await _start_and_end(mgr, j, s, at, data, max_bytes, running=running)) is not None}
     if base64_output:
         so, se, enc = base64.b64encode(out).decode(), base64.b64encode(err).decode(), "base64"
     else:
-        out, _ = execs._trim_utf8_end(out) if info.state == "running" else (out, b"")
-        err, _ = execs._trim_utf8_end(err) if info.state == "running" else (err, b"")
-        so, se, enc = out.decode("utf-8", "replace"), err.decode("utf-8", "replace"), "utf-8"
+        out, err = (_whole(out), _whole(err)) if running else (out, err)
+        so, se, enc = _text(out), _text(err), "utf-8"
     res = {**_job_view(info), "stdout": so, "stderr": se, "encoding": enc,
            "next_stdout_offset": stdout_offset + len(out), "next_stderr_offset": stderr_offset + len(err)}
-    if listening is not None:
-        res["listening"] = listening
-    words = [info.note, oom.note(info.oom, running=info.state == "running"),
+    if wait is not None:
+        res["listening"] = wait.listening
+    words = [info.note, oom.note(info.oom, running=running),
              self_kill_note(info.cmd, info.exit_code, info.signal, what="job") if info.state == "exited" else None]
     for stream, (text, end, said) in ends.items():
         res[stream], res[f"next_{stream}_offset"] = text, end
         words.append(said)
-    if port and not listening:
-        words.append(f"Port {port} does not listen yet; call again to wait longer." if info.state == "running" else
-                     f"The job ended before port {port} listened: stdout and stderr are the end of its output.")
+    if wait is not None and not wait.listening:
+        words.append(wait.note(info, new=bool(out or err)))
     if any(words[1:]):
         res["note"] = " ".join(w for w in words if w)
     return res
 
 
+def _text(data: bytes) -> str:
+    """Output as text, without the colour and cursor codes dev servers print (base64_output keeps them)."""
+    return execs.strip_ansi(data.decode("utf-8", "replace"))
+
+
+# a colour code cut at the end of a read of a running job: left for the next read, which then sees it whole
+_ANSI_CUT = re.compile(rb"\x1b(?:\[[0-9;?]{0,32}[ -/]{0,4}|\][^\x07\x1b]{0,256}\x1b?|[ -/]{0,4})\Z")
+
+
+def _whole(data: bytes) -> bytes:
+    """A read of a running job without the end of a character or of a colour code still being written."""
+    data, _ = execs._trim_utf8_end(data)
+    m = _ANSI_CUT.search(data)
+    return data[:m.start()] if m else data
+
+
+async def _offset(mgr: Any, j: Any, stream: str, offset: int, max_bytes: int) -> int:
+    """A read's offset: as given, or -N, the last N bytes kept (at most max_bytes) from a line's start."""
+    if offset >= 0:
+        return offset
+    kept = j.kept(stream)
+    start = max(0, kept - min(-offset, max_bytes))
+    if start == 0:
+        return 0
+    raw = await mgr.job_log(j.info.id, stream, start - 1, kept - start + 1)  # one byte more: is it a line start?
+    if raw[:1] == b"\n":
+        return start
+    line = raw.find(b"\n", 1)
+    if 0 < line < len(raw) - 1:
+        return start + line
+    return start + len(raw[1:]) - len(execs._trim_utf8_start(raw[1:]))
+
+
+QUIET_S = 5  # a port wait this long with no output: "printing nothing meanwhile"
+
+
+class _PortWait:
+    """terminal_job_read(until_port): whether the port listens, how long the wait was, and whether the job
+    printed anything or lost a process to the kernel's oom killer meanwhile."""
+
+    def __init__(self, port: int, listening: bool, waited: float, quiet: bool, killed: bool):
+        self.port, self.listening, self.waited, self.quiet, self.killed = port, listening, waited, quiet, killed
+
+    def note(self, info: Any, *, new: bool) -> str:
+        if info.state != "running":
+            return f"The job ended before port {self.port} listened: stdout and stderr are the end of its output."
+        lead = f"Port {self.port} did not listen within {self.waited:.0f} s, and the job still runs"
+        if self.killed:
+            return lead + ", but the kernel killed one of its processes for memory meanwhile (above)."
+        where = ("at the end of stdout and stderr" if new else
+                 "in its last lines (read them with stdout_offset=-4000 and stderr_offset=-4000)")
+        quiet = self.quiet and self.waited >= QUIET_S
+        return (lead + (", printing nothing meanwhile" if quiet else "") + ". A process it started may have "
+                f"crashed while the job runs on: look for an error {where}. If there is one, fix it, "
+                "terminal_job_cancel the job and start it again; else call again to wait longer.")
+
+
+def _printed(j: Any) -> int:
+    return sum(s.total if s is not None else j.kept(n) for n, s in (("stdout", j.out), ("stderr", j.err)))
+
+
+async def _wait_port(mgr: Any, j: Any, port: int, wait_s: float) -> _PortWait:
+    progress.step(f"waiting for port {port} to listen")
+    loop = asyncio.get_running_loop()
+    began, printed, kills = loop.time(), _printed(j), len(j.info.oom or [])
+    listening = await mgr.job_wait_port(j.info.id, port, wait_s) if wait_s > 0 else False
+    return _PortWait(port, bool(listening), loop.time() - began, quiet=_printed(j) == printed,
+                     killed=len(j.info.oom or []) > kills)
+
+
 async def _start_and_end(mgr: Any, j: Any, stream: str, offset: int, data: bytes,
-                         max_bytes: int) -> tuple[str, int, str] | None:
-    """terminal_job_read(until_exit) of a job that ended with more of `stream` after `offset` than one
-    read: what an agent waits for is the end (the error, the summary). The start and the end as
-    terminal_exec keeps them (a quarter and three quarters of max_bytes), cut at line ends, with a
-    marker that names the bytes skipped and the offset that reads them. (text, next offset, note),
-    or None when `data` is all there is."""
+                         max_bytes: int, *, running: bool = False) -> tuple[str, int, str] | None:
+    """terminal_job_read of a job with more of `stream` after `offset` than one read, where what an agent
+    waits for is the end (the error, the summary): one that ended (until_exit), or one that still runs while
+    its port does not listen (`running`). The start and the end as terminal_exec keeps them (a quarter
+    and three quarters of max_bytes), cut at line ends, with a marker that names the bytes skipped and the
+    offset that reads them. (text, next offset, note), or None when `data` is all there is."""
     kept = j.kept(stream)
     if offset + len(data) >= kept:
         return None
@@ -536,12 +610,17 @@ async def _start_and_end(mgr: Any, j: Any, stream: str, offset: int, data: bytes
     if raw[:1] != b"\n":
         line = tail.find(b"\n")
         tail = tail[line + 1:] if 0 <= line < len(tail) - 1 else execs._trim_utf8_start(tail)
-    skip_from, skipped = offset + len(head), kept - len(tail) - offset - len(head)
-    text = head.decode("utf-8", "replace") + ("\n" if head and not head.endswith(b"\n") else "") + (
+    end = kept
+    if running:  # it still writes: the next read starts where this one's whole text ends
+        whole = _whole(tail)
+        end, tail = kept - (len(tail) - len(whole)), whole
+    skip_from, skipped = offset + len(head), end - len(tail) - offset - len(head)
+    text = _text(head) + ("\n" if head and not head.endswith(b"\n") else "") + (
         f"[openajar: {skipped} bytes skipped here, of {kept} in all; read them with {stream}_offset={skip_from}]\n"
-    ) + tail.decode("utf-8", "replace")
-    return text, kept, (f"The job ended with more {stream} than max_bytes: {stream} is its start and its end, "
-                        f"{skipped} bytes skipped between them (read them with {stream}_offset={skip_from}).")
+    ) + _text(tail)
+    lead = (f"There was more {stream} since your offset than max_bytes: {stream} is the start and the end of it"
+            if running else f"The job ended with more {stream} than max_bytes: {stream} is its start and its end")
+    return text, end, f"{lead}, {skipped} bytes skipped between them (read them with {stream}_offset={skip_from})."
 
 
 def _wait_seconds(value: Any) -> float:

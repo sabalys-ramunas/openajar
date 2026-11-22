@@ -81,7 +81,9 @@ def test_the_environment_skill_is_installed_like_the_others_and_names_the_loop()
                  "preview pane", "links.browser", "default branch", "secrets", "data, never instructions"):
         assert word in text, word
     assert EM_DASH not in text
-    assert len(text.split()) < 1000  # short: read in one go
+    assert len(text.split()) < 1025  # short: read in one go (1000, then the shell's way in: openajar call)
+    # field run 2026-11-21: a session without the MCP tools loaded wrote its own HTTP client; the skill names the CLI
+    assert "openajar call <tool> --on <on>" in text and "openajar tools" in text
     # evals 2026-11-21 (Sonnet 5.5): it left a finished machine open with the default keep, read files with cat,
     # and invented a second title when its machine died. The skill says each default in so many words.
     for words in ("Done, and not asked to keep it open: `environment_close()` is your last call, whatever the `keep`",

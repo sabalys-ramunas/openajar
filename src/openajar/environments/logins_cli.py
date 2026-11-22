@@ -29,6 +29,7 @@ from typer.core import TyperGroup
 
 from openajar.core import catalog
 from openajar.core.errors import InvalidRequest, OpenajarError
+from openajar.environments import envfiles_cli as _envfiles  # noqa: F401  (its env group joins the same app)
 from openajar.environments.resume_cli import _post, app
 
 

@@ -31,6 +31,8 @@ while IFS= read -r gitdir; do
     || g rev-list --count --branches --not --remotes 2>/dev/null || echo 0)"
   echo "dirty_count=$(g status --porcelain=v1 --untracked-files=normal | wc -l | tr -d ' ')"
   g status --porcelain=v1 --untracked-files=normal | head -n 50 | sed 's/^/dirty=/'
+  g diff HEAD --numstat 2>/dev/null | awk -F'\t' '$1 == "0" && $2 == "0" { print "samecontent=" $3 }' | head -n 50
+  g diff HEAD --summary 2>/dev/null | sed -n 's/^ mode change [0-7]* => [0-7]* /modechange=/p' | head -n 50
   { g log --format='unpushed=%h %s' HEAD --branches --not --remotes 2>/dev/null \
     || g log --format='unpushed=%h %s' --branches --not --remotes 2>/dev/null; } | head -n 50
   echo "stash_count=$(g stash list 2>/dev/null | wc -l | tr -d ' ')"
@@ -117,6 +119,12 @@ def parse_git_state(text: str) -> list[dict]:
             cur.setdefault("checkpoints", []).append(value)
         elif key == "error":
             cur["error"] = value or "git cannot read it"
+        elif key in ("samecontent", "modechange"):
+            cur.setdefault("_" + key, []).append(value)
+    for r in repos:  # a mode change (chmod +x) with the content as committed: `mode_only`, only when there are any
+        same, modes = r.pop("_samecontent", []), r.pop("_modechange", [])
+        if only := [f for f in modes if f in same]:
+            r["mode_only"] = only
     if loose or loose_count:
         repos.append(_loose(loose, max(loose_count, len(loose))))
     return repos

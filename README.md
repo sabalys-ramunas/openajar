@@ -225,7 +225,8 @@ What this defends against, and what it does not: [docs/THREAT-MODEL.md](docs/THR
 
 | Agent | Setup |
 |:--|:--|
-| **Claude Code** | connected by `openajar setup`, with the openajar skills |
+| **Claude Code** | connected by `openajar setup` (or `openajar connect`) in every Claude Code profile on the computer (`~/.claude.json`, and each `CLAUDE_CONFIG_DIR`), with the openajar skills; open sessions see the tools after a restart |
+| **Any shell** | `openajar call <tool> --arg key=value` runs any tool under your agents' grant and prints JSON; `openajar tools` lists them. For an agent whose session has not loaded the MCP tools, and for scripts |
 | **Codex** | connected by `openajar setup` |
 | **T3 Code** | nothing more: it uses Claude Code's and Codex's settings, and shows the live view in its preview pane |
 | **Any MCP client** (Cursor, Claude Desktop, for example) | add a stdio server that runs `openajar mcp` (or `npx -y openajar`, or `uvx openajar mcp`); or by hand: Streamable HTTP at `http://127.0.0.1:7410/mcp`, with the token setup keeps for your agents |
@@ -426,6 +427,13 @@ Then on your computer, with the node in `~/.ssh/config` as `mynode`:
 curl -fsSL https://openajar.com/install.sh | sh
 openajar connect mynode
 ```
+
+`connect` registers the node in every Claude Code profile on your computer (the default
+`~/.claude.json` and each `CLAUDE_CONFIG_DIR` folder, such as `~/.claude_work`), replaces entries
+from before the rename, and says which profiles it wrote. Claude Code loads MCP servers when a
+session starts, so restart open sessions. Until then, any shell reaches the tools:
+`openajar call <tool> --arg key=value` (`openajar tools` lists them). `openajar status --check`
+names a profile whose entry points at an address that no longer answers.
 
 Install, hardening, backups and upgrades: [deploy/README.md](deploy/README.md).
 

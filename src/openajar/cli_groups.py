@@ -47,7 +47,7 @@ HOME: dict[str, str] = {
     "site-api": "routines", "brains": "routines", "pilot": "routines", "plugins": "routines",
     "config": "node", "backup": "node", "migrate": "node", "upgrade": "node", "logs": "node",
     "migrate-service-user": "node",
-    "lanebench": "dev", "tools": "dev", "errors": "dev", "call": "dev",
+    "lanebench": "dev", "errors": "dev",
     "flow": "routines", "agenda": "routines", "vm": "lane", "text-review": "dev",
     "version": "help",
     "envs": "environments",
@@ -62,6 +62,8 @@ VISIBLE: tuple[tuple[str, str, str], ...] = (
     ("status", START, "Is it up, and which lanes it has (--check: what is wrong)."),
     ("open", START, "Watch a lane live and take control (--terminal: a dashboard)."),
     ("mcp", START, "openajar as a stdio MCP server, for any MCP client."),
+    ("call", START, "Call any openajar tool from a shell, under your agents' grant."),
+    ("tools", START, "Every tool openajar serves, for `openajar call`."),
     ("run", BUILD, "Run a command on the node against this working tree."),
     ("expose", BUILD, "Your laptop's dev server, opened in one browser lane."),
     ("local", START, "openajar on this computer: start, stop, status, logs."),
@@ -107,6 +109,8 @@ Every day:
   openajar access approvals list   what waits for your yes
 When something is wrong:
   openajar status --check          what is wrong and how to fix it
+  openajar call <tool>             any tool from a shell, when a session has not loaded them
+  openajar tools                   the tools to call, and what each does
   openajar node logs               the node's log
   openajar access freeze node      stop every agent at once
 
@@ -335,8 +339,10 @@ def _visible_commands(m: _Mounted) -> list[CommandInfo]:
                                            optional=("lane",),
                                            missing="open needs a lane id, for example `openajar open "
                                                    "biz-a/instagram` (or --terminal for the dashboard)")))
-    if "mcp" in commands:
-        out.append(_cmd(commands["mcp"], rich_help_panel=START, short_help=panels["mcp"][1]))
+    # mcp, and the tools from any shell when an agent's session has not loaded them (`openajar call`)
+    for name in ("mcp", "call", "tools"):
+        if name in commands:
+            out.append(_cmd(commands[name], rich_help_panel=START, short_help=panels[name][1]))
     # the commands for your own code: run a command there, your dev server in a lane, a lane's port here
     for name in ("run", "expose"):
         if name in commands:

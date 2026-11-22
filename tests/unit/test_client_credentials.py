@@ -341,7 +341,8 @@ def test_doctor_warns_while_a_connection_holds_the_node_token_and_upgrade_fixes_
     monkeypatch.setenv("OPENAJAR_HOME", str(tmp_path / "not-a-node"))
     doctor = CliRunner().invoke(ops_cli.app, ["doctor", "--json"])
     checks = json.loads(doctor.output)["checks"]
-    assert [c["status"] for c in checks] == ["pass"] and checks[0]["data"]["grant"] == record(home)["agent_grant_id"]
+    assert [(c["id"], c["status"]) for c in checks] == [("connections", "pass"), ("claude_profiles", "pass")]
+    assert checks[0]["data"]["grant"] == record(home)["agent_grant_id"]
 
 
 def test_an_old_connection_upgrades_by_connecting_again(system, node, home):

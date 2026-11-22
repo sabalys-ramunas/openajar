@@ -20,6 +20,7 @@ from openajar.environments.models import (
 )
 
 ROOM_SHOWN = 2  # sizes a capacity error offers (the error must fit in an MCP error with them)
+NO_ROOM_FRESH = timedelta(minutes=30)  # a machine's open that had no room for some types is news this long
 
 
 class Sizing:
@@ -99,14 +100,41 @@ class Sizing:
                 got = name
         return got
 
+    def _vm_of(self, env: Environment) -> Any:
+        """The VM record of `env`'s machine, None when it has none or it cannot be read."""
+        with contextlib.suppress(NotFound, OpenajarError):
+            return self.vms().store.get(env.vm_id) if env.vm_id else None
+        return None
+
+    def _no_room_types(self, env: Environment) -> set[str]:
+        """The server types that had no room when `env`'s machine was made, while that is recent."""
+        rec = self._vm_of(env)
+        if rec is None or not rec.no_room or self._clock() - rec.created_at > NO_ROOM_FRESH:
+            return set()
+        return {t for t, _loc in rec.no_room}
+
+    def machine_notes(self, env: Environment) -> dict:
+        """{"fell_back": words} when the planned type had no room and the machine is of another type
+        (another family, maybe dearer): what it costs, so the agent and the owner see it. Else {}."""
+        rec = self._vm_of(env)
+        if rec is None or not rec.asked:
+            return {}
+        from openajar.vms.capacity import fell_back_words
+
+        return {"fell_back": fell_back_words(rec.asked, rec.server_type, rec.price_hourly_eur, rec.no_room)}
+
     async def bigger_sizes(self, env: Environment) -> list[dict]:
         """The sizes above the one `env` has, up to max_size, with what each would rent here and its
-        price: what an agent reads before it asks for a bigger one. [] when none, or the provider
-        does not answer."""
+        price: what an agent reads before it asks for a bigger one. A type that just had no room for
+        this machine is passed over for the size's next one, and a size with none left is left out. An
+        entry that costs less an hour than this machine says so ("cheaper" and a "note"). [] when none,
+        or the provider does not answer."""
         names = list(SIZES)
         top = names.index(self.settings.max_size)
         got = env.machine.size
         start = names.index(got) + 1 if got in names else 0
+        no_room, running = self._no_room_types(env), env.price_hourly_eur
+        fell_back = bool(getattr(self._vm_of(env), "asked", None))
         out = []
         for name in names[start:top + 1]:
             cpu, memory = SIZES[name]
@@ -116,22 +144,37 @@ class Sizing:
                 profile, custom = self._size(name)
                 plan = await self.vms().plan(f"{WORKSPACE}/{env.id}", profile=profile, ttl_minutes=60, size=custom,
                                              image=env.image or None)
+                picks = [(plan["server_type"], plan.get("price_hourly_eur")), *(plan.get("fallbacks") or [])]
+                server_type, price = next(((t, p) for t, p in picks if t not in no_room), (None, None))
+                if server_type is None:
+                    continue  # every type of this size just had no room
+                specs = (plan.get("specs") or {}) if server_type == plan["server_type"] else next(
+                    (t for t in await self.vms().offers(plan["location"]) if t["name"] == server_type), {})
             except OpenajarError:
                 continue
-            specs = plan.get("specs") or {}
-            out.append({"size": name, "server_type": plan["server_type"], "cpu": specs.get("cores"),
-                        "memory_gb": specs.get("memory_gb"), "price_hourly_eur": plan.get("price_hourly_eur")})
+            row = {"size": name, "server_type": server_type, "cpu": specs.get("cores"),
+                   "memory_gb": specs.get("memory_gb"), "price_hourly_eur": price}
+            if running and price is not None and price < running:
+                row["cheaper"] = True
+                row["note"] = (f"costs less an hour than this machine (EUR {running:.4f}), which is "
+                               + ("a dearer type rented because the cheaper ones had no room" if fell_back
+                                  else "a dearer type") + f"; {server_type} may have no room either")
+            out.append(row)
         return out
 
     async def sizes_with_room(self, env: Environment, error: BaseException) -> list[dict]:
         """The sizes next to the one `env` asked for (up to max_size, nearest first, at most ROOM_SHOWN)
-        whose server types the provider lists as orderable now in its zone, without the (type, location)
-        that just had no room (NoRoom.tried): what a capacity error offers instead. Never taken for the
-        agent: it asks for one itself. [] when the provider does not say."""
+        that may have room: what a capacity error offers instead. A size is never offered when every
+        server type it would try just had no room (NoRoom.tried, in any location). When the provider
+        lists what is orderable now, a size must have a type it lists in the zone ("now": true); when it
+        does not say, a size with a type not tried yet is offered as that ("now": false). Never taken for
+        the agent: it asks for one itself."""
         names = list(SIZES)[:list(SIZES).index(self.settings.max_size) + 1]
         asked = env.machine.size if env.machine.size in SIZES else None
         at = list(SIZES).index(asked) if asked else 0
         failed = set(getattr(error, "tried", None) or [])
+        failed_types = {t for t, _loc in failed}
+        says: bool | None = None  # does the provider list what is orderable now (its types' `available`)
         out: list[dict] = []
         for name in sorted((n for n in names if n != asked), key=lambda n: abs(list(SIZES).index(n) - at)):
             try:
@@ -139,12 +182,16 @@ class Sizing:
                 plan = await self.vms().plan(f"{WORKSPACE}/{env.id}", profile=profile, ttl_minutes=60, size=custom,
                                              image=env.image or None)
                 types = [plan["server_type"], *[t for t, _p in plan.get("fallbacks") or []]]
-                if not await self.vms().listed_now(types, plan["location"], skip=failed):
+                if all(t in failed_types for t in types):
+                    continue  # every type it would try just had no room
+                if says is None:
+                    says = any(t.get("available") is not None for t in await self.vms().offers(plan["location"]))
+                if says and not await self.vms().listed_now(types, plan["location"], skip=failed):
                     continue
             except OpenajarError:
                 continue
             cpu, memory = SIZES[name]
-            out.append({"size": name, "cpu": cpu, "memory_gb": memory,
+            out.append({"size": name, "cpu": cpu, "memory_gb": memory, "now": bool(says),
                         "smaller": asked is not None and list(SIZES).index(name) < at})
             if len(out) >= ROOM_SHOWN:
                 break
@@ -231,9 +278,16 @@ class Sizing:
         if custom and "server_type" in custom and size and str(size).strip().lower() not in SIZES:
             await self._check_server_type(custom["server_type"])
         image = image or await self._image()  # planned with it: no fallback type has a smaller disk than it
+        from openajar.vms.capacity import NotSold
+
         try:
             plan = await self.vms().plan(f"{WORKSPACE}/{env_id}", profile=profile, ttl_minutes=minutes, size=custom,
                                          kept=kept, image=image)
+        except NotSold as e:  # a server type by name the location does not sell: a size picks one that is sold
+            fits = self.size_of(*e.has)
+            tip = (f'{", or" if e.words.endswith("one of those") else ". Ask for"} size="{fits}" '
+                   f"({self._size_words(fits)}), which picks a type sold there") if fits else ""
+            raise InvalidRequest(f"{e.words}{tip}. Nothing was rented") from None
         except OpenajarError as e:
             if e.code != "vm_error":
                 raise
@@ -326,9 +380,12 @@ class Sizing:
         self.check_count()
         budget = self.settings.monthly_eur
         price = plan.get("price_hourly_eur")
-        if budget and price is not None:
-            worst = max([price, *[q or 0 for _n, q in plan.get("fallbacks") or []]]) * -(-plan["ttl_minutes"] // 60)
-            booked = self.booked_eur()
+        if budget and price is not None:  # the planned type must fit; a dearer fallback that does not is dropped
+            from openajar.vms.capacity import affordable
+
+            hours, booked = -(-plan["ttl_minutes"] // 60), self.booked_eur()
+            worst = price * hours
+            plan["fallbacks"] = affordable(price, plan.get("fallbacks") or [], hours, budget - booked)
             if booked + worst > budget:
                 raise EnvironmentLimit(f"this environment could cost up to EUR {worst:.2f}; with EUR {booked:.2f} "
                                        "spent and booked by open environments this month, that passes the monthly "

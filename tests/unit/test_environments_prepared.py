@@ -6,6 +6,7 @@ docker dev node run the real thing."""
 from __future__ import annotations
 
 import asyncio
+import base64
 import subprocess
 from datetime import timedelta
 from types import SimpleNamespace
@@ -26,7 +27,7 @@ from openajar.environments.models import EnvSettings
 from openajar.environments.prepared import Prepared, PreparedStore
 from openajar.environments.repoconfig import ConfigError, ConfigRead, blob_id, parse, prepared_key
 from openajar.environments.tools import tool_specs as env_tool_specs
-from openajar.policy.wrap import bind_request_token, wrap_tool
+from openajar.policy.wrap import ToolCallError, bind_request_token, wrap_tool
 from openajar.vms.manager import VmManager
 from openajar.vms.models import VmSettings
 from openajar.vms.provider import FakeProvider
@@ -509,6 +510,77 @@ async def test_environment_shows_prepared_and_app(node):
     out = await node.call("environment_open", title="Shop", repo=REPO)
     got = await node.call("environment", on=out["on"])
     assert got["prepared"]["setup"]["ok"] is True and got["app"]["job_id"] == "job1"
+    assert "environment_app_restart" in got["app"]["restart"]
+
+
+# ------------------------------------------------------------------ restarting the app
+
+
+def cancels(node, monkeypatch, *, frees_port=True):
+    """job_cancel ends the job (its process group); the port closes with it unless `frees_port` is false."""
+    stopped = []
+
+    async def job_cancel(job_id):
+        job = next(j for j in node.jobs if j.id == job_id)
+        job.state = "cancelled"
+        stopped.append(job_id)
+        if frees_port:
+            node.machine.ports = ""
+        return job
+
+    monkeypatch.setattr(node.envs, "job_cancel", job_cancel)
+    node.mgr.app_free_wait_s = 0.05
+    return stopped
+
+
+async def test_the_app_restarts_as_the_open_started_it(node, monkeypatch):
+    stopped = cancels(node, monkeypatch)
+    out = await node.call("environment_open", title="Shop", repo=REPO)
+    # a second copy the agent started by hand runs the same command: it goes too
+    hand = await node.envs.job_start(f"env/{out['id']}", "pnpm dev --host 0.0.0.0", cwd="/work/shop")
+    got = await node.call("environment_app_restart", on=out["on"])
+    app = got["app"]
+    assert stopped == ["job1", hand.id] and app["stopped"] == ["job1", hand.id]
+    assert app["job_id"] == "job3" and app["listening"] is True and app["port"] == 3000
+    assert node.jobs[-1].cmd == "pnpm dev --host 0.0.0.0" and node.jobs[-1].cwd == "/work/shop"
+    assert "runs again as job job3" in got["next"] and "—" not in got["next"]
+    assert (await node.call("environment", on=out["on"]))["app"]["job_id"] == "job3"
+
+
+async def test_a_restart_reads_the_file_as_it_is_now(node, monkeypatch):
+    cancels(node, monkeypatch)
+    out = await node.call("environment_open", title="Shop", repo=REPO)
+    text = 'start = "pnpm dev --port 3001"\nport = 3001\n'
+    real = node.machine.exec
+
+    async def exec_(lane_id, cmd, **kw):
+        if "config=" in cmd and lane_id == f"env/{out['id']}":
+            return ExecResult(exit_code=0, stdout=f"config={base64.b64encode(text.encode()).decode()}\n", stderr="",
+                              duration_s=0.01)
+        return await real(lane_id, cmd, **kw)
+
+    monkeypatch.setattr(node.envs, "exec", exec_)
+    app = (await node.call("environment_app_restart", on=out["on"]))["app"]
+    assert app["command"] == "pnpm dev --port 3001" and app["port"] == 3001 and node.jobs[-1].cmd == "pnpm dev --port 3001"
+
+    text = 'start = "pnpm dev"\n'  # start without port
+    with pytest.raises(ToolCallError, match="start needs port"):
+        await node.call("environment_app_restart", on=out["on"])
+
+
+async def test_a_port_the_old_app_still_holds_is_said(node, monkeypatch):
+    cancels(node, monkeypatch, frees_port=False)
+    out = await node.call("environment_open", title="Shop", repo=REPO)
+    app = (await node.call("environment_app_restart", on=out["on"]))["app"]
+    assert "port 3000 still listened after the old app stopped (node)" in app["why"] and "fuser -k 3000/tcp" in app["why"]
+
+
+async def test_no_start_command_no_restart(node, monkeypatch):
+    cancels(node, monkeypatch)
+    node.reads["text"] = None
+    out = await node.call("environment_open", title="Shop", repo=REPO)
+    with pytest.raises(ToolCallError, match="no start command"):
+        await node.call("environment_app_restart", on=out["on"])
 
 
 # ------------------------------------------------------------------ limits

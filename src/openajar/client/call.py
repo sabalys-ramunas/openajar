@@ -170,22 +170,39 @@ UrlOpt = Annotated[str | None, typer.Option("--url", help="An MCP address instea
 
 
 def call(
-    tool: Annotated[str, typer.Argument(help="The tool's name, as `openajar dev tools` lists it.")],
+    tool: Annotated[str, typer.Argument(help="The tool's name, as `openajar tools` lists it (for example "
+                                              "environment or terminal_exec).")],
     arg: Annotated[list[str] | None, typer.Option("--arg", "-a", help="key=value; the value may be JSON "
                                                   "(--arg limit=5, --arg 'params={\"text\": \"hi\"}').")] = None,
     as_json: Annotated[str | None, typer.Option("--json", help="All the arguments as one JSON object, or @file.")]
     = None,
-    on: Annotated[str | None, typer.Option("--on", help="The lane (workspace/name), for tools that act on one.")]
+    on: Annotated[str | None, typer.Option("--on", help="The environment or lane the tool acts on (the `on` from "
+                                                        "environment_open, or workspace/name).")]
     = None,
     wait: Annotated[float, typer.Option("--wait", help="Seconds to wait when a person must approve first; once "
                                                        "approved, the call runs again.")] = 0.0,
     node: NodeOpt = None,
     url: UrlOpt = None,
 ) -> None:
-    """Call any MCP tool on a node, as your agents would: the same grant, policy and approvals.
+    """Call any openajar tool from a shell, as your agents would: the same grant, policy and approvals.
 
-    Prints the result as JSON. Exit codes: 0 done, 1 refused or failed, 2 still waiting for a
-    person (approve it in the panel, then run the same command again, or pass --wait)."""
+    For an agent whose session has not loaded the openajar tools, and for scripts.
+
+    Claude Code loads MCP servers only when a session starts. `openajar tools` lists the tools.
+
+    Examples:
+
+      openajar call environment
+
+      openajar call environment_open --arg title=checkout --arg keep=none
+
+      openajar call terminal_exec --on e7k2 --arg cmd="pnpm test"
+
+      openajar call file_read --json '{"on": "e7k2", "path": "README.md"}'
+
+    Prints the result as JSON. Exit codes: 0 done, 1 refused or failed, 2 still waiting for a person.
+
+    For 2, approve it in the panel and run the same command again, or pass --wait."""
     try:
         arguments = parse_arguments(arg, as_json, on)
         with open_session(node, url) as session:

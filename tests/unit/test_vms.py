@@ -423,8 +423,8 @@ async def test_tools_authorize_vm_with_the_price_and_profile_then_exec_works_lik
     out = await specs["vm_create"].handler(ctx, on="dev/a", ttl_minutes=90, purpose="tests")
     call = ctx.calls[0]
     assert call["effect"] == Effect.VM and call["lane_id"] == "dev/a" and call["facts"] == {"profile": "small"}
-    assert "cx23" in call["summary"] and "EUR 0.0060 an hour" in call["summary"] and "EUR 0.02 for 90 min" in call["summary"]
-    assert "sold out: cpx22" in call["summary"]
+    assert "cx23" in call["summary"] and "EUR 0.0060 an hour" in call["summary"] and "EUR 0.01 for 90 min" in call["summary"]
+    assert "at most EUR 0.10 if only a dearer type has room); if it is sold out: cpx22" in call["summary"]
     assert out["state"] == "ready" and "terminal_exec" in out["next"]
     listed = await specs["vms_list"].handler(ctx)
     assert [v["lane"] for v in listed["vms"]] == ["dev/a"] and "small" in listed["profiles"]
@@ -499,7 +499,7 @@ async def test_a_sold_out_type_falls_back_to_the_next_cheapest(env):
     assert rec.state == "ready" and rec.server_type == "cpx22" and rec.price_hourly_eur == 0.0095
     prov.unavailable = {"cpx42"}
     with pytest.raises(VmError, match="no room for cpx42 in nbg1, fsn1 or hel1 now; try again in 5 minutes"):
-        await vms.create("dev/b", profile="build", ttl_minutes=30)  # nothing else fits within twice the price
+        await vms.create("dev/b", profile="build", ttl_minutes=30)  # no other type has 8 CPU and 16 GB
 
 
 async def test_a_sold_out_type_is_tried_in_the_other_locations_of_its_zone_first(env):
@@ -538,6 +538,78 @@ def test_no_room_words_name_every_type_and_location_tried():
                      "try again in 5 minutes")
     assert capacity.zone_locations("fsn1", capacity.ZONES) == ["fsn1", "nbg1", "hel1"]
     assert capacity.zone_locations("ash", capacity.ZONES) == ["ash"]
+
+
+# ---------------------------------------------------------------- capacity: every family, the type sold here
+
+def hetzner_2026(prov):
+    """The types of the run that needed three tries (2026-11-21): cx43 and cx53 out of room in nbg1,
+    fsn1 and hel1, cpx42 with room at more than four times cx43's price, cpx41 sold only outside eu-central."""
+    for name, price, spec in (("cx33", 0.0088, (4, 8.0, 80, "x86", "shared")),
+                              ("cx43", 0.0304, (8, 16.0, 160, "x86", "shared")),
+                              ("cx53", 0.057, (16, 32.0, 320, "x86", "shared")),
+                              ("cpx41", 0.06, (8, 16.0, 240, "x86", "shared")),
+                              ("cpx42", 0.135, (8, 16.0, 320, "x86", "shared")),
+                              ("ccx33", 0.2, (8, 32.0, 240, "x86", "dedicated")),
+                              ("cpx62", 0.25, (16, 32.0, 640, "x86", "shared"))):
+        prov.prices[name], prov.specs[name] = price, spec
+    eu = ["nbg1", "fsn1", "hel1"]
+    prov.listed = {n: (["ash"] if n == "cpx41" else eu) for n in prov.prices}
+
+
+async def test_a_size_with_no_room_in_one_family_is_made_from_another_and_says_what_it_costs(env):
+    """size large had no room for cx43 or cx53 anywhere in eu-central, and cpx42 (as much CPU and memory)
+    had room, but the plan only held types within twice cx43's price, so the agent found cpx42 by hand.
+    A size now tries every family, cheapest first, and the VM says it costs 4.4 times the plan."""
+    vms, _, prov, _ = env
+    hetzner_2026(prov)
+    plan = await vms.plan("dev/a", size={"min_cpu": 8, "min_memory_gb": 16})
+    assert plan["server_type"] == "cx43"
+    assert [t for t, _p in plan["fallbacks"]] == ["cx53", "cpx42", "ccx33", "cpx62"]  # at most 2 of a family
+    prov.unavailable = {"cx43", "cx53"}
+    rec = await vms.create("dev/a", plan=plan)
+    assert (rec.server_type, rec.location, rec.price_hourly_eur) == ("cpx42", "nbg1", 0.135)
+    assert rec.asked == ("cx43", 0.0304) and len(rec.no_room) == 6
+    assert vms.brief(rec)["fell_back"] == ("No room for cx43 or cx53 now, so this is cpx42, with at least as much, "
+                                           "at EUR 0.1350 an hour (4.4 times the EUR 0.0304 planned for cx43)")
+
+
+async def test_the_owners_budget_bounds_the_fallbacks_not_a_price_factor(env):
+    vms, _, prov, _ = env
+    hetzner_2026(prov)
+    vms.settings.monthly_budget_eur = 0.15  # one hour of cpx42 fits; ccx33 and cpx62 do not
+    prov.unavailable = {"cx43", "cx53"}
+    rec = await vms.create("dev/a", size={"min_cpu": 8, "min_memory_gb": 16}, ttl_minutes=30)
+    assert rec.server_type == "cpx42" and [t for t, _p in rec.fallbacks] == ["cx53", "cpx42"]
+    prov.unavailable = {"cx43", "cx53", "cpx42"}
+    vms.settings.monthly_budget_eur += 0.135  # what the first one booked: the same room again
+    with pytest.raises(VmError, match="no room for cx43, cx53 or cpx42 in nbg1, fsn1 or hel1 now"):
+        await vms.create("dev/b", size={"min_cpu": 8, "min_memory_gb": 16}, ttl_minutes=30)
+    assert prov.made_in == [("cpx42", "nbg1")]  # never ccx33 or cpx62, past what the month has left
+
+
+async def test_a_type_by_name_the_location_does_not_sell_is_refused_before_the_provider_is_asked(env):
+    """cpx41 in nbg1 came back as Hetzner's raw "invalid_input: unsupported location"."""
+    vms, _, prov, _ = env
+    hetzner_2026(prov)
+    with pytest.raises(InvalidRequest) as e:
+        await vms.create("dev/a", size={"server_type": "cpx41"}, ttl_minutes=30)
+    assert str(e.value.message) == (
+        "Fake does not sell cpx41 in nbg1 now (it sells it in ash). Sold in nbg1 with at least its 8 CPU and 16 GB: "
+        "cx43 (8 CPU, 16 GB, EUR 0.0304 an hour), cpx42 (8 CPU, 16 GB, EUR 0.1350 an hour); ask for one of those. "
+        "Nothing was rented")
+    assert prov.made_in == [] and vms.store.recent() == []
+    assert (await vms.plan("dev/a", size={"server_type": "cpx42"}))["server_type"] == "cpx42"  # sold here: as before
+
+
+def test_fallbacks_take_every_family_before_a_second_of_one():
+    from openajar.vms import capacity
+    fit = [{"name": n, "price": p} for n, p in (("cx43", 1), ("cx53", 2), ("cx63", 3), ("cpx42", 4), ("cpx52", 5),
+                                                  ("ccx33", 6), ("ccx43", 7), ("cax41", 8))]
+    picked = capacity.pick_fallbacks(fit[0], fit, n=4)
+    assert [t for t, _p in picked] == ["cx53", "cpx42", "ccx33", "cax41"]  # each family once, in price order
+    assert [t for t, _p in capacity.pick_fallbacks(fit[0], fit)] == ["cx53", "cpx42", "cpx52", "ccx33", "cax41"]
+    assert capacity.family("ccx33") == "ccx" and capacity.family("docker-large") == "docker"
 
 
 # ---------------------------------------------------------------- private repos

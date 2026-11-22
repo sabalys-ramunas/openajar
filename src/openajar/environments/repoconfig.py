@@ -6,6 +6,7 @@
     port = 3000                                  # where it listens (needed with start)
     ready_timeout_s = 120                        # how long the open waits for it to listen
     inputs = ["pnpm-lock.yaml"]                  # what makes a prepared machine stale (default: the lockfiles)
+    env_files = ["apps/api/.env"]                # the local env files `openajar environments env push` sends
 
 The node reads it before it rents anything (openajar.environments.preparing): from its own mirror of a
 declared repository, else from the host's raw files for a public one on GitHub, else from the checkout
@@ -41,7 +42,7 @@ DEFAULT_INPUTS = ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"
 # Bump when a build puts something else on a prepared machine: every key changes, so every repository
 # builds a new one, and the old ones go with the retention rules.
 SETUP_VERSION = 1
-KEYS = ("setup", "refresh", "start", "port", "ready_timeout_s", "inputs")
+KEYS = ("setup", "refresh", "start", "port", "ready_timeout_s", "inputs", "env_files")
 
 
 class ConfigError(ValueError):
@@ -56,6 +57,8 @@ class RepoConfig(BaseModel):
     port: int | None = Field(default=None, ge=1, le=65535)
     ready_timeout_s: int = Field(default=120, ge=5, le=1800)
     inputs: list[str] | None = None
+    # Only names files: the person's own `env push` reads and sends them, never the node or an open.
+    env_files: list[str] | None = None
 
     @field_validator("setup", "refresh", "start")
     @classmethod
@@ -69,7 +72,7 @@ class RepoConfig(BaseModel):
             raise ValueError(f"is a shell command of at most {COMMAND_MAX} characters")
         return v
 
-    @field_validator("inputs")
+    @field_validator("inputs", "env_files")
     @classmethod
     def _inputs(cls, v: list[str] | None) -> list[str] | None:
         if v is None:

@@ -1,0 +1,47 @@
+
+ Usage: openajar call [OPTIONS] {tool}
+
+ Call any openajar tool from a shell, as your agents would: the same grant,
+ policy and approvals.
+
+ For an agent whose session has not loaded the openajar tools, and for scripts.
+
+ Claude Code loads MCP servers only when a session starts. `openajar tools`
+ lists the tools.
+
+ Examples:
+
+   openajar call environment
+
+   openajar call environment_open --arg title=checkout --arg keep=none
+
+   openajar call terminal_exec --on e7k2 --arg cmd="pnpm test"
+
+   openajar call file_read --json '{"on": "e7k2", "path": "README.md"}'
+
+ Prints the result as JSON. Exit codes: 0 done, 1 refused or failed, 2 still
+ waiting for a person.
+
+ For 2, approve it in the panel and run the same command again, or pass --wait.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    tool      <str>  The tool's name, as `openajar tools` lists it (for     │
+│                       example environment or terminal_exec).                 │
+│                       [required]                                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --arg   -a      <str>    key=value; the value may be JSON (--arg limit=5,    │
+│                          --arg 'params={"text": "hi"}').                     │
+│ --json          <str>    All the arguments as one JSON object, or @file.     │
+│ --on            <str>    The environment or lane the tool acts on (the `on`  │
+│                          from environment_open, or workspace/name).          │
+│ --wait          <float>  Seconds to wait when a person must approve first;   │
+│                          once approved, the call runs again.                 │
+│                          [default: 0.0]                                      │
+│ --node          <str>    The connection to use (default: the only one).      │
+│ --url           <str>    An MCP address instead of a connection, like        │
+│                          http://127.0.0.1:7450, with the token in            │
+│                          $OPENAJAR_TOKEN.                                    │
+│ --help                   Show this message and exit.                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

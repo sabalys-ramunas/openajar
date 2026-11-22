@@ -178,6 +178,8 @@ class VmRecord(BaseModel):
     purpose: str = ""
     price_hourly_eur: float | None = None
     fallbacks: list[tuple[str, float | None]] = Field(default_factory=list)  # (type, EUR/h) to try if server_type is sold out
+    asked: tuple[str, float | None] | None = None  # (type, EUR/h) planned, when it had no room and a fallback was made
+    no_room: list[tuple[str, str]] = Field(default_factory=list)  # (type, location) that had no room when it was made
     error: str | None = None
     delete_attempts: int = 0
     port: int = 22                            # SSH port at `host` (the docker provider maps one per machine)

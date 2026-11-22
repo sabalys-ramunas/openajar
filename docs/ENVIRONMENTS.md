@@ -579,6 +579,66 @@ What is covered, exactly:
 - Warm machines (a pool the node keeps ready, when it has one) are `full` machines: an open with
   `limited` or `none` rents its own closed machine. Secrets are set up on any machine as it opens.
 
+**Which secrets a placeholder can carry.** The node puts the value in on the way out, so a
+placeholder works only for a key the app sends to an API:
+
+| Works | Does not work, and why |
+| --- | --- |
+| an API key or token in a header (`Authorization: Bearer ...`, `X-Api-Key: ...`) | a value the app uses on the machine itself: a webhook signing secret (Stripe's `whsec_...`), a session, cookie or JWT secret, an encryption key, a private key, AWS's secret access key (it signs each request on the machine). The machine computes with the placeholder and gets a wrong answer |
+| a Basic credential's user or password (the client builds the header) | a value sent in a request body: an OAuth refresh token or client secret in a token request's form, a key in a JSON body |
+| a key in the URL's query (`?key=...`) | a database, cache, queue or mail server's password (Postgres, Redis, SMTP...): not HTTPS |
+| over HTTPS, HTTP/1.1, to the bound host | a secret inside a URL (`https://user:pass@host`, a Slack webhook URL), plain HTTP, WebSockets, a client that pins the API's certificate, another host |
+
+For one that does not work, give the machine a value of its own: a test account's key, a fresh
+random session secret, a database on the machine with a dev password.
+
+### Env files
+
+An app's local `.env` files hold a few secrets and many settings (URLs, flags, ports, names). One
+command puts them on an environment's machine, from the repository's folder on your computer:
+
+```
+openajar environments env push e7k2 apps/api/.env apps/web/.env.local --dry-run   # the table only
+openajar environments env push e7k2 apps/api/.env apps/web/.env.local             # the table, then it asks
+openajar environments env push e7k2 --plain DATABASE_URL --host ZOHO_API_KEY=www.zohoapis.eu --yes
+```
+
+`e7k2` is the environment's id (`openajar environments list`) or its title. With no files it pushes
+`env_files` from the repository's `.openajar/environment.toml`, else `./.env`. It reads each file
+(dotenv syntax: quotes, `export`, comments, empty values), sorts each key into plain or secret, and
+shows a table: the key, its class, and what happens. A plain value is shown cut short; a secret's
+value never is.
+
+- **Plain** (a URL with no password, a flag, a number, a path, a few short words): copied as written.
+- **A secret a placeholder can carry** (an API key or token): bound to its host in the vault for
+  this repository's environments, exactly as `secret add --repo` binds it. The host comes from a known
+  API (`STRIPE_`, `sk_live_...`, `OPENAI_`...), from a URL among the file's settings with the same
+  prefix (`DATAFORSEO_PASSWORD` next to `DATAFORSEO_API_URL=https://api.dataforseo.com/v3`), or from
+  `--host KEY=HOST`. Without one it is not sent. One bound already is reused, not bound again.
+- **Any other secret** (the table's "not supported as a placeholder", with the reason above): not
+  sent. The table says what you can do.
+
+It errs toward secret: a key whose name says secret (`KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `DSN`,
+`PRIVATE`...), whose value has a secret's shape (a known key prefix, a JWT, a URL with a password, a
+long random string), or whose value it is not sure about (a UUID, letters and digits mixed) is a
+secret. A setting about a secret is plain when its value is plain (`AUTH_URL`, `JWT_EXPIRES_IN=7d`).
+Per key, with patterns: `--plain KEY` copies it as it is (still never shown), `--secret KEY` treats it
+as a secret, `--host KEY=HOST` binds it to HOST, `--skip KEY` leaves it out.
+
+The machine's file goes to the same path under the repository's folder (`/work/shop/apps/api/.env`),
+replacing what was there (mode 0600), over the environment's SSH. It holds the plain values,
+`KEY=${KEY}` for each bound secret (it reads the placeholder from the machine's environment: most
+dotenv loaders keep a variable the environment already has, and those that expand `${...}` read it
+from there; a resumed machine gets new placeholders, and this line follows them), and a comment naming each secret not sent. No comment or bad line of your file is copied.
+A secret bound by this push reaches an open machine when the environment opens again (close it and
+open the same title); until then it reads as empty. The environment's last calls get one line per
+file, with the counts and the names of the secrets not sent, never a value.
+
+It is a command you run (or approve once when an agent proposes it): a repository's `env_files`
+only names files, and nothing on the node or in an open reads your computer's files. Asking happens
+on a terminal; without one it needs `--yes`, after the table. `--json` gives the table as data (plain
+values included, secret values never).
+
 ### Signing in
 
 An environment's browser is a plain browser with tabs, and some work needs an account: a dashboard to
@@ -667,7 +727,7 @@ What the agent does:
 | `ui_check(url="http://localhost:3000")` | studio's page checks (`tools_more("studio")`), on the VM's dev server; while the environment cannot be reached they fail with `environment_not_ready` and never check the node instead |
 | `environment()` | state, time left, cost so far, listening ports (a shared one with its `link`), git (branch, ahead, dirty, `pushed`: each branch at its commit on the remote now, `deleted`: branches it deleted, `compare`: GitHub's form for the pushed branch, `pull_requests`), proofs, the agent's `note`, the last calls (a command's `exit_code`, a refusal's `error`), and always the agent's `open` and `saved` environments by title |
 | `environment_pull_request(title, body, base, draft)` | opens the pull request for a branch this environment pushed, with the node's GitHub token, and returns its `url` (see below) |
-| `environment_port(port)` | a link on your own computer to a server on the VM (see [Ports](#ports)) |
+| `environment_port(port)`, `environment_port(ports=[...], same_numbers=true)` | a link on your own computer to a server on the VM, or several with the VM's own port numbers (see [Ports](#ports)) |
 | `environment_checkpoint(note)`, `environment_rollback(checkpoint)` | a cheap undo with git (see [Checkpoints](#checkpoints)) |
 | `environment_close(discard, final, note, forget)` | refuses with `unsaved_work` while any repository under `/work` has work that is not on a remote (changed or new files, commits on any branch, stashes); then deletes the VM, its terminal and its browser; `machine` says `deleted` only once the provider has no such server (`deleting` while the node still deletes it). `saves` says what became of the saves; `note` and `forget` are in [Keeping an environment](#keeping-an-environment) |
 
@@ -1015,6 +1075,16 @@ needed, and only the node's own user may use it. It closes with the environment.
 - On a server node the port is on the server: run the `tunnel` line it gives
   (`ssh -N -L <p>:127.0.0.1:<p> <your node>`, the same as for the live view), then open `url`.
 
+An app of several servers (a page on 5173 whose code calls its API at `localhost:3000`) needs them
+together and under the same numbers, or the page calls your own computer's port 3000:
+`environment_port(ports=[5173, 3000], same_numbers=true)` gives `forwards` (each with `url`, which says
+`localhost`, the origin the app knows from the VM) and, on a server node, one `tunnel` line with an `-L`
+for each. A number already taken here (another program, another environment's link) is never shared:
+that port gets a free one, `same: false`, and `why` says that calls to `localhost:<port>` will not reach
+the VM. Free numbers are not the default: on a laptop they would hold your usual dev ports while an
+environment is open, and a server node holds every environment's links. A one-port call lists the other
+ports the VM listens on (`also_listening`), which a page may call too.
+
 The web app's Ports card shows the link (and the ssh line on a server node) for each shared port;
 the others say "On the machine only".
 
@@ -1046,6 +1116,7 @@ start = "pnpm dev --host 0.0.0.0"            # the dev server, started as a job 
 port = 3000                                  # where it listens (needed with start)
 ready_timeout_s = 120                        # how long the open waits for the port (default 120)
 inputs = ["pnpm-lock.yaml"]                  # what makes a prepared machine stale (default: the lockfiles)
+env_files = ["apps/api/.env"]                # local env files `openajar environments env push` sends (Env files, above)
 ```
 
 Every key is optional, but `start` needs `port`, and `refresh` needs `setup`. A key openajar does not
@@ -1085,6 +1156,9 @@ needs it merged to use it on its own branch: an open of that branch reads it the
 - `app`: the command, the port, `listening`, its `job_id`, and `link`, the port's link as
   `environment_port` gives it (and `tunnel` on a server node). When it did not listen: `why`,
   `log_tail` and `listening_instead`.
+- `environment_app_restart()` (in `tools_more("terminals")`) stops the app's job with its processes (and
+  any running copy of the same command), waits for the port to close, and runs `start` again from the
+  file as it is in the checkout now. It returns `app` as the open does, with `stopped`.
 
 On Docker, a first open of a small test repository took 25 s (20 of them its setup) and started
 the build; the second open, from the prepared machine, was ready in under 5 s with the app
@@ -1428,7 +1502,7 @@ Not on it:
 | `environment_in_use` | another chat of the agent holds the live machine with this title | the agent opens its own with another title; `take_over=true` once the holder has been quiet for `take_over_minutes` |
 | `environment_not_ready` | the environment is starting, or its tunnel is down after a restart | wait a minute; `openajar environments show ID` |
 | `machine_gone`, or `state: "gone"` | the machine stopped for good: the provider says its container or server is off or no longer exists ("Costs and the reaper") | the agent opens the same title again and gets a new machine; if it happens often, `docker ps -a` or the Hetzner console, and `openajar logs --level warn --since 30m` |
-| `unsaved_work` on close | uncommitted changes or commits not pushed | commit and push, or close with `discard=true` if the work may go |
+| `unsaved_work` on close | uncommitted changes or commits not pushed; "mode change only" names files whose content is as committed (a `chmod +x`) | commit and push, or close with `discard=true` if the work may go |
 | `approval_pending` with `kind: "repo_connect"` | the repository is private and not connected, or its key or token was refused; nothing was rented | open the card's `review_url` and paste a token (see "Connect a repository"), or at the node `openajar environments repo add github.com/me/shop --token` |
 | the token page says it did not work | the token did not work, and nothing was kept; the page says why | do what the page says (table in "Connect a repository"), then paste it again on the same page |
 | `repo_not_connected` | a node without approvals, or the clone on the machine still failed (its machine was deleted) | `openajar environments repo add github.com/me/shop` (the message names the repository) |

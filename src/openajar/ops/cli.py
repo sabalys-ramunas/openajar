@@ -72,6 +72,36 @@ def _connections_reader() -> Any:
     return connections_at
 
 
+def _claude_profiles_check() -> Any:
+    """The doctor's check of the Claude Code profiles on this computer (None without the client): in each,
+    an openajar or agentos entry whose address on this computer does not answer, or a connection's entry
+    that is missing."""
+    try:
+        from openajar.client.claude import profile_problems, profiles
+        from openajar.client.ops import connect_again
+        from openajar.client.state import connections_at
+    except ModuleNotFoundError:
+        return None
+
+    def check(ctx: doctor.DoctorContext) -> list[doctor.CheckResult]:
+        home = ctx.client_home or Path.home()
+        title = "Claude Code profiles"
+        found = [p for p in profiles(home) if p.servers() is not None]
+        if not found:
+            return [doctor.CheckResult("claude_profiles", title, doctor.SKIP, "no Claude Code profile on this computer")]
+        problems = profile_problems(home, connections_at(ctx.client_home), connect_again)
+        if not problems:
+            return [doctor.CheckResult("claude_profiles", title, doctor.PASS,
+                                       f"every openajar entry answers, in {', '.join(p.label for p in found)}")]
+        hint = (". Until it is fixed, any shell reaches the tools: openajar call <tool> (openajar tools lists "
+                "them)")
+        return [doctor.CheckResult("claude_profiles", f"Claude Code {p.profile.label}", doctor.FAIL, p.detail,
+                                   p.fix + hint, data={"profile": str(p.profile.config_file), "entry": p.name})
+                for p in problems]
+
+    return check
+
+
 def doctor_cmd(
     as_json: JsonOpt = False,
     offline: Annotated[bool, typer.Option("--offline", help="Skip checks that go through the network.")] = False,
@@ -82,7 +112,8 @@ def doctor_cmd(
 
     On your computer (no node.toml, but `openajar connect` connections) it checks the connections:
     a connection whose agents still hold the node token is a warning."""
-    ctx = doctor.DoctorContext(home=_home(), unit=unit, network=not offline, read_connections=_connections_reader())
+    ctx = doctor.DoctorContext(home=_home(), unit=unit, network=not offline, read_connections=_connections_reader(),
+                               claude_profiles=_claude_profiles_check())
     names = [n.strip() for n in only.split(",") if n.strip()] if only else None
     if names is None and not config_path(ctx.home).exists() and doctor.client_connections(ctx):
         names = doctor.CLIENT_CHECKS

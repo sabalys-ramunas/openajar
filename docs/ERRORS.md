@@ -664,7 +664,7 @@ An environment's machine did not come up: it did not answer SSH, or its setup fa
 - **Agent:** Tell the user it did not start and what the message says. Open a new one once with environment_open; if it fails again, stop and tell the user.
 - **You:** Run `openajar environments setup` on the node: it checks the provider, the image and the git declarations, and says what is missing.
 - **Retry:** no
-- **Agent, when the reason is `capacity`:** No room for this machine now, in any nearby location. Nothing bills. Open a size the message names as available or bigger (a smaller one only if the work fits), or wait 5 minutes and open again. After two more fails, tell the user.
+- **Agent, when the reason is `capacity`:** No room now for any type of this size in any nearby location. Nothing bills. Open a size the message names (a smaller one only if the work fits), or wait 5 minutes and open the same size again. After two more fails, tell the user.
 - **Agent, when the reason is `clone`:** The machine started, but the clone failed, and the machine was deleted. Tell the user what git said. Check repo and ref; open once more without ref, or without repo for an empty /work.
 - **Agent, when the reason is `image`:** The machine image does not fit this size. Open again with the bigger size the message names; if it names none, tell the user (the owner runs `openajar environments setup`).
 - **Agent, when the reason is `network`:** The network of the computer openajar runs on dropped. Nothing was rented. Wait 2 minutes, then open again the same way. If it fails again, tell the user to check that computer's internet connection.

@@ -48,6 +48,7 @@ SELF_AUTHORIZED_LANE_PARAM = {
     # on its lanes (openajar.environments.tools._find)
     "environment": "on", "environment_close": "on", "environment_save": "on", "environment_port": "on",
     "environment_pull_request": "on", "environment_checkpoint": "on", "environment_rollback": "on",
+    "environment_app_restart": "on",
     # `on` is an environment's handle: openajar.environments.routing.studio_proxy reaches it (the lease) and
     # points the review browser at its tunnel; the check acts on no lane (a review browser is no lane)
     "ui_check": "on", "ui_diff": "on", "system_check": "on", "ui_baseline": "on",
@@ -94,6 +95,7 @@ SELF_AUTHORIZED_INDIRECT = {
     "environment_rollback": "the picked environment, or `on` in the grant family; refuse_frozen on its lanes",
     "environment_port": "the picked environment, or `on` in the grant family; refuse_frozen on its lanes",
     "environment_pull_request": "the picked environment, or `on` in the grant family; refuse_frozen on its lanes",
+    "environment_app_restart": "the picked environment, or `on` in the grant family; refuse_frozen on its lanes",
     # saves of the caller's grant family by title (Saving.forget), no lane: the machine is gone
     "environment_forget": "saves of the grant family only (mgr.forget(family, title)); refuse_frozen on their lanes",
 }

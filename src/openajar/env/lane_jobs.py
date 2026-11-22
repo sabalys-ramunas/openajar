@@ -13,6 +13,7 @@ from openajar.core.errors import (
     LaneBusy,
     PolicyDenied,
 )
+from openajar.env import execs
 from openajar.env import sync as syncs
 from openajar.env.jobs import OOM_EVERY_S, Job, _read_at, new_job_id
 from openajar.env.models import (
@@ -51,13 +52,17 @@ class Jobs:
             raise PolicyDenied(f"commands are off in {lane.preset.value} terminals")
         if not isinstance(cmd, str) or not cmd.strip():
             raise InvalidRequest("empty command")
+        if lane.policy.signed_only:
+            if cwd is not None:
+                raise InvalidRequest(f"locked terminal {lane.id} runs allowlisted programs only, without a cwd")
+            return self.command_argv(lane, cmd)
+        # every job is an agent's or a person's command (environment.toml's start, a resumed job): under bash
+        # when the machine has it (execs.in_bash)
         if cwd is not None:
             cwd = syncs.check_cwd(cwd, remote=lane.remote is not None)
-            if lane.policy.signed_only:
-                raise InvalidRequest(f"locked terminal {lane.id} runs allowlisted programs only, without a cwd")
             # plain names (check_cwd), so it is safe as one shell word
-            return self.command_argv(lane, f"cd '{cwd}' && {cmd}")
-        return self.command_argv(lane, cmd)
+            return self.command_argv(lane, execs.in_bash(f"cd '{cwd}' && {cmd}"))
+        return self.command_argv(lane, execs.in_bash(cmd))
 
     def check_job(self, lane_id: str, cmd: str, *, cwd: str | None = None, env: dict[str, str] | None = None,
                   timeout_s: float | None = None) -> float:

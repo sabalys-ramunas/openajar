@@ -21,6 +21,13 @@ from openajar.node.viewer_state import env_agent_name
 UNSAVED_LIST_MAX = 50
 
 
+def only_modes(unsaved: dict) -> bool:
+    """Every unsaved change is a file's mode (chmod +x by a setup script), its content as committed."""
+    files, modes = unsaved.get("dirty_files") or [], set(unsaved.get("mode_only") or [])
+    return (bool(files) and len(files) < UNSAVED_LIST_MAX and all(f in modes for f in files)
+            and not any(unsaved.get(k) for k in ("unpushed", "stashes", "unreadable", "loose_files")))
+
+
 class Views:
     """The read side of EnvironmentManager (it reads self.store, self.vms() and self.envs())."""
 
@@ -113,6 +120,8 @@ class Views:
             return None
         out = {"dirty_files": dirty[:UNSAVED_LIST_MAX], "unpushed": unpushed[:UNSAVED_LIST_MAX],
                "stashes": stashes[:UNSAVED_LIST_MAX]}
+        if modes := [f"{r['dir']}/{f}" if many else f for r in repos for f in r.get("mode_only") or []]:
+            out["mode_only"] = modes[:UNSAVED_LIST_MAX]  # files whose content is as committed (unsaved_words)
         if unreadable:
             out["unreadable"] = unreadable[:UNSAVED_LIST_MAX]
         return out
@@ -125,9 +134,12 @@ class Views:
         def more(items: list) -> str:
             return f" and {len(items) - most} more" if len(items) > most else ""
 
-        if unsaved.get("dirty_files"):
-            files = unsaved["dirty_files"]
+        modes = set(unsaved.get("mode_only") or [])
+        if files := [f for f in unsaved.get("dirty_files") or [] if f not in modes]:
             parts.append("changed or new files: " + ", ".join(files[:most]) + more(files))
+        if chmods := [f for f in unsaved.get("dirty_files") or [] if f in modes]:
+            parts.append(("only file modes changed, no content: " if only_modes(unsaved) else
+                          "mode change only: ") + ", ".join(chmods[:most]) + more(chmods))
         if unsaved.get("unpushed"):
             commits = unsaved["unpushed"]
             parts.append("commits not on a remote: " + "; ".join(c[:80] for c in commits[:most]) + more(commits))

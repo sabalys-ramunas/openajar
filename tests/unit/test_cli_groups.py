@@ -96,7 +96,11 @@ def _help(args: list[str]) -> str:
 def test_top_level_help_fits_on_one_screen_and_starts_with_the_task(monkeypatch):
     monkeypatch.setattr(typer.rich_utils, "MAX_WIDTH", 80)
     text = _help([])
-    assert len(text.splitlines()) <= 44  # 40, then `environments` (docs/design/environments.md), `local`, `web`, `mcp`
+    # 40, then `environments` (docs/design/environments.md), `local`, `web`, `mcp`, and `call` and `tools` (an agent
+    # whose session has not loaded the MCP tools finds its way in from a shell; field run 2026-11-21)
+    assert len(text.splitlines()) <= 46
+    start = text.split("─ Start here ")[1].split("╰")[0]
+    assert "│ call " in start and "│ tools " in start
     assert "openajar setup" in text.split("Options")[0]
     assert "—" not in text
 

@@ -219,12 +219,47 @@ def test_the_old_claude_entry_is_known_by_the_helper_in_claude_json(tmp_path, us
     })
     (user_home / ".claude.json").write_text(json.dumps({"mcpServers": {"agentos-local": {  # legacy-name
         "type": "http", "url": "http://127.0.0.1:7410/mcp",
-        "headersHelper": "~/.config/agentos/bin/agentos-mcp-headers local"}}}))  # legacy-name
+        "headersHelper": "~/.config/agentos/bin/agentos-mcp-headers local"},  # legacy-name
+        "agentos-there": {"type": "http", "url": "http://127.0.0.1:7999/mcp"},  # legacy-name
+        "agentos-mine": {"type": "http", "url": "https://example.test/mcp"}}}))  # legacy-name
     claude = ClaudeCode(exe, user_home)
     assert claude.unregister_legacy("agentos-local")  # legacy-name
     assert claude.unregister_legacy("agentos-there", "http://localhost:7999/mcp")  # legacy-name: our node's URL
     assert not claude.unregister_legacy("agentos-mine", "http://localhost:7999/mcp")  # legacy-name
     assert (tmp_path / "claude-state" / "agentos-mine").exists()  # legacy-name
+
+
+def test_an_old_entry_is_ours_by_its_helper_our_url_or_a_dead_address_on_this_computer():
+    """The rule for agentos-* entries (field run 2026-11-21: agentos-agentvm on a dead :7400 stayed behind)."""
+    from openajar.client.claude import legacy_ours
+
+    dead, alive = (lambda url: False), (lambda url: True)
+    helper = {"type": "http", "url": "https://far.test/mcp", "headersHelper": "~/x/agentos-mcp-headers a"}
+    assert legacy_ours(helper, answers=alive)  # our old helper, wherever it points
+    assert legacy_ours({"url": "http://127.0.0.1:7410/mcp"}, "http://localhost:7410/mcp", answers=alive)
+    assert legacy_ours({"url": "http://localhost:7400/mcp"}, answers=dead)
+    assert not legacy_ours({"url": "http://localhost:7400/mcp"}, answers=alive)  # it answers: maybe the owner's
+    assert not legacy_ours({"url": "https://far.test/mcp"}, answers=dead)  # not on this computer
+    assert not legacy_ours({"url": "http://localhost:7400/other"}, answers=dead)  # not an MCP address of ours
+    assert not legacy_ours({"type": "stdio", "command": "agentos"}, answers=dead)
+
+
+def test_profiles_are_the_default_the_named_one_and_each_claude_folder_with_a_config(tmp_path, user_home):
+    from openajar.client.claude import profiles
+
+    for name, config in ((".claude", True), (".claude_work", True), (".claude-empty", False), (".claudex", True)):
+        (user_home / name).mkdir()
+        if config:
+            (user_home / name / ".claude.json").write_text("{}")
+    (user_home / ".claude-file").write_text("not a folder")
+    named = tmp_path / "elsewhere"
+    found = profiles(user_home, {"CLAUDE_CONFIG_DIR": str(named)})
+    assert [p.config_dir for p in found] == [None, named, user_home / ".claude", user_home / ".claude_work",
+                                             user_home / ".claudex"]
+    assert found[0].config_file == user_home / ".claude.json" and found[0].skills_dir == user_home / ".claude/skills"
+    assert found[1].command("claude mcp list") == f"CLAUDE_CONFIG_DIR={named} claude mcp list"
+    again = profiles(user_home, {"CLAUDE_CONFIG_DIR": str(user_home / ".claude_work")})  # named and found: once
+    assert [p.config_dir for p in again].count(user_home / ".claude_work") == 1
 
 
 def test_the_old_codex_table_goes_with_its_comment_and_the_rest_stays(user_home):

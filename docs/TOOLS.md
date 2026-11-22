@@ -48,7 +48,7 @@ tools_more lists only tools the caller's grant can see. Connector operations (`<
 | `workspaces` | workspaces: list, plan and apply changes, whether an account browser is signed in | `browser_set_readiness`, `workspace_apply`, `workspace_list`, `workspace_plan`, `workspace_queue` |
 | `worker` | the node's workers: hand a browser job to the cheap worker on the node (browser_task), and which workers are on | `browser_task`, `plugins_list` |
 | `admin` | your grant and the call trail | `grant_info`, `traces_query` |
-| `terminals` | terminals and services the node keeps: shells, background jobs, synced files, installs, images, disposable cloud VMs; forgetting an environment's saves | `environment_forget`, `image_build`, `images_list`, `service_logs`, `service_start`, `service_status`, `service_stop`, `shell_close`, `shell_open`, `shell_read`, `shell_write`, `terminal_create`, `terminal_install`, `terminal_jobs`, `terminal_remove`, `terminal_upload`, `terminal_upload_check`, `terminals_list`, `vm_clone`, `vm_create`, `vm_destroy`, `vm_extend`, `vms_list` |
+| `terminals` | terminals and services the node keeps: shells, background jobs, synced files, installs, images, disposable cloud VMs; forgetting an environment's saves | `environment_app_restart`, `environment_forget`, `image_build`, `images_list`, `service_logs`, `service_start`, `service_status`, `service_stop`, `shell_close`, `shell_open`, `shell_read`, `shell_write`, `terminal_create`, `terminal_install`, `terminal_jobs`, `terminal_remove`, `terminal_upload`, `terminal_upload_check`, `terminals_list`, `vm_clone`, `vm_create`, `vm_destroy`, `vm_extend`, `vms_list` |
 | `screen` | your environment's desktop, for apps that are not web pages: a picture of the screen and its windows, real clicks, keys and typing, starting an app | `screen_act`, `screen_open`, `screen_snapshot` |
 | `brains` | agent tasks on the node's brains: run, follow, resume, cancel; the git remotes they reach | `brain_cancel`, `brain_resume`, `brain_run`, `brain_status`, `brain_tail`, `brain_tasks`, `brain_use`, `brains_list`, `git_remotes` |
 | `automation` | events, triggers and the agenda (planned one-off actions, their approval, runs and proof) | `agenda_cancel`, `agenda_draft`, `agenda_get`, `agenda_list`, `agenda_propose`, `agenda_update`, `events_list`, `trigger_propose`, `triggers_list` |
@@ -176,12 +176,13 @@ Argument names removed from tools that kept their name (`wait_s` is how long a c
 | [`connector_status`](#connector_status) | connectors | read | The health of one connector operation on one surface, and its last run there |
 | [`connectors_list`](#connectors_list) | connectors | read | List installed connector operations: each one's tool (<site>_<op>; none for a learned profile operation, which only the profile sync runs), effect, version and contract hash, and the surfaces you can act as with it, each with its health (healthy, broken, held or unknown) |
 | [`environment`](#environment) | core | read | Your environment now: state, minutes_left, cost_eur, ports listening on the VM, git (branch, ahead, dirty, pushed, pull_requests), proofs (fresh links), replay, unsaved work, your note and the last 10 calls |
+| [`environment_app_restart`](#environment_app_restart) | terminals | read | Restart the app the repository's .openajar/environment.toml starts: its job and every process it started stop, then `start` runs again as at environment_open (the file as it is now) |
 | [`environment_checkpoint`](#environment_checkpoint) | core | read | A cheap undo point before a risky step, in seconds and at no cost: every repository under /work as it is now (tracked and new files git does not ignore), kept as git's refs/agentos/checkpoints/<n> |
 | [`environment_close`](#environment_close) | core | read | Stop or finish your environment, as the `keep` it was opened with says |
 | [`environment_download`](#environment_download) | core | exec | A file or a folder under /work, to your own computer: a one-use .tar.gz link (15 minutes) |
 | [`environment_forget`](#environment_forget) | terminals | read | Delete saves and their disk snapshots (they bill each month): every save of `title`, or one save_id |
 | [`environment_open`](#environment_open) | core | vm | Your own cloud computer: a VM with a terminal, a browser and the repo, to build and test on instead of the user's laptop |
-| [`environment_port`](#environment_port) | core | read | Open a dev server of your environment on the human's own computer, as a preview link: the VM's port, forwarded over the environment's SSH connection to a free 127.0.0.1 port until it closes |
+| [`environment_port`](#environment_port) | core | read | A dev server on your VM as a link on the human's own computer, forwarded over the environment's SSH connection until it closes |
 | [`environment_pull_request`](#environment_pull_request) | core | read | Open a pull request on GitHub for a branch your environment pushed, with the node's GitHub token (the VM has no gh and no credential) |
 | [`environment_rollback`](#environment_rollback) | core | read | Put every repository under /work back to a checkpoint: its branch at the checkpoint's HEAD, the index at that HEAD, the files as they were (new files git does not ignore are removed) |
 | [`environment_save`](#environment_save) | core | read | Save the environment now, without closing it: commits and stashes no remote has, changed and new files git does not ignore, running services, and with keep "save" a disk snapshot (services pause for it) |
@@ -252,10 +253,10 @@ Argument names removed from tools that kept their name (`wait_s` is how long a c
 | [`studio_status`](#studio_status) | studio | read | What studio can do here, read once: local or node, the engines (Chromium, Firefox, WebKit) and which are installed, the named devices, whether fonts are pinned, the store's size and kept runs, and for anything missing the command that adds it |
 | [`system_check`](#system_check) | studio | read | Is this page on the design system? The design system part of ui_check alone, with adherence: the share of colours, spacing, radius and type on a token, controls outside the known components, and (through the provenance probe) values that only look like a token |
 | [`terminal_create`](#terminal_create) | terminals | exec | Create a terminal `workspace/name` on the node |
-| [`terminal_exec`](#terminal_exec) | core | exec | Run one shell command on your environment's machine (or a terminal) and wait for it; binary output comes back base64 |
+| [`terminal_exec`](#terminal_exec) | core | exec | Run one shell command (bash) on your environment's machine (or a terminal) and wait for it; binary output comes back base64 |
 | [`terminal_install`](#terminal_install) | terminals | install_overlay | Install programs into a terminal from a pinned source: apt (the node's signed apt sources, as its root inside its overlay), pip (pypi.org) or npm (registry.npmjs.org) |
 | [`terminal_job_cancel`](#terminal_job_cancel) | core | exec | Stop a running job: SIGTERM to every process it started, SIGKILL a few seconds later |
-| [`terminal_job_read`](#terminal_job_read) | core | read | Read a job's output after your byte offsets, waiting for more while it runs; stdout_bytes is the size so far |
+| [`terminal_job_read`](#terminal_job_read) | core | read | Read a job's output after your byte offsets (-N: the last N bytes), waiting for more while it runs; stdout_bytes is the size so far |
 | [`terminal_job_start`](#terminal_job_start) | core | exec | Start a shell command on your environment's machine (or a terminal) in the background and return its job id at once: read its output with terminal_job_read as it runs, stop it with terminal_job_cancel |
 | [`terminal_jobs`](#terminal_jobs) | terminals | read | Background jobs on this node (of one terminal with `on`), newest first, running and finished |
 | [`terminal_remove`](#terminal_remove) | terminals | irreversible | Delete a terminal or service and its files (its writable layer, logs and home) |
@@ -891,6 +892,16 @@ Your environment now: state, minutes_left, cost_eur, ports listening on the VM, 
 |---|---|---|---|
 | `on` | `str \| None` | no (default None) | The on environment_open gave. Without it, a client with a session id sees its own. |
 
+## environment_app_restart
+
+Toolset: `terminals`. Effect: `read`. Needs the `environments` service.
+
+Restart the app the repository's .openajar/environment.toml starts: its job and every process it started stop, then `start` runs again as at environment_open (the file as it is now). Returns `app` as the open does.
+
+| Argument | Type | Required | Description |
+|---|---|---|---|
+| `on` | `str \| None` | no (default None) | The on environment_open gave. |
+
 ## environment_checkpoint
 
 Toolset: `core`. Effect: `read`. Needs the `environments` service.
@@ -961,11 +972,13 @@ Your own cloud computer: a VM with a terminal, a browser and the repo, to build 
 
 Toolset: `core`. Effect: `read`. Needs the `environments` service.
 
-Open a dev server of your environment on the human's own computer, as a preview link: the VM's port, forwarded over the environment's SSH connection to a free 127.0.0.1 port until it closes. The url opens as is on openajar local; on a server node the human first runs `tunnel` (an ssh -L line). environment()'s ports show it as `link`.
+A dev server on your VM as a link on the human's own computer, forwarded over the environment's SSH connection until it closes. On a server node the human first runs `tunnel` (an ssh -L line).
 
 | Argument | Type | Required | Description |
 |---|---|---|---|
-| `port` | `int` | yes | The port your server listens on in the VM, like 3000 or 5173 (environment() lists them). |
+| `port` | `int \| None` | no (default None) | Your server's port in the VM, like 3000 or 5173 (environment() lists them). |
+| `ports` | `list[int] \| None` | no (default None) | Several, for a page that calls another localhost port (its API). |
+| `same_numbers` | `bool` | no (default False) | The VM's port numbers here too, so those calls reach the VM. |
 | `on` | `str \| None` | no (default None) | The on environment_open gave. |
 
 ## environment_pull_request
@@ -1802,7 +1815,7 @@ Create a terminal `workspace/name` on the node. Agents may create sandbox (throw
 
 Toolset: `core`. Effect: `exec`. Needs the `envs` service.
 
-Run one shell command on your environment's machine (or a terminal) and wait for it; binary output comes back base64. Processes it starts end with it: use terminal_job_start for a dev server and for anything longer than timeout_s.
+Run one shell command (bash) on your environment's machine (or a terminal) and wait for it; binary output comes back base64. Processes it starts end with it: use terminal_job_start for a dev server and for anything longer than timeout_s.
 
 | Argument | Type | Required | Description |
 |---|---|---|---|
@@ -1840,7 +1853,7 @@ Stop a running job: SIGTERM to every process it started, SIGKILL a few seconds l
 
 Toolset: `core`. Effect: `read`. Needs the `envs` service.
 
-Read a job's output after your byte offsets, waiting for more while it runs; stdout_bytes is the size so far. `state`: running, exited, cancelled, timed_out or lost; then exit_code (or signal). `oom`: what the kernel killed for memory.
+Read a job's output after your byte offsets (-N: the last N bytes), waiting for more while it runs; stdout_bytes is the size so far. `state`: running, exited, cancelled, timed_out or lost; then exit_code (or signal). `oom`: what the kernel killed for memory.
 
 | Argument | Type | Required | Description |
 |---|---|---|---|

@@ -117,7 +117,7 @@ TOOLSETS: tuple[Toolset, ...] = (
         "terminal_upload", "terminal_jobs", "shell_open",
         "shell_read", "shell_write", "shell_close", "service_start", "service_stop", "service_status",
         "service_logs", "image_build", "images_list", "vm_create", "vm_destroy", "vm_extend", "vm_clone",
-        "vms_list", "environment_forget",
+        "vms_list", "environment_forget", "environment_app_restart",
     ), ("env",), "shells, services, raw VMs"),
     Toolset("screen", "your environment's desktop, for apps that are not web pages: a picture of the screen and its "
             "windows, real clicks, keys and typing, starting an app", (

@@ -1,0 +1,12 @@
+
+ Usage: openajar tools [OPTIONS]
+
+ The MCP tools this build serves, listed from the same definitions the server
+ uses.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --markdown          The full reference as Markdown.                          │
+│ --json              Machine-readable, one object per tool.                   │
+│ --help              Show this message and exit.                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

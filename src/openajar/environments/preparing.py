@@ -444,9 +444,78 @@ class Preparing:
             app["listening_instead"] = [p["port"] for p in await self.ports(env) if p.get("port") not in (None, 22)]
         app["next"] = f"terminal_job_read(job=\"{job_id}\") shows its whole output"
 
+    # ================================================================ restart (environment_app_restart)
+    app_free_wait_s = 10.0  # how long a restart waits for the old process to let go of the port
+
+    async def restart_app(self, env: Environment) -> dict:
+        """`start` again, as the open runs it: the running jobs of the app (its job, or the same command
+        started by hand) end with their process trees (job_cancel ends the process group), the port is
+        given up to app_free_wait_s to close, then _start_app. The file is read again in the checkout, so
+        a changed `start` or `port` counts. Returns env.app with `stopped` (the job ids ended)."""
+        from openajar.core.errors import InvalidRequest
+
+        cfg = await self._app_config(env)
+        if cfg is None or not cfg.start or not cfg.port:
+            raise InvalidRequest(f"this repository's {CONFIG_PATH} has no start command (with port), so there is no "
+                                 "app to restart: add them there, or run your server with terminal_job_start")
+        envs = self.envs()
+        async with self._lock(f"app:{env.id}"):
+            old = self.store.get(env.id).app or {}
+            stopped = []
+            for j in envs.job_list(env.terminal_lane):
+                if j.state == "running" and (j.id == old.get("job_id") or j.cmd in (cfg.start, old.get("command"))):
+                    with contextlib.suppress(OpenajarError):
+                        await envs.job_cancel(j.id)
+                        stopped.append(j.id)
+            held = await self._port_held(env, int(cfg.port))
+            app = await self._start_app(env, cfg)
+            app["stopped"] = stopped
+            if held:
+                app["why"] = (f"port {cfg.port} still listened after the old app stopped ({held}), so `listening` "
+                              f"may be that process, not the new one: stop it (terminal_exec(cmd=\"fuser -k "
+                              f"{cfg.port}/tcp\")) and restart again")
+            self.store.update(env.id, lambda e: setattr(e, "app", app))
+        await self._app_link(self.store.get(env.id))  # its link, as at the open
+        return self.prepared_view(self.store.get(env.id))["app"]
+
+    async def _app_config(self, env: Environment) -> RepoConfig | None:
+        """The file as it is in the checkout now, else as the open read it."""
+        from openajar.core.errors import InvalidRequest
+
+        read = None
+        with contextlib.suppress(OpenajarError):
+            res = await self.envs().exec(env.terminal_lane, f"cd {shlex.quote(env.workdir)} && {{ {CHECKOUT_READ}; }}",
+                                         timeout_s=60)
+            raw = (_lines(res.stdout or "").get("config") or ["-"])[0]
+            if raw != "-":
+                read = from_text(base64.b64decode(raw).decode(errors="replace"), source="checkout")
+        if read is not None and read.config is None:
+            raise InvalidRequest(f"{CONFIG_PATH} in {env.workdir}: {read.why}")
+        if read is not None:
+            return read.config
+        stored = (env.prepared or {}).get("config")
+        return RepoConfig(**stored) if stored else None
+
+    async def _port_held(self, env: Environment, port: int) -> str | None:
+        """What still listens on `port` after app_free_wait_s (None: it closed)."""
+        loop = asyncio.get_running_loop()
+        end = loop.time() + self.app_free_wait_s
+        while True:
+            row = next((p for p in await self.ports(env) if p.get("port") == port), None)
+            if row is None:
+                return None
+            if loop.time() >= end:
+                return row.get("process") or "a process"
+            await asyncio.sleep(min(0.5, max(0.0, end - loop.time())))
+
     async def after_ready(self, env: Environment) -> None:
         """Once the environment is ready: the app's port link (as environment_port gives), and the warm
         pool filled again for the next open. Never raises."""
+        await self._app_link(env)
+        with contextlib.suppress(Exception):
+            self.pool_refill_soon()
+
+    async def _app_link(self, env: Environment) -> None:
         from openajar.environments import ports as env_ports
 
         app = env.app or {}
@@ -457,8 +526,6 @@ class Preparing:
                 self.store.update(env.id, lambda e: setattr(e, "app", {**(e.app or {}), **got}))
             except Exception as e:  # noqa: BLE001 - environment_port makes it later
                 log.info("environment %s: no link for port %s yet: %s", env.id, app["port"], e)
-        with contextlib.suppress(Exception):
-            self.pool_refill_soon()
 
     # ================================================================ what the agent reads
     def prepared_view(self, env: Environment) -> dict:
@@ -469,6 +536,7 @@ class Preparing:
             out["prepared"] = self._prepared_words(p)
         if env.app:
             out["app"] = {k: v for k, v in env.app.items()}
+            out["app"]["restart"] = 'tools_call("environment_app_restart", {"on": "<your on>"}) after a change'
         if getattr(env, "warm_claimed", False):
             out.setdefault("prepared", {})["warm"] = "this machine came from the node's warm pool"
         return out

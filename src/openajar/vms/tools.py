@@ -29,7 +29,8 @@ def _price(plan: dict) -> str:
         return ""
     hours = -(-plan["ttl_minutes"] // 60)
     worst = max([price, *[q or 0 for _n, q in plan.get("fallbacks") or []]])
-    out = f", EUR {price:.4f} an hour (at most EUR {worst * hours:.2f} for {plan['ttl_minutes']} min)"
+    out = f", EUR {price:.4f} an hour (EUR {price * hours:.2f} for {plan['ttl_minutes']} min"
+    out += f"; at most EUR {worst * hours:.2f} if only a dearer type has room)" if worst > price else ")"
     if plan.get("fallbacks"):
         out += f"; if it is sold out: {', '.join(n for n, _q in plan['fallbacks'])}"
     return out

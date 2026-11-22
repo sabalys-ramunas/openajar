@@ -44,10 +44,18 @@ def is_capacity(e: BaseException) -> bool:
 
 
 def room_words(room: list[dict]) -> str:
-    """'Available now: medium (4 CPU, 8 GB, less than you asked for): environment_open(size="medium")'."""
-    parts = [f"{r['size']} ({r['cpu']} CPU, {r['memory_gb']} GB{', less than you asked for' if r.get('smaller') else ''})"
-             f": environment_open(size=\"{r['size']}\")" for r in room]
-    return "Available now: " + "; or ".join(parts)
+    """'Available now: medium (4 CPU, 8 GB, less than you asked for): environment_open(size="medium")', or
+    for sizes the provider does not say about (Sizing.sizes_with_room, "now" false), 'Not tried yet, so it
+    may have room: ...'."""
+    def part(r: dict) -> str:
+        less = ", less than you asked for" if r.get("smaller") else ""
+        return f"{r['size']} ({r['cpu']} CPU, {r['memory_gb']} GB{less}): environment_open(size=\"{r['size']}\")"
+
+    now = [part(r) for r in room if r.get("now", True)]
+    maybe = [part(r) for r in room if not r.get("now", True)]
+    out = ["Available now: " + "; or ".join(now)] if now else []
+    out += ["Not tried yet, so it may have room: " + "; or ".join(maybe)] if maybe else []
+    return ". ".join(out)
 
 
 def classify(e: BaseException, env: Environment, top: str,
@@ -63,11 +71,10 @@ def classify(e: BaseException, env: Environment, top: str,
     if code == "image_too_big":
         tip = f' Ask for size="{bigger}".' if bigger else ""
         return "image", f"{msg}.{tip}"
-    if code in CAPACITY_CODES:
+    if code in CAPACITY_CODES:  # never a size whose every type just had no room (Sizing.sizes_with_room)
         if room:
             return "capacity", f"{msg}. {room_words(room)}. Nothing bills: no machine was made"
-        tip = f', or ask for size="{bigger}" (another server type)' if bigger else ""
-        return "capacity", f"{msg}{tip}. Nothing bills: no machine was made"
+        return "capacity", f"{msg}. Nothing bills: no machine was made"
     if getattr(e, "code", None) == "vm_error" and any(w in msg.lower() for w in NETWORK_WORDS):
         return "network", f"{msg.rstrip('.')}. Try again in 2 minutes" if "try again in" not in msg else msg
     return None, msg

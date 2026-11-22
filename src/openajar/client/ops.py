@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Literal
 
 from openajar.client import skills
@@ -32,7 +33,8 @@ from openajar.client.choices import (
     InstallChoice,
     Tools,
 )
-from openajar.client.claude import ClaudeCode, manual_lines
+from openajar.client.claude import ClaudeCode, manual_lines, profile_problems, register_everywhere
+from openajar.client.claude import profiles as claude_profiles
 from openajar.client.codex import CodexConfig
 from openajar.client.codex import installed as codex_installed
 from openajar.client.credentials import Credentials
@@ -374,27 +376,13 @@ class Client(Credentials):
         and the Claude Code skills, each only when it is installed here. No token goes into either
         config: both read it from this computer's store when they connect."""
         name = conn.name
-        same = previous is not None and previous.url == conn.url
         helper = helper_command(self.paths, name)
         if not choice.claude:
             result.clients.append(ClientLine("Claude Code", "skipped", "--no-claude"))
         elif self.tools.claude:
-            try:
-                claude = ClaudeCode(self.tools.claude, self.paths.home)
-                claude.register(conn, helper)
-                conn.claude_registered = True
-                moved = claude.unregister_legacy(conn.legacy_claude_name, conn.url)
-                if moved:
-                    result.notes.append(f"Claude Code: removed {conn.legacy_claude_name}, its name before the rename")
-                kept = same and previous and previous.claude_registered and not moved
-                state = "already registered" if kept else "registered"
-                result.clients.append(ClientLine("Claude Code", state, f"{conn.claude_name} (user scope)"))
-            except ClientError as exc:
-                result.claude_error = exc.message
-                result.claude_lines = manual_lines(conn, helper)
-                result.clients.append(ClientLine("Claude Code", "failed", exc.message))
+            self._register_claude(conn, previous, helper, result)
         else:
-            result.claude_lines = manual_lines(conn, helper)
+            result.claude_lines = manual_lines(conn, helper, claude_profiles(self.paths.home))
             result.clients.append(ClientLine("Claude Code", "not installed", "`claude` is not on PATH"))
 
         codex = CodexConfig(self.paths.home)
@@ -419,15 +407,50 @@ class Client(Credentials):
             result.clients.append(ClientLine("Skills", "skipped", "--no-skills"))
         elif self.tools.claude or skills.skills_dir(self.paths.home).parent.is_dir():
             try:
-                done = skills.install(self.paths.home)
+                dests = self.skills_dirs()
+                done = [skills.install(self.paths.home, dest) for dest in dests]
                 conn.skills_installed = True
-                result.clients.append(ClientLine("Skills", done, f"{', '.join(skills.NAMES)} in "
-                                                                 f"{shown(skills.skills_dir(self.paths.home))}"))
+                state = next((d for d in done if d.startswith("kept")), None) or \
+                    ("already installed" if set(done) == {"already installed"} else
+                     "updated" if "updated" in done else "installed")
+                result.clients.append(ClientLine("Skills", state, f"{', '.join(skills.NAMES)} in "
+                                                                  f"{', '.join(shown(d) for d in dests)}"))
             except OSError as exc:
                 result.clients.append(ClientLine("Skills", "failed", f"could not copy them: {exc.strerror}"))
         else:
             result.clients.append(ClientLine("Skills", "not installed", "Claude Code is not here"))
         self.records.save(conn)
+
+    def skills_dirs(self) -> list[Path]:
+        """The skills folder of every Claude Code profile here (the default one first), once each."""
+        dests = [skills.skills_dir(self.paths.home)]
+        for profile in claude_profiles(self.paths.home):
+            if profile.skills_dir not in dests:
+                dests.append(profile.skills_dir)
+        return dests
+
+    def _register_claude(self, conn: Connection, previous: Connection | None, helper: str,
+                         result: ConnectResult) -> None:
+        """The entry in every Claude Code profile here, and the entries from before the rename removed."""
+        assert self.tools.claude is not None
+        done = register_everywhere(self.tools.claude, self.paths.home, conn, helper)
+        for profile, name in done.removed:
+            why = "its name before the rename" if name == conn.legacy_claude_name else \
+                "an entry from before the rename that no longer works"
+            result.notes.append(f"Claude Code: removed {name} from {profile.label}, {why}")
+        result.claude_profiles = [p.label for p in done.done]
+        if not done.done:
+            result.claude_error = done.failed[0][1]
+            result.claude_lines = manual_lines(conn, helper, [p for p, _ in done.failed])
+            result.clients.append(ClientLine("Claude Code", "failed", result.claude_error))
+            return
+        conn.claude_registered = True
+        for profile, why in done.failed:
+            result.notes.append(f"Claude Code: not registered in {profile.label} ({why}); add it there with: "
+                                + " && ".join(manual_lines(conn, helper, [profile])))
+        state = "registered" if done.written or not (previous and previous.claude_registered) else "already registered"
+        result.clients.append(ClientLine("Claude Code", state, f"{conn.claude_name} (user scope) in "
+                                                               f"{', '.join(result.claude_profiles)}"))
 
     def upgrade(self, **kw: Any) -> list[tuple[Connection, ConnectResult | ClientError]]:
         """`openajar connect --upgrade`: every connection still on the node token, connected again."""
@@ -473,13 +496,17 @@ class Client(Credentials):
         legacy_name = f"agentos-{name}"  # legacy-name: an entry an older version wrote
         manual: str | None = None
         if self.tools.claude:
-            claude = ClaudeCode(self.tools.claude, self.paths.home)
-            if claude.unregister(claude_name):
-                removed.append(f"Claude Code entry {claude_name}")
-            if claude.unregister_legacy(legacy_name, conn.url if conn is not None else None):
-                removed.append(f"Claude Code entry {legacy_name}")
+            for profile in claude_profiles(self.paths.home):
+                claude = ClaudeCode(self.tools.claude, self.paths.home, profile)
+                where = "" if profile.config_dir is None else f" from {profile.label}"
+                if claude.unregister(claude_name):
+                    removed.append(f"Claude Code entry {claude_name}{where}")
+                if claude.unregister_legacy(legacy_name, conn.url if conn is not None else None):
+                    removed.append(f"Claude Code entry {legacy_name}{where}")
         elif conn is not None and conn.claude_registered:
-            manual = f"claude mcp remove --scope user {claude_name}"
+            manual = " and ".join(f"`{p.command(f'claude mcp remove --scope user {claude_name}')}`"
+                                  for p in claude_profiles(self.paths.home)
+                                  if p.config_dir is None or claude_name in (p.servers() or {}))
         codex = CodexConfig(self.paths.home)
         try:
             if codex.unregister(claude_name):
@@ -491,7 +518,7 @@ class Client(Credentials):
         if self.records.delete(name):
             removed.append("connection record")
         if conn is not None and conn.skills_installed and not any(c.skills_installed for c in self.records.all()):
-            gone = skills.remove(self.paths.home)
+            gone = sorted({name for dest in self.skills_dirs() for name in skills.remove(self.paths.home, dest)})
             if gone:
                 removed.append(f"Claude Code skills {', '.join(gone)}")
         if not self.records.all() and self.paths.headers_helper.exists():
@@ -499,7 +526,7 @@ class Client(Credentials):
         if not removed:
             raise NotConnected(f"no connection named {name}", "see `openajar status`")
         if manual:
-            removed.append(f"(claude is not on PATH; remove its entry with `{manual}`)")
+            removed.append(f"(claude is not on PATH; remove its entry with {manual})")
         return removed
 
     def _revoke_on_node(self, conn: Connection) -> list[str]:
@@ -558,14 +585,7 @@ class Client(Credentials):
         if not self.tools.claude:
             items.append(CheckItem("Claude Code", "skip", "not installed (`claude` is not on PATH)"))
         else:
-            proc = ClaudeCode(self.tools.claude, self.paths.home).get(conn.claude_name)
-            if proc is None:
-                items.append(CheckItem("Claude Code", "fail", f"no {conn.claude_name} entry", f"run `{again}`"))
-            elif conn.url not in proc:
-                items.append(CheckItem("Claude Code", "fail", f"{conn.claude_name} points somewhere else",
-                                       f"run `{again}`"))
-            else:
-                items.append(CheckItem("Claude Code", "ok", f"{conn.claude_name} at {conn.url}"))
+            items += self._claude_items(conn, again)
 
         codex = CodexConfig(self.paths.home)
         if not codex_installed(self.paths.home):
@@ -598,9 +618,36 @@ class Client(Credentials):
                     items.append(CheckItem("Codex", "fail", f"the bridge did not answer: {why}", f"run `{again}`"))
 
         if conn.skills_installed or self.tools.claude:
-            state = skills.state(self.paths.home)
-            items.append(CheckItem("Skills", "ok" if state == "installed" else "fail",
-                                   f"{', '.join(skills.NAMES)}: {state}", f"run `{again}`"))
+            states = {shown(dest): skills.state(self.paths.home, dest) for dest in self.skills_dirs()}
+            bad = {where: state for where, state in states.items() if state != "installed"}
+            detail = ", ".join(f"{state} in {where}" for where, state in bad.items()) or "installed"
+            items.append(CheckItem("Skills", "fail" if bad else "ok", f"{', '.join(skills.NAMES)}: {detail}",
+                                   f"run `{again}`"))
+        return items
+
+    def _claude_items(self, conn: Connection, again: str) -> list[CheckItem]:
+        """The entry in the default profile (its .claude.json, else what `claude mcp get` prints), then
+        what is wrong in the other profiles (claude.profile_problems)."""
+        assert self.tools.claude is not None
+        default = ClaudeCode(self.tools.claude, self.paths.home)
+        servers = default.profile.servers()
+        if servers is not None:
+            entry = servers.get(conn.claude_name)
+            there, right = entry is not None, entry is not None and entry.get("url") == conn.url
+        else:
+            text = default.get(conn.claude_name)
+            there, right = text is not None, text is not None and conn.url in text
+        items = []
+        if not there:
+            items.append(CheckItem("Claude Code", "fail", f"no {conn.claude_name} entry", f"run `{again}`"))
+        elif not right:
+            items.append(CheckItem("Claude Code", "fail", f"{conn.claude_name} points somewhere else", f"run `{again}`"))
+        else:
+            items.append(CheckItem("Claude Code", "ok", f"{conn.claude_name} at {conn.url}"))
+        for problem in profile_problems(self.paths.home, [conn], connect_again):
+            if problem.profile.config_dir is not None:  # the default profile is the line above
+                items.append(CheckItem("Claude Code", "fail", f"{problem.profile.label}: {problem.detail}",
+                                       problem.fix))
         return items
 
     def credential_label(self, conn: Connection) -> str:

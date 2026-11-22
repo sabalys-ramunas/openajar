@@ -133,7 +133,7 @@ async def test_a_command_that_failed_shows_its_exit_code(node, monkeypatch):  # 
     real = node["envs"].exec
 
     async def exec_(lane_id, cmd, **kw):
-        if cmd.endswith("\nexit 7"):  # in the repository's folder
+        if "\nexit 7" in cmd:  # in the repository's folder, under bash
             return ExecResult(exit_code=7, stdout="", stderr="", duration_s=0.01)
         return await real(lane_id, cmd, **kw)
 

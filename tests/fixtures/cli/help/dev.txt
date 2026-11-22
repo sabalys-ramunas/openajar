@@ -10,8 +10,8 @@
 │ up           Run a fake node on this machine.                                │
 │ tools        The MCP tools this build serves, listed from the same           │
 │              definitions the server uses.                                    │
-│ call         Call any MCP tool on a node, as your agents would: the same     │
-│              grant, policy and approvals.                                    │
+│ call         Call any openajar tool from a shell, as your agents would: the  │
+│              same grant, policy and approvals.                               │
 │ errors       Every error code: what it means, what an agent should do, and   │
 │              how to fix it.                                                  │
 │ lanebench    The local lane benchmark: test sites, tasks and safety checks.  │

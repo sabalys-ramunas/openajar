@@ -17,6 +17,7 @@ import typer
 
 from openajar.client.call import call as call_command
 from openajar.client.choices import AgentOptions, ClientChoice, ConnectResult, Health, InstallChoice
+from openajar.client.claude import RESTART_NOTE
 from openajar.client.errors import ClientError
 from openajar.client.ops import Client, browsers_of
 from openajar.client.state import DEFAULT_REMOTE_HOME, Connection, shown
@@ -192,9 +193,14 @@ def summary(c: Client, result: ConnectResult, *, brief: bool = False) -> None:
         label = CLIENT_LABEL.get(line.client, line.client)
         if line.client == "Claude Code" and line.state in ("registered", "already registered"):
             typer.echo(f"Claude Code: {line.state} {conn.claude_name} (user scope) at {conn.url}")
+            if result.claude_profiles:
+                many = len(result.claude_profiles) > 1
+                typer.echo(f"  In {'every Claude Code profile here' if many else 'its profile'}: "
+                           f"{', '.join(result.claude_profiles)}")
             typer.echo(f"  Tools listed: {toolsets_label(conn)}")
             typer.echo(f"  Claude Code runs {shown(helper)} {conn.name} for the token each time it connects,")
-            typer.echo("  so the token is not in ~/.claude.json.")
+            typer.echo("  so the token is not in any .claude.json.")
+            typer.echo(f"  {RESTART_NOTE}")
         elif line.client == "Claude Code" and line.state in ("not installed", "failed"):
             why = result.claude_error or "`claude` is not on PATH"
             typer.echo(f"Claude Code: not registered ({why}). Register it by hand:")
@@ -222,6 +228,10 @@ def summary(c: Client, result: ConnectResult, *, brief: bool = False) -> None:
     if seen:
         typer.echo("T3 Code: its Claude and Codex threads see this server too. Start a new thread.")
     typer.echo(try_line(seen))
+
+
+SHELL_LINE = ("Until your agent sees the tools, any shell reaches them under the same grant: "
+              "`openajar call <tool> --arg key=value` (`openajar tools` lists them).")
 
 
 def try_line(clients: list[str]) -> str:
@@ -260,6 +270,8 @@ def check_command(name: str | None) -> int:
                 seen.append(item.what)
     typer.echo("")
     typer.echo(try_line(seen))
+    if failed:
+        typer.echo(SHELL_LINE)
     return 1 if failed else 0
 
 

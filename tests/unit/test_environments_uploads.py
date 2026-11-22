@@ -17,6 +17,7 @@ import httpx
 import pytest
 from test_environments import node, opened  # noqa: F401  (node is a fixture)
 
+from openajar.env.execs import in_bash
 from openajar.env.host import FakeHost
 from openajar.env.manager import EnvManager
 from openajar.env.models import ExecResult
@@ -172,7 +173,7 @@ async def test_local_code_goes_onto_an_environment_opened_without_a_repo_and_the
     assert leftovers(node, out["id"]) == []  # the temp file is gone
 
     ran = await node["call"]("terminal_exec", cmd="pnpm install", cwd="/work")
-    assert ran["exit_code"] == 0 and ("cd '/work' 2>/dev/null || { echo openajar-no-such-folder >&2; exit 97; }\npnpm install", node["grant"].id) in node["machine"].ran
+    assert ran["exit_code"] == 0 and (in_bash("cd '/work' 2>/dev/null || { echo openajar-no-such-folder >&2; exit 97; }\npnpm install"), node["grant"].id) in node["machine"].ran
     state = await node["call"]("environment")
     tools = [c["tool"] for c in state["calls"]]
     assert tools[:3] == ["terminal_exec", "upload", "environment_upload"], tools  # newest first

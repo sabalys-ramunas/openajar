@@ -10,6 +10,9 @@ holds no key of the human's; nothing in it waits for a person.
 
 **Keep the `on` from your `environment_open` and pass it on every call.**
 
+No openajar tools loaded? Your shell has them: `openajar call <tool> --on <on> --arg key=value`
+(`openajar tools` lists them). Never write an MCP client.
+
 ## How long it stays (`keep`, chosen at `environment_open`)
 
 - `keep="save"`, the default: on idle or close the whole machine is saved and the VM deleted
@@ -82,7 +85,7 @@ holds no key of the human's; nothing in it waits for a person.
 Ubuntu 24.04 with git, Node 22, pnpm, Python 3, uv and Docker; install the rest.
 
 A refused host (a 403, `network.blocked_now`): give the human its command; never retry.
-`network.secrets`: variables whose placeholder works for their host.
+`network.secrets`: bound placeholders. `.env`: `openajar environments env push` (human approves).
 
 ## Never
 

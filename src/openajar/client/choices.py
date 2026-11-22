@@ -146,6 +146,7 @@ class ConnectResult:
     token_changed: bool
     claude_lines: list[str] = field(default_factory=list)  # set when it must be registered by hand
     claude_error: str | None = None
+    claude_profiles: list[str] = field(default_factory=list)  # the Claude Code profiles that hold the entry
     grant_issued: bool = False
     notes: list[str] = field(default_factory=list)  # warnings to show after the summary
     clients: list[ClientLine] = field(default_factory=list)

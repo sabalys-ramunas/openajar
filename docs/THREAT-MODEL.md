@@ -359,7 +359,7 @@ VM holds a placeholder, and the node's TLS swap puts the value in for the bound 
 
 | Question | Answer |
 |---|---|
-| Who sets the network and the bindings | the owner, at the node (`environments.toml`, `openajar environments allow --network/--host`, `openajar environments secret add`). An agent may only narrow the network on `environment_open`; no tool, page, repository file or command widens it or binds a secret |
+| Who sets the network and the bindings | the owner, at the node (`environments.toml`, `openajar environments allow --network/--host`, `openajar environments secret add`, `openajar environments env push`). An agent may only narrow the network on `environment_open`; no tool, page, repository file or command widens it or binds a secret |
 | What a closed machine reaches | the node's proxy (registries and code hosts for `limited`, the owner's hosts, bound hosts), the git gateway, its own loopback. Names are resolved on the node, and private, loopback and link-local addresses are refused there |
 | Where a secret's value is | in the vault, and in agentosd's memory while requests use it (read from the vault again each minute). Never on the VM, in a tool result, a log line, the record or the web app: they hold the variable's name only |
 | When the value is put in | a request on a TLS connection whose server name is a bound host, and whose Host header is that same host, with a target that names no other host (a full URL naming another host gets nothing, one naming the bound host is sent as a path): headers (a Basic credential included) and the URL's query. Not bodies, not plain HTTP, not another host. A placeholder sent anywhere else goes out as it is and is listed under `blocked` |

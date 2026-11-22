@@ -18,6 +18,8 @@
 │ status        Is it up, and which lanes it has (--check: what is wrong).     │
 │ open          Watch a lane live and take control (--terminal: a dashboard).  │
 │ mcp           openajar as a stdio MCP server, for any MCP client.            │
+│ call          Call any openajar tool from a shell, under your agents' grant. │
+│ tools         Every tool openajar serves, for `openajar call`.               │
 │ local         openajar on this computer: start, stop, status, logs.          │
 │ web           The web app in your browser: install, update, remove.          │
 ╰──────────────────────────────────────────────────────────────────────────────╯

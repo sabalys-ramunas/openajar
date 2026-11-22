@@ -6,6 +6,61 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-11-22
+
+From the second field report of an agent's run in an environment (2026-11-21).
+
+### Added
+
+- `openajar environments env push <id> [files]`: an app's local env files on an environment's machine. Plain
+  settings are copied as written, API keys are bound to their host as placeholders (the machine's file gets
+  `KEY=${KEY}`), and other secrets are never sent. One table shows each key, its class and what happens before
+  you approve once; `--dry-run` shows only the table. `.openajar/environment.toml` takes `env_files = [...]`,
+  the files it sends by default. docs/ENVIRONMENTS.md lists which secrets a placeholder can carry (headers and
+  the query over HTTPS to the bound host) and which it cannot (body values, values used on the machine such as
+  webhook signing secrets, database passwords, secrets inside a URL).
+- `environment_port(ports=[5173, 3000], same_numbers=true)` forwards several ports with the VM's own numbers,
+  so a page that calls its API on another localhost port reaches the VM. A number taken on this computer moves
+  to a free port and `why` says what that breaks. A one-port forward lists the VM's other ports
+  (`also_listening`).
+- `environment_app_restart` (in the terminals toolset) stops the app's job and its processes and runs `start`
+  again from `.openajar/environment.toml` as it is now, reporting `app` as the open does.
+- `terminal_job_read` reads the end of a log with a negative offset: `stdout_offset=-4000` is the last 4000
+  bytes (at most `max_bytes`), from a line's start.
+
+### Changed
+
+- `terminal_job_read(until_port=...)` that runs out while the job still runs no longer hides a crashed child
+  process (turbo stayed up after its API died): stdout and stderr are the start and the end of what it printed
+  since your offsets, and the note says the job still runs, whether it printed anything during the wait, and
+  where to look. A process the kernel killed for memory ends the wait at once and is named.
+- `terminal_exec` and jobs run under bash when the machine has it (else sh), so bash syntax such as
+  `${v:0:15}`, arrays and `[[ ]]` works. The node's own scripts keep sh.
+- `terminal_job_read`'s text output leaves out the colour and cursor codes dev servers print (`base64_output`
+  keeps the raw bytes).
+- A size means any server type with that much CPU and memory: when one family has no room, the open tries cx,
+  cpx and ccx types, cheapest first, within the monthly budget, and `machine.fell_back` says what the machine
+  costs next to the plan. An approval's price line names the most it can cost when only a dearer type has room.
+- `openajar call` and `openajar tools` are in the top-level help, the environment skill and the README: any
+  shell reaches the tools under the agents' grant when a session has not loaded them.
+- `environment_close`'s unsaved-work refusal says "mode change only" for a file whose only change is its mode
+  (a `chmod +x`), and says plainly when that is all there is.
+
+### Fixed
+
+- `openajar connect` registers the node in every Claude Code profile on the computer (`~/.claude.json`, the
+  folder `CLAUDE_CONFIG_DIR` names, and each `~/.claude*/` that holds a `.claude.json`), copies the skills into
+  each, and names the profiles it wrote. An entry from before the rename whose address on this computer no
+  longer answers is replaced too. It says that open Claude Code sessions need a restart to see the tools.
+  `openajar status --check` names a profile whose entry is missing or points at an address that does not
+  answer, with the command that fixes it.
+- A capacity error never suggests a size or type that just had no room: it names a smaller size that is
+  available now, or one not tried yet.
+- A server type the location does not sell (cpx41 in nbg1) is refused before Hetzner is asked, with where it
+  is sold and what is sold here with as much.
+- `bigger` skips a type that just had no room, and says when an entry costs less an hour than the running
+  machine.
+
 ## [0.5.3] - 2026-11-21
 
 ### Added

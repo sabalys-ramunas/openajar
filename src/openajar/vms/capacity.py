@@ -3,17 +3,22 @@
 The planned type is tried first in the planned location, then in the other locations of the same
 network zone (nbg1, fsn1 and hel1 are all eu-central): an image and a snapshot can be used in every
 location, and the firewall and the SSH key are project-wide. Only then the plan's fallback types,
-each in the same order. The plan never holds a type whose disk is smaller than the image's (the
-planner reads the image's disk size), and a type the provider refuses for its disk is skipped in
+each in the same order. A size is "any type with at least this much": the fallbacks come from every
+family the provider sells (cx, cpx, ccx, ...), cheapest first (pick_fallbacks), because the types of
+one family share the provider's room and run out together. The owner's monthly budget bounds them
+(affordable), not a price factor. The plan never holds a type whose disk is smaller than the image's
+(the planner reads the image's disk size), and a type the provider refuses for its disk is skipped in
 every location. When every try fails, NoRoom says what was tried and what to do next.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from openajar.core.errors import InvalidRequest
 from openajar.vms.models import VmError
 
 log = logging.getLogger("openajar.vms")
@@ -26,6 +31,9 @@ DISK_WORDS = "disk is bigger than server type disk"
 ZONES = {"nbg1": "eu-central", "fsn1": "eu-central", "hel1": "eu-central", "ash": "us-east", "hil": "us-west",
          "sin": "ap-southeast"}
 RETRY_WAIT_WORDS = "try again in 5 minutes"
+FALLBACKS = 5     # other types tried when the provider is out of the cheapest
+PER_FAMILY = 2    # of them, at most this many of one family (cx, cpx, ccx, ...)
+DEARER = 1.5      # a machine that costs this many times the planned price or more says so (fell_back_words)
 
 
 class NoRoom(VmError):
@@ -34,6 +42,94 @@ class NoRoom(VmError):
     def __init__(self, message: str, tried: list[tuple[str, str]]):
         super().__init__(message, provider_code="resource_unavailable")
         self.tried = tried
+
+
+class NotSold(InvalidRequest):
+    """A server type asked for by name that the provider lists, but does not sell in the location now.
+    `words` is what is wrong and what is sold instead, without the closing "Nothing was rented";
+    `has` is the type's (CPU, memory GB)."""
+
+    def __init__(self, words: str, has: tuple[float, float]):
+        super().__init__(f"{words}. Nothing was rented")
+        self.words, self.has = words, has
+
+
+def family(server_type: str) -> str:
+    """cx43: cx, cpx42: cpx, ccx33: ccx (the letters before the digits)."""
+    m = re.match(r"[a-z]+", server_type or "")
+    return m.group(0) if m else server_type
+
+
+def pick_fallbacks(first: dict, fit: list[dict], n: int = FALLBACKS) -> list[tuple[str, float | None]]:
+    """(type, EUR an hour) tried after `first` when it has no room. `fit`: every type that has enough,
+    cheapest first. The cheapest of each family comes in, then the next of each, at most PER_FAMILY of a
+    family and `n` in all, tried in price order: a family that is out of room (cx43 and cx53 together)
+    does not use up the tries another family would have had room for."""
+    rest = [t for t in fit if t["name"] != first["name"]]
+    count = {family(first["name"]): 1}
+    picked: list[dict] = []
+    for rnd in range(PER_FAMILY):
+        for t in rest:
+            f = family(t["name"])
+            if t in picked or count.get(f, 0) > rnd or len(picked) >= n:
+                continue
+            picked.append(t)
+            count[f] = count.get(f, 0) + 1
+    picked.sort(key=lambda t: rest.index(t))
+    return [(t["name"], t["price"]) for t in picked]
+
+
+def affordable(price: float, fallbacks: list[tuple[str, float | None]], hours: int,
+               room_eur: float) -> list[tuple[str, float | None]]:
+    """The fallbacks whose whole time limit still fits in `room_eur` (what the month's budget has
+    left). The planned type itself must fit; a dearer fallback that does not is never tried."""
+    return [(n, q) for n, q in fallbacks if (q if q is not None else price) * hours <= room_eur]
+
+
+def _gb(x: float | None) -> str:
+    return f"{x:g}" if x is not None else "?"
+
+
+def not_sold(types: list[dict] | None, server_type: str, location: str, provider: str = "") -> NotSold | None:
+    """A server type asked for by name that the provider lists but does not sell in `location` now
+    (Hetzner sells cpx41 only outside eu-central, and answers "unsupported location" to a create): the
+    error in openajar's words, with where it is sold and what is sold here with as much. None when it is
+    sold there, or the provider's list does not say."""
+    t = next((t for t in types or [] if t.get("name") == server_type), None)
+    if t is None or offered(types, server_type, location)[0]:
+        return None
+    where = t.get("available")
+    sold = [loc for loc in (where if where is not None else (t.get("price_hourly_eur") or {}))
+            if loc != location and (where is not None or offered(types, server_type, loc)[0])]
+    cores, memory = t.get("cores") or 0, t.get("memory_gb") or 0
+    here = []
+    for o in types or []:
+        ok, price = offered(types, str(o.get("name")), location)
+        if (ok and price is not None and (o.get("cores") or 0) >= cores and (o.get("memory_gb") or 0) >= memory
+                and o.get("architecture") == t.get("architecture")):
+            here.append((o.get("cores") or 0, o.get("memory_gb") or 0, price, o))
+    here.sort(key=lambda h: (h[0], h[1], h[2]))
+    name = provider.capitalize() or "The provider"
+    words = f"{name} does not sell {server_type} in {location} now"
+    words += f" (it sells it in {_places(sold)})" if sold else ""
+    if here:
+        alts = ", ".join(f"{o['name']} ({c:g} CPU, {_gb(m)} GB, EUR {p:.4f} an hour)" for c, m, p, o in here[:2])
+        words += f". Sold in {location} with at least its {cores:g} CPU and {_gb(memory)} GB: {alts}; ask for one of those"
+    return NotSold(words, (cores, memory))
+
+
+def fell_back_words(asked: tuple[str, float | None], server_type: str, price: float | None,
+                    tried: list[tuple[str, str]]) -> str:
+    """'No room for cx43 or cx53, so this is cpx42, with as much, at EUR 0.1350 an hour (4.4 times the
+    EUR 0.0304 planned)': what a machine of a fallback type says, so the agent and the owner see the cost."""
+    gone = list(dict.fromkeys(t for t, _lc in tried)) or [asked[0]]
+    words = f"No room for {_places(gone)} now, so this is {server_type}, with at least as much"
+    if price is None:
+        return words
+    words += f", at EUR {price:.4f} an hour"
+    if asked[1] and price >= asked[1] * DEARER:
+        words += f" ({price / asked[1]:.1f} times the EUR {asked[1]:.4f} planned for {asked[0]})"
+    return words
 
 
 def zone_locations(location: str, zones: dict[str, str]) -> list[str]:
@@ -86,13 +182,17 @@ def _places(locations: list[str]) -> str:
 
 
 def no_room_words(provider: str, tried: list[tuple[str, str]]) -> str:
-    """"Hetzner has no room for cx23 in nbg1, fsn1 or hel1 now, nor for cpx22 in nbg1; try again in 5 minutes"."""
+    """"Hetzner has no room for cx43 or cx53 in nbg1, fsn1 or hel1 now, nor for cpx42 in nbg1; try again in 5
+    minutes"."""
     by_type: dict[str, list[str]] = {}
     for server_type, loc in tried:
         by_type.setdefault(server_type, [])
         if loc not in by_type[server_type]:
             by_type[server_type].append(loc)
-    parts = [f"{t} in {_places(locs)}" for t, locs in by_type.items()]
+    by_places: dict[tuple[str, ...], list[str]] = {}  # types that had no room in the same places, said once
+    for t, locs in by_type.items():
+        by_places.setdefault(tuple(locs), []).append(t)
+    parts = [f"{_places(types)} in {_places(list(locs))}" for locs, types in by_places.items()]
     name = provider.capitalize() if provider else "The provider"
     head = f"{name} has no room for {parts[0]} now"
     if len(parts) > 1:
@@ -101,11 +201,12 @@ def no_room_words(provider: str, tried: list[tuple[str, str]]) -> str:
 
 
 async def create_first(provider: str, tries: list[tuple[str, str, float | None]],
-                       create: Callable[[str, str], Awaitable[Any]], *, vm_id: str = ""
-                       ) -> tuple[Any, str, str, float | None]:
+                       create: Callable[[str, str], Awaitable[Any]], *, vm_id: str = "",
+                       tried: list[tuple[str, str]] | None = None) -> tuple[Any, str, str, float | None]:
     """Create the server with the first (type, location) that has room: (server, type, location, price).
-    Raises NoRoom when none had room, or the provider's own error for anything else."""
-    tried: list[tuple[str, str]] = []
+    Raises NoRoom when none had room, or the provider's own error for anything else. `tried` gets each
+    (type, location) that had no room, also when one after them had."""
+    tried = [] if tried is None else tried
     skip: set[str] = set()
     last: VmError | None = None
     for i, (server_type, loc, price) in enumerate(tries):
