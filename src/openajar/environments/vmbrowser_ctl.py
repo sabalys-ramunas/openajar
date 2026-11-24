@@ -20,8 +20,11 @@ Actions, each printing one JSON line:
   What of a kept screen is gone (x11vnc, or the desktop session) starts again on it, and `mended` names it.
   With `only_keep` a screen that is not running at that size is left alone (`untouched`): the node never
   starts a screen afresh under a browser that runs.
-- browser {options, port, ws_path}: Camoufox's browser server (camoufox.server.launch_server) on that
-  screen, listening on 127.0.0.1:<port> only, at a path the node made at random.
+- browser {options, port, ws_path, pin, report_prefs, keys}: Camoufox's browser server (camoufox.server.launch_server)
+  on that screen, listening on 127.0.0.1:<port> only, at a path the node made at random. With `pin`, the browser
+  is the environment's pinned device (SERVE). With `report_prefs`, the answer's `running` is what the browser
+  process was started with, read back from its environment: the node pins it on a first launch
+  (openajar.environments.vmpin). With `keys` {layout}, the answer's `keys` is the keyboard helper (KEYS).
 - clipboard {limit, timeout, nothing}: the text the browser copied, for the live view's "copy" button.
 - stop {what: ["browser", "display"]}: ends them (each runs in a process group of its own).
 - status: which of them run.
@@ -72,21 +75,136 @@ FAMILY_WILD = 65535  # an Xauthority entry for any host: the machine's name does
 # ends with the screen, so it finishes its file first
 RECORDER_PID = "/var/lib/agentos-env/recording/ffmpeg.pid"
 
-# The browser server: the options the node sent, with the screen and window as Camoufox wants them.
+# The browser server: the options the node sent, with the screen and window as Camoufox wants them. With the
+# environment's pin (openajar.environments.vmpin), Camoufox still resolves the launch, and then the browser gets
+# the pinned config and prefs in place of what it drew: only the keys the node names in `keep` (how a launch
+# behaves, and the screen and window when this launch asks for others) come from this launch's draw, as the
+# node's engine does for a lane (openajar.node.camoufox.config.launch_config). Either way the core count is the
+# machine's own (cores_fit, as the node's engine hardens a lane: pin.harden).
 SERVE = """
 import json, os, sys
+import camoufox.server as server
 from camoufox.fingerprints import Screen
-from camoufox.server import launch_server
+from camoufox.utils import get_pref_env_vars
 path = sys.argv[1]
 with open(path) as f:
     o = json.load(f)
 os.unlink(path)
+pin = o.pop("openajar_pin", None)
 w, h = o.pop("screen")
 o["screen"] = Screen(min_width=w, max_width=w, min_height=h, max_height=h)
 o["window"] = tuple(o["window"])
 o["env"] = {k: v for k, v in os.environ.items() if k != "WAYLAND_DISPLAY"}
-launch_server(**o)
+resolve = server.launch_options
+
+def cores_fit(config, first):
+    # the machine's own cores: a first draw claims them; a pin claiming more than this machine runs is
+    # lowered to them (a timing test sees the difference), one claiming fewer keeps its device
+    have = len(os.sched_getaffinity(0)) or 1
+    claim = config.get("navigator.hardwareConcurrency")
+    if first or not isinstance(claim, int) or claim > have:
+        config["navigator.hardwareConcurrency"] = have
+
+def pinned(**kw):
+    r = resolve(**kw)
+    env = r["env"]
+    parts = sorted((int(k.rsplit("_", 1)[1]), v) for k, v in env.items() if k.startswith("CAMOU_CONFIG_"))
+    drawn = json.loads("".join(v for _, v in parts) or "{}")
+    prefs = dict(r.get("firefox_user_prefs") or {})
+    if pin is None:
+        config = drawn
+    else:
+        keep, prefixes = set(pin["keep"]), tuple(pin["keep_prefixes"])
+        config = dict(pin["config"])
+        config.update({k: v for k, v in drawn.items() if k in keep or (prefixes and k.startswith(prefixes))})
+        prefs.update(pin["prefs"])
+    cores_fit(config, pin is None)
+    env = {k: v for k, v in env.items() if not k.startswith(("CAMOU_CONFIG_", "CAMOU_PREFS_"))}
+    blob = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
+    env.update({"CAMOU_CONFIG_%d" % (i // 32767 + 1): blob[i:i + 32767] for i in range(0, len(blob), 32767)})
+    env.update(get_pref_env_vars(prefs))
+    r["env"], r["firefox_user_prefs"] = env, prefs
+    return r
+
+server.launch_options = pinned
+server.launch_server(**o)
 """
+# The keyboard helper (openajar.environments.vmkeys): the screen gets the browser's language's layout, and the
+# helper presses the keys for the characters it types, through XTest, for the node's relay on a socket of its
+# own: one line "<code point> <hold ms>" in, "ok" or "no" out. Only characters past ASCII (the rest stay on
+# Playwright). The characters it can type go to `table` once it listens. Started with the browser, stopped with it.
+KEYS = r"""
+import ctypes, json, os, socket, subprocess, sys, time
+layout, sock_path, table_path = sys.argv[1], sys.argv[2], sys.argv[3]
+subprocess.run(["setxkbmap", "-layout", layout], check=True, timeout=15)
+x11, xtst, xkb = (ctypes.CDLL(n) for n in ("libX11.so.6", "libXtst.so.6", "libxkbcommon.so.0"))
+x11.XOpenDisplay.restype, x11.XOpenDisplay.argtypes = ctypes.c_void_p, [ctypes.c_char_p]
+x11.XGetKeyboardMapping.restype = ctypes.POINTER(ctypes.c_ulong)
+x11.XGetKeyboardMapping.argtypes = [ctypes.c_void_p, ctypes.c_ubyte, ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+x11.XDisplayKeycodes.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
+x11.XKeysymToKeycode.restype, x11.XKeysymToKeycode.argtypes = ctypes.c_ubyte, [ctypes.c_void_p, ctypes.c_ulong]
+x11.XFlush.argtypes = x11.XFree.argtypes = [ctypes.c_void_p]
+x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+xtst.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+xkb.xkb_keysym_to_utf32.restype, xkb.xkb_keysym_to_utf32.argtypes = ctypes.c_uint32, [ctypes.c_uint32]
+d = x11.XOpenDisplay(None)
+if not d:
+    sys.exit("cannot open the display")
+lo, hi, per = ctypes.c_int(), ctypes.c_int(), ctypes.c_int()
+x11.XDisplayKeycodes(d, ctypes.byref(lo), ctypes.byref(hi))
+n = hi.value - lo.value + 1
+syms = x11.XGetKeyboardMapping(d, lo.value, n, ctypes.byref(per))
+shift, level3 = x11.XKeysymToKeycode(d, 0xffe1), x11.XKeysymToKeycode(d, 0xfe03)
+table = {}
+for i in range(n):  # the core map's columns: plain, Shift, (group 2 twice), AltGr, AltGr and Shift
+    for col, mods in ((0, ()), (1, (shift,)), (4, (level3,)), (5, (shift, level3))):
+        sym = syms[i * per.value + col] if col < per.value else 0
+        cp = xkb.xkb_keysym_to_utf32(sym) if sym else 0
+        if cp > 127 and cp not in table and all(mods):
+            table[cp] = (lo.value + i, mods)
+x11.XFree(syms)
+try:
+    os.unlink(sock_path)
+except OSError:
+    pass
+srv = socket.socket(socket.AF_UNIX)
+old = os.umask(0o177)
+srv.bind(sock_path)
+os.umask(old)
+srv.listen(2)
+with open(table_path + ".tmp", "w") as f:
+    json.dump("".join(chr(c) for c in table), f)
+os.replace(table_path + ".tmp", table_path)
+
+def key(code, down):
+    xtst.XTestFakeKeyEvent(d, code, 1 if down else 0, 0)
+    x11.XFlush(d)
+
+while True:
+    conn, _ = srv.accept()
+    io = conn.makefile("rwb", buffering=0)
+    for line in io:
+        try:
+            cp, hold = line.split()
+            code, mods = table[int(cp)]
+            hold = min(max(float(hold), 0.0), 1000.0) / 1000
+        except (ValueError, KeyError):
+            io.write(b"no\n")
+            continue
+        for m in mods:
+            key(m, True)
+        key(code, True)
+        time.sleep(hold)
+        key(code, False)
+        for m in reversed(mods):
+            key(m, False)
+        x11.XSync(d, 0)
+        io.write(b"ok\n")
+    conn.close()
+"""
+KEYS_WAIT_S = 10.0
+BROWSER_BIN = "camoufox-bin"
+READBACK_WAIT_S = 5.0
 
 
 def _say(**out):
@@ -240,6 +358,22 @@ def _stop_desktop():
         _stop(name)
 
 
+def browser_place(width, height, window, own_titlebar):
+    """Where openbox puts the browser's window (rc.xml), so that its content sits where a page works it out
+    from what Camoufox claims: the window centred on the screen (vmharden.every_launch claims it there), the
+    content at screenX plus half of outerWidth minus innerWidth, and at screenY plus all of outerHeight minus
+    innerHeight (stealth.py's check, as a site's). Openbox counts y from below the top bar (its strut).
+    With its own title bar the window's X origin is its GTK edge: x is the claim itself, and y is CSD_EDGE
+    lower, as the edge at the bottom counts in outerHeight but sits below the content (measured on the
+    machine: placed at the claim less the edge and a pixel, a page saw the content 6 px left and 11 px up).
+    With openbox's frame, the frame's title bar is above the window."""
+    w, h = window
+    x, y = (width - w) // 2, (height - h) // 2
+    if own_titlebar:
+        return max(0, x), max(0, y + CSD_EDGE - TOP_BAR_H)
+    return max(0, x - 1), max(0, y - TITLE_H - 1 - TOP_BAR_H)
+
+
 def _write_desktop(files, width, height, window, own_titlebar=False):
     """The session's files under DESK: config/ (XDG_CONFIG_HOME of the desktop's apps), data/themes (the
     openbox theme), openbox/rc.xml with the browser's place in it, the dock's icons and desk.py."""
@@ -253,15 +387,12 @@ def _write_desktop(files, width, height, window, own_titlebar=False):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if rel == "openbox/rc.xml":
             w, h = window
-            x, y = (width - w) // 2, (height - h) // 2  # where Camoufox tells the page its window is
-            # the browser's own title bar (its tabs) has GTK's edge round it; else openbox's frame is above it
-            left, top = (CSD_EDGE, CSD_EDGE) if own_titlebar else (0, TITLE_H)
-            # openbox counts a place from the top of the room the top bar leaves (its strut), not the screen's
             # a browser that fills the screen started before the desktop did (it was still installing): maximized
             fills = (w, h) == (width, height)
+            bx, by = browser_place(width, height, window, own_titlebar)
             body = (body.replace("AGENTOS_BROWSER_MAXIMIZED", "yes" if fills else "no")
-                    .replace("AGENTOS_BROWSER_X", str(max(0, x - left - 1)))
-                    .replace("AGENTOS_BROWSER_Y", str(max(0, y - top - 1 - TOP_BAR_H)))
+                    .replace("AGENTOS_BROWSER_X", str(bx))
+                    .replace("AGENTOS_BROWSER_Y", str(by))
                     .replace("AGENTOS_AGENT_TERM_Y", str(max(0, height // 2 - TOP_BAR_H))))
         with open(path, "w", encoding="utf-8") as f:
             f.write(body)
@@ -430,6 +561,7 @@ def display(req):
         _say(ok=True, kept=False, untouched=True, display=f":{DISPLAY_NUM}", width=width, height=height)
         return
     _stop_recorder()  # a new screen: the recording of the old one ends first, with its file finished
+    _stop("keys")
     _stop("browser")
     _stop_desktop()
     _stop("x11vnc")
@@ -453,11 +585,14 @@ def display(req):
 
 
 def browser(req):
+    _stop("keys")
     _stop("browser")
     if not _running("xvfb"):
         raise RuntimeError("the screen is not running; start it first")
     port = int(req["port"])
     opts = dict(req["options"], host="127.0.0.1", port=port, ws_path=req["ws_path"])
+    if req.get("pin") is not None:
+        opts["openajar_pin"] = req["pin"]
     path = f"{DIR}/browser-{secrets.token_hex(6)}.json"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -469,7 +604,105 @@ def browser(req):
         env["MOZ_GTK_TITLEBAR_DECORATION"] = "client"
     proc = _spawn("browser", [VENV_PY, "-I", "-c", SERVE, path], env)
     _wait(proc, "browser", lambda: _tcp_listening(port), BROWSER_WAIT_S)
-    _say(ok=True, port=port)
+    out = {"ok": True, "port": port}
+    if isinstance(req.get("keys"), dict) and req["keys"].get("layout"):
+        out["keys"] = _keys(str(req["keys"]["layout"]))
+    else:
+        _plain_layout()
+    if "report_prefs" in req:
+        out["running"] = _readback(proc.pid, req.get("report_prefs") or [])
+    _say(**out)
+
+
+def _plain_layout():
+    """A launch with no layout of its own (an English browser): the screen's layout goes back to us, so a
+    layout an earlier launch set does not stay under take over and the screen tools."""
+    try:
+        subprocess.run(["setxkbmap", "-layout", "us"], env=_base_env(), timeout=5, check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001 - no setxkbmap, or no answer: the layout stays, and nothing else depends on it
+        return
+
+
+def _keys(layout):
+    """The keyboard helper (KEYS) on the screen, with this layout: {socket, chars}, or {error} (the browser runs
+    either way, and the node types those letters as text)."""
+    table, sock = DIR + "/keys.json", DIR + "/keys.sock"
+    try:
+        os.unlink(table)
+    except OSError:
+        pass
+    proc = _spawn("keys", ["/usr/bin/python3", "-I", "-c", KEYS, layout, sock, table], _base_env())
+    deadline = time.monotonic() + KEYS_WAIT_S
+    while not os.path.exists(table):
+        if proc.poll() is not None or time.monotonic() > deadline:
+            _stop("keys")
+            return {"error": _tail("keys", 300).strip() or "the keyboard helper did not start"}
+        time.sleep(0.05)
+    with open(table) as f:
+        return {"socket": sock, "chars": json.load(f), "layout": layout}
+
+
+def _children():
+    """Each process's children, from /proc."""
+    kids = {}
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat") as f:
+                ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        kids.setdefault(ppid, []).append(int(name))
+    return kids
+
+
+def _browser_pid(root):
+    """The Camoufox process the browser server under `root` started (Playwright starts it in a session of its
+    own, so it is found by its parents, not its process group), or None."""
+    kids, todo, found = _children(), [root], []
+    while todo:
+        for pid in kids.get(todo.pop(), []):
+            todo.append(pid)
+            try:
+                if os.path.basename(os.readlink(f"/proc/{pid}/exe")) == BROWSER_BIN:
+                    found.append(pid)
+            except OSError:
+                continue
+    return min(found) if found else None
+
+
+def _chunks(env, prefix):
+    parts = sorted((int(k[len(prefix):]), v) for k, v in env.items() if k.startswith(prefix) and k[len(prefix):].isdigit())
+    return json.loads("".join(v for _, v in parts)) if parts else None
+
+
+def _readback(root, want_prefs):
+    """What the launched browser runs with, read from its own environment as the node reads a browser of its
+    own (openajar.node.camoufox.pin.parse_camou_config): its config (CAMOU_CONFIG_<n>), the prefs the node
+    asks about (CAMOU_PREFS_<n>; never the rest, which hold the network's) and its build (the folder the
+    binary is in). {"error": ...} when no browser process is found."""
+    deadline = time.monotonic() + READBACK_WAIT_S
+    pid = _browser_pid(root)
+    while pid is None and time.monotonic() < deadline:
+        time.sleep(0.1)
+        pid = _browser_pid(root)
+    if pid is None:
+        return {"error": "no browser process under the browser server"}
+    try:
+        exe = os.readlink(f"/proc/{pid}/exe")
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            pairs = [kv.split("=", 1) for kv in f.read().decode(errors="replace").split("\0") if "=" in kv]
+        env = {k: v for k, v in pairs if k.startswith(("CAMOU_CONFIG_", "CAMOU_PREFS_"))}
+        config = _chunks(env, "CAMOU_CONFIG_")
+        prefs = _chunks(env, "CAMOU_PREFS_") or {}
+    except (OSError, ValueError) as e:
+        return {"error": f"the browser's environment does not read: {e}"}
+    if not isinstance(config, dict):
+        return {"error": "the browser process carries no CAMOU_CONFIG"}
+    return {"config": config, "prefs": {k: prefs[k] for k in want_prefs if k in prefs},
+            "build": os.path.basename(os.path.dirname(exe))}
 
 
 def clipboard(req):
@@ -506,6 +739,7 @@ def clipboard(req):
 def stop(req):
     _stop_recorder()
     for name in req.get("what") or ["browser", "display"]:
+        _stop("keys")  # the keyboard helper goes with the browser, and with the screen it types on
         if name == "display":
             _stop_desktop()
             _stop("x11vnc")

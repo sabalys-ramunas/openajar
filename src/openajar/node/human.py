@@ -26,6 +26,7 @@ from typing import Any
 
 from openajar.core.errors import InvalidRequest
 from openajar.node import agent_pointer
+from openajar.node.human_pace import _Pace
 
 Page = Any    # playwright.async_api.Page
 Target = Any  # playwright.async_api.Locator | playwright.async_api.ElementHandle
@@ -143,6 +144,9 @@ async def _pause(page: Page, lo: int, hi: int) -> None:
     await page.wait_for_timeout(_draw_ms(lo, hi))
 
 
+# Input on the real clock (holds and gaps that reach a far page as planned): human_pace.py.
+
+
 # ---- a lane's own draw --------------------------------------------------------------------------
 # Every call site keeps its bounds, but a lane draws a small offset once and every later draw is
 # shifted by it: one lane rests longer and moves its pointer in a tighter band over the page, the
@@ -247,12 +251,14 @@ async def _wheel(page: Page, dy: int, *, pace: str = "read") -> None:
     # at most 20% either way, so no call is a sliver of a notch (about 1 gesture in 75 drew a wider
     # spread before, and its smallest call fell under 0.8 of an ask)
     jitter = min(NOTCH_JITTER * math.exp(random.gauss(0.0, 0.3)), MAX_JITTER)
+    clock, at = _Pace(page), 0.0
     for i, count in enumerate(_call_notches(notches, per_call, jitter)):
         if i:
-            await page.wait_for_timeout(_notch_gap_ms(page, pace))
+            at += _notch_gap_ms(page, pace)
+            await clock.until(at, "wheel")
         step = round(count * ASK_PX * random.uniform(1 - jitter, 1 + jitter))
         agent_pointer.told_here(page, "scroll")
-        await page.mouse.wheel(0, step if dy > 0 else -step)
+        await clock.call(page.mouse.wheel(0, step if dy > 0 else -step), "wheel", at)
 
 
 async def _inner_size(page: Page) -> tuple[float, float]:
@@ -546,11 +552,12 @@ async def click(page: Page, target: Target) -> None:
 
 async def _press_release(page: Page) -> None:
     agent_pointer.told_here(page, "press")
-    await page.mouse.down()
+    clock = _Pace(page)
+    await clock.call(page.mouse.down(), "button", 0)
     try:
-        await _pause(page, 50, 230)
+        await clock.until(_draw_ms(*_locate(page, 50, 230)), "release")  # held this long as the page sees it
     finally:
-        await page.mouse.up()
+        await clock.call(page.mouse.up(), "release")
 
 
 async def hover(page: Page, target: Target) -> None:
@@ -736,7 +743,7 @@ class _Hands:
     def __init__(self, page: Page, before_key: Callable[[], Awaitable[None]] | None = None):
         self.page = page
         self.before_key = before_key
-        self.now = 0.0
+        self.clock = _Pace(page)  # the plan below, kept on the real clock
         self.held: list[tuple[float, str]] = []  # (time it comes up, key)
         self.shift = False
         self.last: tuple[str, float, float] | None = None  # the last key: what, when it went down, hold
@@ -745,10 +752,17 @@ class _Hands:
         self.offset = lane_offset(page)
         self.spread = HESITATION["spread"] * math.exp(random.gauss(0.0, 0.3))
 
+    @property
+    def now(self) -> float:
+        """Where the plan is, in ms since typing began."""
+        return self.clock.now
+
+    @now.setter
+    def now(self, value: float) -> None:
+        self.clock.now = value
+
     async def _until(self, t: float) -> None:
-        if t - self.now >= 1:
-            await self.page.wait_for_timeout(round(t - self.now))
-        self.now = max(self.now, t)
+        await self.clock.until(t, "key")
 
     async def _lift(self, before: float = math.inf) -> None:
         """Let up every held key due to come up before `before`, each at its time."""
@@ -757,7 +771,7 @@ class _Hands:
                 break
             await self._until(up_at)
             self.held.remove((up_at, key))
-            await self.page.keyboard.up(key)
+            await self.clock.call(self.page.keyboard.up(key), "key")
 
     async def _down(self, key: str) -> None:
         if self.before_key is not None:
@@ -767,14 +781,14 @@ class _Hands:
         hold = _hold_ms(self.offset)
         self.held.append((self.now + hold, key))
         self.last = (key, self.now, hold)
-        await self.page.keyboard.down(key)
+        await self.clock.call(self.page.keyboard.down(key), "key")
 
     async def _shift_up(self) -> None:
         if self.shift:
             await self._lift()
             await self._until(self.now + random.uniform(15, 60))
             self.shift = False
-            await self.page.keyboard.up("Shift")
+            await self.clock.call(self.page.keyboard.up("Shift"), "key")
 
     def _next_down(self, key: str) -> float:
         """When `key` goes down: a flight after the last key (longer after a space, now and then a
@@ -803,7 +817,7 @@ class _Hands:
                 if self.before_key is not None:
                     await self.before_key()
                 self.shift = True
-                await self.page.keyboard.down("Shift")
+                await self.clock.call(self.page.keyboard.down("Shift"), "key")
                 at = max(at, self.now + lead)
             else:
                 await self._lift()  # a run of capitals under one Shift: one key at a time
@@ -830,14 +844,15 @@ class _Hands:
         keyboard = x_keyboard(self.page)
         if not insert and keyboard is not None and keyboard.has(ch):
             hold = _hold_ms(self.offset)
-            if await keyboard.press(ch, hold):
+            # its event is the key coming up, a hold after the plan put it down
+            if await self.clock.call(keyboard.press(ch, hold), "xkey", self.now + hold):
                 self.now += hold
                 self.last = (ch, self.now - hold, hold)
                 return
         if insert:
-            await self.page.keyboard.insert_text(ch)
+            await self.clock.call(self.page.keyboard.insert_text(ch), "key")
         else:
-            await self.page.keyboard.type(ch)
+            await self.clock.call(self.page.keyboard.type(ch), "key")
         self.last = (ch, self.now, 0.0)
 
     async def finish(self) -> None:

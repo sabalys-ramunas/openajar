@@ -12,6 +12,8 @@ node; the live view's socket speaks VNC; closing the environment stops it all an
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import os
 import shutil
 import socket
@@ -59,12 +61,16 @@ def containers(node_name: str) -> list[str]:
                           capture_output=True, text=True, check=False).stdout.split()
 
 
-@pytest.fixture
-async def node(tmp_path):
+@contextlib.asynccontextmanager
+async def docker_node(tmp_path, settings: EnvSettings | None = None, home_setup=None):
+    """A node with the docker provider, the real lane manager and the environments service (`settings`,
+    browser = "vm" by default); `home_setup(home)` writes into its home first. Closes and removes all."""
     from openajar.node.lanes import build_lane_manager
 
     home = tmp_path / "h"  # short: the tunnel's sockets live in a temp folder, the lanes' under home
     home.mkdir()
+    if home_setup is not None:
+        home_setup(home)
     policy, rt = make_service(home)
     envs = EnvManager(home, runtime=rt, host=FakeHost(), launcher=DirectLauncher(),
                       settings=TermSettings(proxy_port=0, max_timeout_s=600))
@@ -77,21 +83,29 @@ async def node(tmp_path):
     lanes = build_lane_manager(NodeConfig(home=home, self_check=False), node_ip_probe=None)
     rt.register("lanes", lanes)
     await lanes.start()
-    mgr = EnvironmentManager(home, runtime=rt, settings=EnvSettings(browser="vm"))
+    mgr = EnvironmentManager(home, runtime=rt, settings=settings or EnvSettings(browser="vm"))
     rt.register("environments", mgr)
     grant, _ = policy.issue(subject={"id": "agent-1"}, workspaces=["*"], ceiling=Effect.COMMIT,
                             specials={"vm": {}, "exec": {}})
-    yield {"mgr": mgr, "envs": envs, "lanes": lanes, "grant": grant, "node_name": node_name}
-    for env in mgr.store.open():
-        await mgr.close(env.id, discard=True, reason="test end")
-    await lanes.shutdown()
-    await mgr.shutdown()
-    await vms.shutdown()
-    await envs.shutdown()
-    policy.close()
-    left = await asyncio.to_thread(containers, node_name)
-    if left:
-        await asyncio.to_thread(subprocess.run, ["docker", "rm", "-f", *left], capture_output=True, check=False)
+    try:
+        yield {"mgr": mgr, "envs": envs, "lanes": lanes, "grant": grant, "node_name": node_name, "home": home}
+    finally:
+        for env in mgr.store.open():
+            await mgr.close(env.id, discard=True, reason="test end")
+        await lanes.shutdown()
+        await mgr.shutdown()
+        await vms.shutdown()
+        await envs.shutdown()
+        policy.close()
+        left = await asyncio.to_thread(containers, node_name)
+        if left:
+            await asyncio.to_thread(subprocess.run, ["docker", "rm", "-f", *left], capture_output=True, check=False)
+
+
+@pytest.fixture
+async def node(tmp_path):
+    async with docker_node(tmp_path) as got:
+        yield got
 
 
 async def _rfb_banner(path: str) -> bytes:
@@ -186,3 +200,79 @@ def test_unix_socket_paths_fit(tmp_path):
             s.bind(path)
     finally:
         shutil.rmtree(folder, ignore_errors=True)
+
+
+GEOMETRY = """() => new Promise(res => {
+  addEventListener('mousemove', e => res({sx: e.screenX - e.clientX, sy: e.screenY - e.clientY,
+    ix: mozInnerScreenX, iy: mozInnerScreenY, x: screenX, y: screenY,
+    chromeX: (outerWidth - innerWidth) / 2, chromeY: outerHeight - innerHeight}), {once: true});
+})"""
+
+# the page keeps what it saw in the DOM: Camoufox runs Playwright's scripts in a world of their own
+KEYS_PAGE = ("<title>Keys</title><input id=t autofocus><script>const seen = []; addEventListener('keydown', "
+             "e => { seen.push([e.key, e.code, e.isTrusted]); document.body.dataset.seen = JSON.stringify(seen); }, "
+             "true)</script>")
+
+
+async def _open(node, title: str):
+    mgr, grant = node["mgr"], node["grant"]
+    eid = mgr.planned_id(f"session:{title}", title)
+    plan = await mgr.plan(eid, size=None, hours=1)
+    env = await mgr.create(eid, plan, binding=f"session:{title}", title=title, grant_id=grant.id,
+                           grant_root=grant.root_id, agent="agent-1", client=None, repo=None, ref=None)
+    env = await mgr.wait_ready(env.id, 600)
+    assert env.state == "ready", env.error
+    return env
+
+
+async def test_the_window_is_where_the_page_works_it_out(node):
+    """A page reads the content's place on the screen three ways: from where the window says it is and its
+    chrome, from mozInnerScreenX/Y, and from a mouse event's screenX/Y less its clientX/Y. On the desktop the
+    browser is a window placed so all three agree (vmharden.every_launch, vmbrowser_ctl.browser_place)."""
+    from openajar.node.interaction import create_interaction
+
+    lanes = node["lanes"]
+    env = await _open(node, "Geometry")
+    await node["envs"].job_start(env.terminal_lane, "mkdir -p /srv/g && echo '<title>G</title><p>g</p>' > /srv/g/index.html"
+                                 " && cd /srv/g && exec python3 -m http.server 3001 --bind 127.0.0.1")
+    await asyncio.sleep(1.0)
+    await lanes.open(env.browser_lane)
+    page = await lanes.live_session(env.browser_lane).page()
+    await create_interaction().navigate(page, "http://localhost:3001/")
+    seen = asyncio.ensure_future(page.evaluate(GEOMETRY))
+    await asyncio.sleep(0.3)
+    await page.mouse.move(400, 300)
+    await page.mouse.move(420, 310)
+    got = await asyncio.wait_for(seen, 10)
+    print("geometry", got)
+    assert (got["sx"], got["sy"]) == (got["ix"], got["iy"])  # a mouse event's screen place is the content's
+    assert abs(got["ix"] - got["x"] - got["chromeX"]) <= 2 and abs(got["iy"] - got["y"] - got["chromeY"]) <= 2, got
+    if node["mgr"]._vm_browsers.desktops.get(env.browser_lane):
+        w, h = vmbrowser.DESKTOP_WINDOW
+        assert (got["x"], got["y"]) == ((1920 - w) // 2, (1080 - h) // 2)  # centred, where the desktop put it
+
+
+async def test_letters_the_us_layout_lacks_are_real_keys_on_the_machine(node, monkeypatch):
+    """With a Lithuanian browser the machine's screen gets the lt layout and the keyboard helper presses ą on
+    its key (Digit1), Š with Shift, through the X server; an emoji still goes in as text."""
+    from openajar.environments import vmkeys
+    from openajar.node import human
+
+    monkeypatch.setattr(vmkeys, "layout_for", lambda locale: "lt")  # as with a Lithuanian exit (browser_language)
+    lanes = node["lanes"]
+    env = await _open(node, "Keys")
+    await node["envs"].job_start(env.terminal_lane, f"mkdir -p /srv/k && printf '%s' \"{KEYS_PAGE}\" > /srv/k/index.html"
+                                 " && cd /srv/k && exec python3 -m http.server 3002 --bind 127.0.0.1")
+    await asyncio.sleep(1.0)
+    await lanes.open(env.browser_lane)
+    page = await lanes.live_session(env.browser_lane).page()
+    await page.goto("http://localhost:3002/")
+    kb = human.x_keyboard(page)
+    assert kb is not None and kb.has("ą") and kb.has("Š") and not kb.has("a")
+    await page.click("#t")
+    await human.type_text(page, "Ąžuolas ėjo š 😀")
+    assert await page.input_value("#t") == "Ąžuolas ėjo š 😀"
+    seen = json.loads(await page.get_attribute("body", "data-seen"))
+    letters = {k: (c, t) for k, c, t in seen if k in "ĄžėŠš"}
+    assert letters["Ą"] == ("Digit1", True) and letters["ž"] == ("Equal", True), seen
+    assert not kb.broken

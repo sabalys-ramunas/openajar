@@ -104,7 +104,8 @@ ends it for good, saves included; environment_forget(title) deletes saves that a
 The browser loop: browser_navigate, then browser_snapshot reads the page as an outline where each element you \
 can act on has a ref like [ref=e12], then browser_act with that ref (snapshot="delta" returns only what \
 changed). To wait for an upload, a dialog or a spinner, call browser_wait; never poll with snapshots. \
-browser_screenshot costs far more: only for layout, images or canvas. The browser runs on the VM. For an app \
+browser_screenshot costs far more: only for layout, images or canvas. The browser runs on the VM (it may exit \
+through the owner's proxy). For an app \
 that is not a web page (a GUI you start on the VM's desktop), tools_more("screen") gives screen_snapshot, \
 screen_act and screen_open. This \
 openajar runs on the human's own computer and has no account browsers: the environment's browser is the only one. \

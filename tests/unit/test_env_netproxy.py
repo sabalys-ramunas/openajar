@@ -163,3 +163,46 @@ async def test_chains_to_an_upstream_proxy_with_credentials(echo):
     assert out.startswith(b"HTTP/1.1 403") and len(seen) == 2
     await fwd.close()
     srv.close()
+
+
+async def test_plain_http_through_an_upstream_can_ride_a_tunnel_so_its_credentials_stay_out_of_the_request():
+    seen = []
+
+    async def upstream(r, w):
+        seen.append((await r.readuntil(b"\r\n\r\n")).decode())
+        w.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+        await w.drain()
+        seen.append((await r.readuntil(b"\r\n\r\n")).decode())
+        w.write(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nvia")
+        await w.drain()
+        w.close()
+    srv, uport = await _server(upstream)
+    fwd = Forwarder("ws/x", EgressPolicy(["example.test"], "deny"), connect_timeout=3, tunnel_http=True,
+                    upstream=Upstream("127.0.0.1", uport, "user", "s3cret"))
+    lsock = socket.socket()
+    lsock.bind(("127.0.0.1", 0))
+    lsock.listen()
+    await fwd.serve(lsock)
+    out = await _request(lsock.getsockname()[1],
+                         b"GET http://example.test/p?q=1 HTTP/1.1\r\nHost: example.test\r\nX-Mine: 1\r\n\r\n")
+    assert out.endswith(b"via")
+    assert seen[0].startswith("CONNECT example.test:80 ") and "Proxy-Authorization: Basic " in seen[0]
+    assert seen[1].startswith("GET /p?q=1 HTTP/1.1") and "X-Mine: 1" in seen[1]
+    assert "proxy-authorization" not in seen[1].lower()
+    await fwd.close()
+    srv.close()
+
+
+async def test_an_upstream_that_does_not_answer_is_not_named_to_the_client():
+    dead = socket.socket()
+    dead.bind(("127.0.0.1", 0))  # bound, never listening: connections are refused
+    uport = dead.getsockname()[1]
+    fwd, port = await _forwarder(EgressPolicy(["example.test"], "deny"),
+                                 upstream=Upstream("127.0.0.1", uport, "user", "s3cret"))
+    for request in (b"CONNECT example.test:443 HTTP/1.1\r\n\r\n",
+                    b"GET http://example.test/ HTTP/1.1\r\nHost: example.test\r\n\r\n"):
+        out = await _request(port, request)
+        assert out.startswith(b"HTTP/1.1 502") and b"the upstream proxy did not answer" in out
+        assert str(uport).encode() not in out and b"127.0.0.1" not in out
+    await fwd.close()
+    dead.close()

@@ -25,7 +25,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from openajar.env.netproxy import EgressPolicy, Forwarder, split_hostport
+from openajar.env.netproxy import EgressPolicy, Forwarder, Upstream, split_hostport
 from openajar.environments.network import BLOCKED_KEPT, refusal
 
 log = logging.getLogger("openajar.environments")
@@ -77,11 +77,16 @@ class Blocked:
 
 class EnvForwarder(Forwarder):
     """netproxy's forwarder for one environment: its list, its refusals recorded, and CONNECT to a bound
-    host handed to the swap (`intercept(host) -> handler or None`)."""
+    host handed to the swap (`intercept(host) -> handler or None`). With `upstream` (the browser's own
+    forwarder, openajar.environments.browserproxy) what it lets through goes out by the owner's proxy."""
 
-    def __init__(self, env_id: str, policy: EnvPolicy, blocked: Blocked, *,
-                 intercept: Callable[[str, int], Any] | None = None):
-        super().__init__(f"env/{env_id}", policy, on_event=self._seen)
+    def __init__(self, env_id: str, policy: EgressPolicy, blocked: Blocked, *,
+                 intercept: Callable[[str, int], Any] | None = None, upstream: Upstream | None = None,
+                 max_conns: int = 64):
+        # with an upstream, plain http goes through a CONNECT too: the owner's credentials never ride in a
+        # request whose target the machine chose
+        super().__init__(f"env/{env_id}", policy, on_event=self._seen, upstream=upstream, max_conns=max_conns,
+                         tunnel_http=upstream is not None)
         self.blocked = blocked
         self.intercept = intercept
 

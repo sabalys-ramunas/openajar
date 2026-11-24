@@ -88,6 +88,13 @@ class EnvSettings(BaseModel):
     # or none. An agent may only narrow it; `openajar environments allow --network/--host` changes it.
     network: Literal["full", "limited", "none"] = "full"
     allow_hosts: list[str] = Field(default_factory=list)  # more hosts limited reaches (api.example.com, .example.com)
+    # The owner's proxies (labels of secrets/proxies.json) a "vm" browser exits through: each new environment
+    # takes the one fewest open environments use (openajar.environments.browserproxy). Empty: no proxy.
+    browser_proxies: list[str] = Field(default_factory=list)
+    # The language a proxied browser claims (navigator.languages, Accept-Language, Intl): "exit" follows the exit's
+    # country (lt-LT, lt, en-US, en at a Lithuanian exit), as a browser there would; or fixed tags ("en-US", or
+    # "de-DE, de, en") for an agent that should read sites in that language wherever the exit is.
+    browser_language: str = "exit"
     # Pausing (openajar.environments.pausing): on a provider that pauses with memory (Morph), a save that
     # ends the machine pauses it instead of a snapshot and a delete (false: as on any other provider).
     pause_saves: bool = True
@@ -120,6 +127,25 @@ class EnvSettings(BaseModel):
 
         return list(dict.fromkeys(check_host(h) for h in v))
 
+    @field_validator("browser_proxies")
+    @classmethod
+    def _browser_proxies(cls, v: list[str]) -> list[str]:
+        from openajar.core.models import PROXY_LABEL_RE
+
+        labels = [str(label).strip() for label in v]
+        for label in labels:
+            if not PROXY_LABEL_RE.fullmatch(label):
+                raise ValueError(f"not a proxy label: {label!r} (a label of `openajar proxy list`, like lt1)")
+        return list(dict.fromkeys(labels))
+
+    @field_validator("browser_language")
+    @classmethod
+    def _browser_language(cls, v: str) -> str:
+        from openajar.environments.exitplace import EXIT_LANGUAGE, parse_languages
+
+        tags = parse_languages(v)
+        return ", ".join(tags) if tags else EXIT_LANGUAGE
+
     @model_validator(mode="after")
     def _live_needs_opt_in(self) -> EnvSettings:
         if self.default_keep == "live" and not self.allow_keep_live:
@@ -131,6 +157,21 @@ def load_settings(home: Path) -> EnvSettings:
     path = Path(home) / SETTINGS_FILE
     data = tomllib.loads(path.read_text()) if path.exists() else {}
     return EnvSettings(**data)
+
+
+def update_settings(home: Path, updates: dict) -> Path:
+    """Merge `updates` into environments.toml in `home` (a None value leaves its key as it is), after
+    checking that agentosd would start with the result. Returns the file's path."""
+    import tomli_w
+
+    from openajar.core.config import write_private
+
+    path = Path(home) / SETTINGS_FILE
+    data = tomllib.loads(path.read_text()) if path.exists() else {}
+    data.update({k: v for k, v in updates.items() if v is not None})
+    EnvSettings(**data)  # refuse what agentosd would not start with
+    write_private(path, tomli_w.dumps(data))
+    return path
 
 
 class Call(BaseModel):
@@ -234,6 +275,9 @@ class Environment(BaseModel):
     # bound for its app (never a value), and the hosts its network refused (host, count, last).
     network: Literal["full", "limited", "none"] = "full"
     secrets: list[str] = Field(default_factory=list)
+    # The owner's proxy its browser exits through (a label of browser_proxies, picked at open and kept by its
+    # saves, so a resume keeps the exit IP its sign-ins know). None: no proxy. Never its credentials.
+    browser_proxy: str | None = None
     blocked: list[dict] = Field(default_factory=list)
     # Prepared machines and the app (openajar.environments.preparing): what the open found and did with the
     # repository's .openajar/environment.toml, and the dev server it started.

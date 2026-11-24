@@ -15,12 +15,16 @@ machine instead, and drives it from here:
   the environment's tunnel forwards to the machine's x11vnc socket, so the viewer, its signed links
   and take over are the same code as for a display on the node.
 - The browser: Camoufox's browser server on the machine, on 127.0.0.1 only, at a random path; the
-  node connects Playwright to it through the tunnel (openajar.environments.tunnels). It is a fresh
-  browser each time the lane opens (a browser server cannot serve a persistent profile); the sign-ins
-  made in it (cookies, local storage) are read when the lane closes and when it is saved, and its
-  next context opens with them (openajar.environments.signins). It holds no account of the owner's.
-- On the machine, localhost is the machine: no proxy. Closing the lane stops the browser, releasing
-  the display stops the screen, and closing the environment does both before its tunnel goes.
+  node connects Playwright to it through the tunnel (openajar.environments.tunnels). It is a new
+  browser process each time the lane opens (a browser server cannot serve a persistent profile), but the
+  same device: the fingerprint its first launch drew is read back, kept on the node and given to every
+  later launch, and a save carries it to the resumed environment (openajar.environments.vmpin). The
+  sign-ins made in it (cookies, local storage) are read when the lane closes and when it is saved, and
+  its next context opens with them (openajar.environments.signins). It holds no account of the owner's.
+- On the machine, localhost is the machine: never through a proxy. The rest of the browser's traffic
+  goes out through the owner's proxy when the environment has one (openajar.environments.browserproxy).
+  Closing the lane stops the browser, releasing the display stops the screen, and closing the
+  environment does both before its tunnel goes.
 """
 
 from __future__ import annotations
@@ -49,6 +53,8 @@ log = logging.getLogger("openajar.environments")
 BROWSER_DIR = "/opt/agentos-browser"
 VENV_PY = f"{BROWSER_DIR}/venv/bin/python"
 READY = f"{BROWSER_DIR}/ready"
+# One command at bring-up: the ready marker (the versions browser.sh installed) and the build Camoufox launches.
+READY_CHECK = f"cat {READY} && {{ echo; cat {BROWSER_DIR}/cache/camoufox/config.json 2>/dev/null; true; }}"
 DESKTOP_READY = "/opt/agentos-desktop/ready"
 DESKTOP_VERSION = 1     # desktop.sh VERSION: a machine whose ready marker says less installs the desktop again
 DESKTOP_SCRIPT_ON_VM = "/usr/local/lib/agentos-env/desktop.sh"
@@ -62,12 +68,14 @@ BOOT = ('import json,sys; d=json.load(sys.stdin); '
 CTL_TIMEOUT_S = 150.0
 INSTALL_TIMEOUT_S = 1500.0
 CONNECT_TIMEOUT_MS = 30_000
+READBACK_BYTES = 4 << 20  # the browser's answer carries its config (fonts, voices, WebGL): well over 64 KB at times
 # A launch is four steps, each with its own limit, so a step that hangs fails with its name and the time
 # each step took, well inside the lane's wall (openajar.node.deadlines.WALL_S, 210 s). Field report
 # 2026-11-16: browser_navigate failed twice with only "could not get the browser ... within 210 s" while
 # the machine's log showed its browser server up in 1.4 s; the hang was between the node and the machine.
 LAUNCH_STEPS = ("start", "connect", "context", "page")
-STEP_LIMIT_S = {"start": 90.0, "connect": CONNECT_TIMEOUT_MS / 1000 + 5, "context": 30.0, "page": 30.0}
+# "start": the browser (up to 90 s on the machine), then its keyboard helper and the fingerprint readback
+STEP_LIMIT_S = {"start": 110.0, "connect": CONNECT_TIMEOUT_MS / 1000 + 5, "context": 30.0, "page": 30.0}
 STEP_DOING = {"start": "starting the browser server on the machine", "connect": "connecting to it through the tunnel",
               "context": "opening its browser context", "page": "opening its first page"}
 STEP_DONE = {"start": "browser server started", "connect": "connected through the tunnel",
@@ -95,6 +103,9 @@ DESKTOP_PREFS = {"browser.tabs.inTitlebar": 1, "ui.GtkCSDCloseButton": 0, "brows
 DESKTOP_DIR = "desktop"
 WALLPAPER_MAX = 8 * 1024 * 1024
 WALLPAPER_NAMES = ("wallpaper.svg", "wallpaper.png", "wallpaper.jpg", "wallpaper.jpeg")
+# The OS the machine's browser claims when the node's engine names none (openajar local has no engine of its own):
+# Linux, what the machine is and what a server node's lanes claim by default (lane_os).
+VM_IDENTITY_OS = ["linux"]
 # Playwright drives the machine's browser from here: the `local` extra of openajar (scripts/install.sh) has it.
 NO_PLAYWRIGHT = ("this openajar has no Playwright, which drives the environment's browser on its machine. Install "
                  "openajar again with scripts/install.sh, or add the local extra: uv tool install --force "
@@ -113,10 +124,13 @@ def ctl_command() -> str:
     return f"{VENV_PY} -I -c {shlex.quote(BOOT)}"
 
 
-def install_script() -> str:
+def install_script(*, again: bool = False) -> str:
     """browser.sh with its requirements, as one script for a shell on the machine: both files are
-    written next to setup.sh, then browser.sh runs (it does nothing where the stack is ready)."""
+    written next to setup.sh, then browser.sh runs (it does nothing where the stack is ready). `again`:
+    the machine's stack is at other versions (vmpin.stale), so its venv and ready marker go first."""
     out = ["set -eu", "mkdir -p /usr/local/lib/agentos-env"]
+    if again:
+        out.append(f"rm -rf {BROWSER_DIR}/venv {READY}")
     for path, body, mark in ((REQUIREMENTS_ON_VM, _text("browser-requirements.txt"), "AGENTOS_BROWSER_REQUIREMENTS"),
                              (SCRIPT_ON_VM, _text("browser.sh"), "OPENAJAR_BROWSER_SCRIPT")):
         out.append(f"cat > {path} <<'{mark}'\n{body.rstrip()}\n{mark}")
@@ -145,8 +159,8 @@ def browser_options(spec: LaneSpec, *, identity_os: list[str] | None = None,
                     size: tuple[int, int] = DESKTOP, desktop: bool = False) -> dict[str, Any]:
     """What the machine's Camoufox starts with: the node's own prefs for a lane (openajar.node.camoufox.
     engine), a desktop window that fills the screen, as an environment's browser has on the node, or on
-    the desktop session a window with the wallpaper around it (desktop_window). No proxy and no PAC: on
-    the machine, localhost is the machine."""
+    the desktop session a window with the wallpaper around it (desktop_window). No proxy option and no PAC:
+    on the machine, localhost is the machine (an owner's proxy is a Firefox pref, network.vm_browser_prefs)."""
     width, height = size
     window = desktop_window(size) if desktop else (width, height)
     prefs = {**CACHE_PREFS, **STEADY_CHROME_PREFS, **WHEEL_PREFS, **LINUX_HOST_PREFS, CANVAS_PREF: ""}
@@ -157,8 +171,7 @@ def browser_options(spec: LaneSpec, *, identity_os: list[str] | None = None,
         "i_know_what_im_doing": True, "geoip": False, "screen": [width, height], "window": list(window),
         "firefox_user_prefs": prefs,
     }
-    if identity_os:
-        opts["os"] = list(identity_os)
+    opts["os"] = list(identity_os or VM_IDENTITY_OS)
     return opts
 
 
@@ -337,6 +350,10 @@ class VmBrowsers:
         self._installing: dict[str, asyncio.Task] = {}  # environment -> its desktop being installed
         self.launching: dict[str, LaunchSteps] = {}  # lane -> its launch in progress (launch_hint)
         self._unanswered: dict[str, float] = {}  # environment -> when its machine last failed a stop
+        # environment -> the Camoufox build its machine launches, and the camoufox package there (vmpin)
+        self.builds: dict[str, str | None] = {}
+        self.camoufox: dict[str, str | None] = {}
+        self._stale: set[str] = set()  # environments whose machine has the browser at other versions
 
     # ---- which lanes
     def env_for(self, lane_id: str) -> Any:
@@ -380,9 +397,11 @@ class VmBrowsers:
                     store.touch(env.terminal_lane, at=before or env.created_at)
 
     async def ctl(self, env: Any, action: str, *, timeout_s: float = CTL_TIMEOUT_S, check: bool = True,
-                  **args: Any) -> dict[str, Any]:
+                  max_bytes: int | None = None, **args: Any) -> dict[str, Any]:
+        """`max_bytes`: an answer larger than the node's usual output limit (the browser's config read back)."""
         req = json.dumps({"script": ctl_script(), "action": action, **args})
-        res = await self._exec(env, ctl_command(), stdin=req, timeout_s=timeout_s)
+        res = await self._exec(env, ctl_command(), stdin=req, timeout_s=timeout_s,
+                               **({"max_bytes": max_bytes} if max_bytes else {}))
         line = next((ln for ln in reversed((res.stdout or "").splitlines()) if ln.startswith("{")), "")
         try:
             out = json.loads(line) if line else {}
@@ -396,8 +415,23 @@ class VmBrowsers:
         return out
 
     async def installed(self, env: Any) -> bool:
-        res = await self._exec(env, f"test -f {READY}", timeout_s=30)
-        return res.exit_code == 0
+        """The browser's stack is on the machine at the versions browser-requirements.txt pins (a machine of an
+        older image has another: vmpin.stale). Notes the Camoufox build it launches, for the pin's version."""
+        from openajar.environments import vmpin
+
+        res = await self._exec(env, READY_CHECK, timeout_s=30)
+        if res.exit_code != 0:
+            return False
+        out = res.stdout or ""
+        self.builds[env.id] = vmpin.active_build(out) or self.builds.get(env.id)
+        self.camoufox[env.id] = vmpin.marker_camoufox(out) or self.camoufox.get(env.id)
+        off = vmpin.stale(out)
+        if off:
+            log.warning("environment %s: the browser on its machine is %s; installing it again", env.id,
+                        ", ".join(f"{name} {have}, not {want}" for name, (have, want) in sorted(off.items())))
+            self._stale.add(env.id)
+            return False
+        return True
 
     def wants_desktop(self) -> bool:
         return bool(getattr(getattr(self.svc, "settings", None), "desktop", True))
@@ -439,13 +473,19 @@ class VmBrowsers:
     async def _ensure_browser(self, env: Any) -> None:
         if await self.installed(env):
             return
-        log.info("environment %s: installing the browser on its machine (no image has it)", env.id)
-        res = await self._exec(env, "sh -s", stdin=install_script(),
+        again = env.id in self._stale
+        if not again:
+            log.info("environment %s: installing the browser on its machine (no image has it)", env.id)
+        res = await self._exec(env, "sh -s", stdin=install_script(again=again),
                                          timeout_s=INSTALL_TIMEOUT_S)
         if res.exit_code != 0:
             tail = (res.stderr or res.stdout or "").strip()[-600:]
             raise EngineError(f"environment {env.id}: installing the browser on its machine failed "
                               f"(exit {res.exit_code}): {tail}")
+        self._stale.discard(env.id)
+        if again:  # the build it launches now, for the pin's version
+            with contextlib.suppress(Exception):
+                await self.installed(env)
 
     # ---- the environment's screen
     def screen_soon(self, env: Any) -> None:
@@ -755,13 +795,23 @@ class VmBrowsers:
                                   desktop=on_desktop)
         from openajar.environments.network import vm_browser_prefs
 
-        options["firefox_user_prefs"].update(vm_browser_prefs(getattr(env, "network", "full")))  # a closed network
-        await steps.run("start", self.ctl(env, "browser", options=options, port=_vm_port(), ws_path=ws_path,
-                                          timeout_s=STEP_LIMIT_S["start"] - 5,
-                                          **({"own_titlebar": True} if on_desktop else {})))
+        # the owner's proxy (openajar.environments.browserproxy): checked first, and no browser without it
+        proxied = await getattr(self.svc, "browser_proxy_options", _no_proxy)(env)
+        options["firefox_user_prefs"].update(vm_browser_prefs(getattr(env, "network", "full"), proxied=bool(proxied)))
+        options.update(proxied)
+        from openajar.environments import vmkeys, vmpin
+
+        # the environment's one device: its pin, or the first launch's draw read back (vmpin)
+        pinning = vmpin.prepare(self.svc, env, spec.id, options, build=self.builds.get(env.id))
+        started = await steps.run("start", self.ctl(env, "browser", options=options, port=_vm_port(), ws_path=ws_path,
+                                                    timeout_s=STEP_LIMIT_S["start"] - 5, max_bytes=READBACK_BYTES,
+                                                    **pinning.request, **vmkeys.request(options, spec.locale),
+                                                    **({"own_titlebar": True} if on_desktop else {})))
+        self._settle_pin(pinning, started)
         profile_dir.mkdir(parents=True, exist_ok=True)
 
         async def stop_remote() -> None:
+            await vmkeys.detach(env.id)
             if self.svc.store.get(env.id).open:
                 await self.ctl(env, "stop", what=["browser"], timeout_s=30)
 
@@ -796,12 +846,34 @@ class VmBrowsers:
             session.guard = LaneGuard(spec.id, sites=spec.sites, strict=spec.egress_strict,
                                       trace=EgressTrace(profile_dir.parent / TRACE_NAME)
                                       ).attach(session.context, session.routes)
+            await vmkeys.attach(env.id, tunnel, session.context, started)  # letters the US layout lacks, as keys
             # a window on the screen at once, as a browser on the node shows one
             await steps.run("page", session.page())
         except BaseException:
             await run_to_end(session.close())
             raise
         return session
+
+
+    def _settle_pin(self, pinning: Any, started: Any) -> None:
+        from openajar.environments import vmpin
+
+        running = started.get("running") if isinstance(started, dict) else None
+        if not self.svc.store.get(pinning.env_id).open:
+            return  # closed while its browser started: its pin was dropped, and none is written after it
+        if isinstance(running, dict) and running.get("build"):
+            self.builds[pinning.env_id] = str(running["build"])
+        try:
+            vmpin.settle(self.svc, pinning, running, camoufox=self.camoufox.get(pinning.env_id))
+        except Exception:
+            log.exception("%s: the browser's fingerprint was not settled", pinning.lane_id)
+
+
+async def _no_proxy(env: Any) -> dict[str, Any]:
+    """A service with no browser proxies (a test's fake). An environment that has one never starts without it."""
+    if getattr(env, "browser_proxy", None):
+        raise EngineError(f"the browser's proxy {env.browser_proxy} cannot be set up here, so the browser did not start")
+    return {}
 
 
 def _vm_port() -> int:

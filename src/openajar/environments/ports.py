@@ -310,9 +310,11 @@ async def close_all(mgr: Any, env_id: str) -> None:
 
 
 async def ended(mgr: Any, env_id: str) -> None:
-    """A closed environment: its forwards stop, and the sign-ins the node held for its browser go (a
-    save holds its own copy)."""
-    from openajar.environments import signins
+    """A closed environment: its forwards stop, and the sign-ins and the pinned device the node held for
+    its browser go (a save holds its own copy)."""
+    from openajar.environments import signins, vmpin
 
     await close_all(mgr, env_id)
     signins.drop(mgr, env_id)
+    with contextlib.suppress(OSError):
+        vmpin.drop(mgr, env_id)

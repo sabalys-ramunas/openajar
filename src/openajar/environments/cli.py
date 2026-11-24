@@ -598,19 +598,9 @@ def repo_remove(remote: Annotated[str, typer.Argument(help="The repository, like
 
 def _write_settings(updates: dict[str, Any], home: Path | None = None) -> Path:
     """Merge `updates` into environments.toml in `home` (default: this command's --home or OPENAJAR_HOME)."""
-    import tomllib
+    from openajar.environments.models import update_settings
 
-    import tomli_w
-
-    from openajar.core.config import write_private
-    from openajar.environments.models import SETTINGS_FILE, EnvSettings
-
-    path = (home or _home()) / SETTINGS_FILE
-    data = tomllib.loads(path.read_text()) if path.exists() else {}
-    data.update({k: v for k, v in updates.items() if v is not None})
-    EnvSettings(**data)  # refuse what agentosd would not start with
-    write_private(path, tomli_w.dumps(data))
-    return path
+    return update_settings(home or _home(), updates)
 
 
 @app.command()

@@ -2,7 +2,7 @@
 
 import os as _os
 
-__version__ = "0.5.4"
+__version__ = "0.6.0"
 
 LEGACY_ENV_PREFIX = "AGENTOS_"  # legacy-name: the variables' prefix before the rename (docs/LEGACY-NAMES.md)
 

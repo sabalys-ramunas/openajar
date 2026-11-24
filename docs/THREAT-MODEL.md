@@ -390,6 +390,25 @@ What this does not stop:
 - **A key bound to a host the agent controls.** The binding is the owner's; bind a key only to the
   host that issued it.
 
+### The browser's proxy (docs/ENVIRONMENTS.md "The browser's proxy")
+
+The owner's proxies (`openajar proxy add`, `secrets/proxies.json`, 0600) can carry an environment's browser
+(`browser = "vm"`, `browser_proxies` in `environments.toml`). The agent is root on the machine, so the proxy's
+credentials never go there.
+
+| Question | Answer |
+|---|---|
+| Who chooses the proxy | the owner, at the node (`openajar proxy add/remove`, `browser_proxies`). The node picks one per environment at open and keeps it in the save. `environment_open` has no proxy argument, and no tool, page, repository file or command names or changes one |
+| Where the credentials are | in `secrets/proxies.json` and in agentosd's memory: the node's forwarder for that browser (an HTTP proxy on this computer's loopback) adds them on its way to the owner's proxy. Never in what is sent to the machine (the browser's options and prefs, the control script's requests, the tunnel's argv), a tool result, a log line or the record |
+| What the agent sees | `network.browser_proxy` in `environment()`: the label, the exit IP and its country. Not the proxy's host, port, username or password |
+| What reaches the proxy | the forwarder forwarded to the machine's `127.0.0.1:3132` over its SSH connection. Any process on the machine can use that port without credentials, as with `3130`: root there can send its own traffic out through the owner's proxy too (from the proxy's address, at the proxy's cost). On a closed network it keeps to the network's list; on a `full` one it takes any public host on any port and refuses private, loopback and link-local addresses and local names |
+| When the proxy fails | the browser does not start (the node checks the proxy before each launch), and once it runs the forwarder answers 502: the browser never goes out from the machine's own address. Other programs on the machine never used the proxy |
+
+What this does not stop: the proxy provider sees every host the browser visits and the plain-HTTP traffic
+(HTTPS stays end to end), and a process on the machine that ignores the browser's settings goes out the
+machine's own way, as before. On the node, any local process can use the forwarder's loopback port, as it can
+the allowlist proxy's.
+
 ## Logins in an environment's browser
 
 [ENVIRONMENTS.md, Signing in](ENVIRONMENTS.md#signing-in) is how it works. The owner binds a vault login to environments (`openajar environments login add <site> --title/--repo/--all`),

@@ -149,6 +149,9 @@ class SaveManifest(BaseModel):
     warned_at: datetime | None = None        # the owner was told it is about to be removed (saved_days)
     signins: int = 0                         # cookies of the browser's sign-ins in the payload (browser.json)
     keep_signins: bool = True                # the environment saves its browser's sign-ins (its opt-out)
+    browser_proxy: str | None = None         # the owner's proxy its browser exited through (a label, never a credential)
+    fingerprint: bool = False                # the payload holds its browser's pinned device (fingerprint.json, vmpin)
+    browser_exit_ip: str | None = None       # the address sites saw through it at the last launch before the save
 
     @property
     def title_key(self) -> str:

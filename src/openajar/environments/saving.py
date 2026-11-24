@@ -456,6 +456,9 @@ class Saving:
         from openajar.environments import signins
 
         cookies = signins.write_payload(tmp, found.get("signins"))  # sealed with the rest, below
+        from openajar.environments import vmpin
+
+        pinned = vmpin.write_payload(tmp, vmpin.for_save(self, env))  # its browser's device, sealed too
         key = await self._saves_key(create=True)
         sums = await asyncio.to_thread(seal_payload, tmp, sid, key)
         size = sum((tmp / n).stat().st_size for n in sums)
@@ -481,7 +484,9 @@ class Saving:
             services=[Service(cmd=self._scrub(s.cmd, max_len=300), cwd=s.cwd, port=s.port) for s in kept],
             containers=found["containers"], own_branches=list(env.own_branches), own_heads=dict(env.own_heads),
             pushed=self._pushed_with_links(env), proofs=self._proof_titles(env), agent_note=env.note,
-            encrypted=key is not None, checksums=sums, signins=cookies, keep_signins=env.keep_signins)
+            encrypted=key is not None, checksums=sums, signins=cookies, keep_signins=env.keep_signins,
+            browser_proxy=env.browser_proxy, fingerprint=pinned,
+            browser_exit_ip=self.browser_exit_ip(env))  # type: ignore[attr-defined]  (BrowserProxies)
         m.summary = self.auto_summary(m, env)
         await asyncio.to_thread(self.saves().commit, tmp, m)
         return m
@@ -719,7 +724,8 @@ class Saving:
         return {"save_id": m.id, "saved_at": clock.iso_or_none(m.saved_at, z=True), "from": plan["restore"]["from"],
                 "branch": m.branch, "head": (m.head or "")[:12] or None, "files_restored": 0, "commits_restored": 0,
                 "services": [], "note": self.resume_note(m, plan["restore"]["from"]), "missing": [],
-                "state": "restoring", "snapshot_missing": bool(plan["restore"].get("snapshot_missing"))}
+                "state": "restoring", "snapshot_missing": bool(plan["restore"].get("snapshot_missing")),
+                "browser_proxy": m.browser_proxy}  # create() takes it out (browserproxy.assign_browser_proxy)
 
     def resume_note(self, m: SaveManifest, source: str) -> str:
         head = (f"Resumed from save {m.id} of {_when(m.saved_at)} "
@@ -756,6 +762,9 @@ class Saving:
             from openajar.environments import signins
 
             files_signins = signins.read_saved(files.get(signins.PAYLOAD))
+            from openajar.environments import vmpin
+
+            vmpin.restore(self, env, files.get(vmpin.PAYLOAD))  # its browser is the device the save's was
         from openajar.environments import comeback, signins
 
         await signins.restore(self, env, files_signins)

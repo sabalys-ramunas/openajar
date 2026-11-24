@@ -32,9 +32,6 @@ from openajar.core.config import (
 from openajar.core.errors import OpenajarError
 from openajar.core.models import ProxyConfig, parse_lane_id
 
-PROXY_LABEL_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,40}")  # used with fullmatch
-
-
 PROXY_HOST_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
 
 

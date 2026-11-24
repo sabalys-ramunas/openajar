@@ -7,95 +7,6 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "openajar"
-version = "0.5.4"
-source = { editable = "." }
-dependencies = [
-    { name = "croniter" },
-    { name = "cryptography" },
-    { name = "dnspython" },
-    { name = "h11" },
-    { name = "httpx" },
-    { name = "idna" },
-    { name = "jsonschema" },
-    { name = "mcp" },
-    { name = "publicsuffixlist" },
-    { name = "pydantic" },
-    { name = "pyotp" },
-    { name = "pyyaml" },
-    { name = "starlette" },
-    { name = "textual" },
-    { name = "tomli-w" },
-    { name = "typer" },
-    { name = "uvicorn" },
-    { name = "webauthn" },
-    { name = "websockets" },
-]
-
-[package.optional-dependencies]
-local = [
-    { name = "pillow" },
-    { name = "playwright" },
-]
-node = [
-    { name = "camoufox", extra = ["geoip"] },
-    { name = "playwright" },
-]
-studio = [
-    { name = "pillow" },
-    { name = "playwright" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "openajar", extra = ["node", "studio"] },
-    { name = "openapi-spec-validator" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "camoufox", extras = ["geoip"], marker = "extra == 'node'", specifier = ">=0.5.9,<0.6" },
-    { name = "croniter", specifier = ">=6.2.4" },
-    { name = "cryptography", specifier = ">=50.0.2" },
-    { name = "dnspython", specifier = ">=2.8.0" },
-    { name = "h11", specifier = ">=0.16" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "idna", specifier = ">=3.20" },
-    { name = "jsonschema", specifier = ">=4.26.0" },
-    { name = "mcp", specifier = ">=2.3,<3" },
-    { name = "pillow", marker = "extra == 'local'", specifier = ">=11" },
-    { name = "pillow", marker = "extra == 'studio'", specifier = ">=11" },
-    { name = "playwright", marker = "extra == 'local'", specifier = ">=1.62,<1.63" },
-    { name = "playwright", marker = "extra == 'node'", specifier = ">=1.62,<1.63" },
-    { name = "playwright", marker = "extra == 'studio'", specifier = ">=1.62,<1.63" },
-    { name = "publicsuffixlist", specifier = ">=1.1.2.20261101" },
-    { name = "pydantic", specifier = ">=2.7" },
-    { name = "pyotp", specifier = ">=2.10.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "starlette", specifier = ">=1.10.0" },
-    { name = "textual", specifier = ">=8.2.8" },
-    { name = "tomli-w", specifier = ">=1.0" },
-    { name = "typer", specifier = ">=0.12" },
-    { name = "uvicorn", specifier = ">=0.30" },
-    { name = "webauthn", specifier = ">=3.0.1" },
-    { name = "websockets", specifier = ">=17.4" },
-]
-provides-extras = ["node", "local", "studio"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "openajar", extras = ["node"] },
-    { name = "openajar", extras = ["studio"] },
-    { name = "openapi-spec-validator", specifier = ">=0.7" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "pytest-asyncio", specifier = ">=0.23" },
-    { name = "ruff", specifier = ">=0.5" },
-]
-
-[[package]]
 name = "annotated-doc"
 version = "0.0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -1202,6 +1113,95 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/b5/4da41c328788f575838f97a098fe8ca691ebc6f6fd73ad4a262ee40b184d/numpy-2.5.4-cp315-cp315t-win32.whl", hash = "sha256:ad62a416ddcf863bf44bba76fbf6b53366ab0692e294f51cae4b5fbe0d246788", size = 6335804, upload-time = "2026-10-10T20:05:19.921Z" },
     { url = "https://files.pythonhosted.org/packages/98/94/6482ddfa3d312490cb9358f375bf2ad56427dbea8769187158e94d653753/numpy-2.5.4-cp315-cp315t-win_amd64.whl", hash = "sha256:38f47be9f74ab870d2633b5456ae519c43758a8d1fd05342f0ce4ecc034396ee", size = 12890095, upload-time = "2026-10-10T20:05:21.875Z" },
     { url = "https://files.pythonhosted.org/packages/48/7f/c2d1b436b6e7cfebac140c2579a298344b85f2991a2ce5c3615cefb29400/numpy-2.5.4-cp315-cp315t-win_arm64.whl", hash = "sha256:7a14a461d9340f1b46b8648578aed9cdb8b3b018a8fac6c1dde2c9192a01a87f", size = 10883718, upload-time = "2026-10-10T20:05:28.547Z" },
+]
+
+[[package]]
+name = "openajar"
+version = "0.6.0"
+source = { editable = "." }
+dependencies = [
+    { name = "croniter" },
+    { name = "cryptography" },
+    { name = "dnspython" },
+    { name = "h11" },
+    { name = "httpx" },
+    { name = "idna" },
+    { name = "jsonschema" },
+    { name = "mcp" },
+    { name = "publicsuffixlist" },
+    { name = "pydantic" },
+    { name = "pyotp" },
+    { name = "pyyaml" },
+    { name = "starlette" },
+    { name = "textual" },
+    { name = "tomli-w" },
+    { name = "typer" },
+    { name = "uvicorn" },
+    { name = "webauthn" },
+    { name = "websockets" },
+]
+
+[package.optional-dependencies]
+local = [
+    { name = "pillow" },
+    { name = "playwright" },
+]
+node = [
+    { name = "camoufox", extra = ["geoip"] },
+    { name = "playwright" },
+]
+studio = [
+    { name = "pillow" },
+    { name = "playwright" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "openajar", extra = ["node", "studio"] },
+    { name = "openapi-spec-validator" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "camoufox", extras = ["geoip"], marker = "extra == 'node'", specifier = ">=0.5.9,<0.6" },
+    { name = "croniter", specifier = ">=6.2.4" },
+    { name = "cryptography", specifier = ">=50.0.2" },
+    { name = "dnspython", specifier = ">=2.8.0" },
+    { name = "h11", specifier = ">=0.16" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "idna", specifier = ">=3.20" },
+    { name = "jsonschema", specifier = ">=4.26.0" },
+    { name = "mcp", specifier = ">=2.3,<3" },
+    { name = "pillow", marker = "extra == 'local'", specifier = ">=11" },
+    { name = "pillow", marker = "extra == 'studio'", specifier = ">=11" },
+    { name = "playwright", marker = "extra == 'local'", specifier = ">=1.62,<1.63" },
+    { name = "playwright", marker = "extra == 'node'", specifier = ">=1.62,<1.63" },
+    { name = "playwright", marker = "extra == 'studio'", specifier = ">=1.62,<1.63" },
+    { name = "publicsuffixlist", specifier = ">=1.1.2.20261101" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pyotp", specifier = ">=2.10.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "starlette", specifier = ">=1.10.0" },
+    { name = "textual", specifier = ">=8.2.8" },
+    { name = "tomli-w", specifier = ">=1.0" },
+    { name = "typer", specifier = ">=0.12" },
+    { name = "uvicorn", specifier = ">=0.30" },
+    { name = "webauthn", specifier = ">=3.0.1" },
+    { name = "websockets", specifier = ">=17.4" },
+]
+provides-extras = ["node", "local", "studio"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "openajar", extras = ["node"] },
+    { name = "openajar", extras = ["studio"] },
+    { name = "openapi-spec-validator", specifier = ">=0.7" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+    { name = "ruff", specifier = ">=0.5" },
 ]
 
 [[package]]

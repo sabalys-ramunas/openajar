@@ -32,7 +32,11 @@ EXIT_IP_URLS = ("https://ipinfo.io/ip", "https://api.ipify.org")
 # it through a proxy at most once a day per proxy (docs/API.md, "Lane check"); no cookie or
 # account data is ever sent with it.
 EXIT_INFO_URL = "https://ipinfo.io/json"
-EXIT_INFO_KEYS = ("ip", "country", "region", "city", "timezone")
+EXIT_INFO_KEYS = ("ip", "country", "region", "city", "timezone", "loc")  # loc: "latitude,longitude"
+# A second answer on where the exit is, asked through the proxy only when ipinfo's leaves something out
+# (openajar.environments.browserproxy): its keys are mapped to ipinfo's.
+EXIT_GEO_URL = "https://get.geojs.io/v1/ip/geo.json"
+EXIT_GEO_KEYS = {"ip": "ip", "country_code": "country", "region": "region", "city": "city", "timezone": "timezone"}
 X_SOCKET_DIR = Path("/tmp/.X11-unix")
 MEMINFO = Path("/proc/meminfo")
 MiB = 1024 * 1024
@@ -448,7 +452,7 @@ class Host:
 
     def proxy_exit_info(self, proxy: ProxyConfig, *, timeout: float = 15.0) -> dict[str, str]:
         """The exit IP through this proxy and where ipinfo.io places it, in one request:
-        {"ip", "country", "region", "city", "timezone"} (only the keys ipinfo gave). Raises OSError."""
+        {"ip", "country", "region", "city", "timezone", "loc"} (only the keys ipinfo gave). Raises OSError."""
         text = self._through_proxy(proxy, EXIT_INFO_URL, timeout=timeout, accept="application/json")
         try:
             data = json.loads(text)
@@ -456,6 +460,23 @@ class Host:
         except (ValueError, AttributeError):
             raise OSError("no exit IP in the answer from ipinfo.io") from None
         out = {k: str(data[k]) for k in EXIT_INFO_KEYS if isinstance(data.get(k), str) and data[k]}
+        out["ip"] = ip
+        return out
+
+    def proxy_exit_geo(self, proxy: ProxyConfig, *, timeout: float = 15.0) -> dict[str, str]:
+        """The same as proxy_exit_info from a second service (geojs.io), in ipinfo's keys. Raises OSError."""
+        text = self._through_proxy(proxy, EXIT_GEO_URL, timeout=timeout, accept="application/json")
+        try:
+            data = json.loads(text)
+            ip = str(ipaddress.ip_address(str(data.get("ip", "")).strip()))
+        except (ValueError, AttributeError):
+            raise OSError("no exit IP in the answer from geojs.io") from None
+        out = {ours: str(data[theirs]) for theirs, ours in EXIT_GEO_KEYS.items()
+               if isinstance(data.get(theirs), str) and data[theirs]}
+        try:
+            out["loc"] = f"{float(data['latitude']):.4f},{float(data['longitude']):.4f}"
+        except (KeyError, TypeError, ValueError):
+            pass
         out["ip"] = ip
         return out
 

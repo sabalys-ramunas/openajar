@@ -24,6 +24,7 @@
   <a href="#install">Install</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#signed-in-without-showing-a-password">Logins</a> ·
+  <a href="#a-browser-the-web-lets-in">Browser</a> ·
   <a href="#what-it-costs">Costs</a> ·
   <a href="#safe-by-default">Safety</a> ·
   <a href="#faq">FAQ</a> ·
@@ -126,7 +127,8 @@ with a screenshot and the pull request link. You can take over at any time.
 
 1. **Your agent asks for its computer** when the task needs one. openajar rents a VM in your own
    account (Hetzner or Morph) or starts a Docker container, clones your repository into it and
-   starts a browser there.
+   starts a browser there: [Camoufox](https://camoufox.com), a Firefox build that sites take for a
+   person's browser ([more](#a-browser-the-web-lets-in)).
 2. **The agent works on it like on its own laptop.** It edits files, runs the tests in its
    terminal, starts the dev server and opens the page in its browser, where `localhost` is the
    machine. It can open a program on the machine's desktop (an app that is not a web page) and use it
@@ -181,6 +183,110 @@ in again the same way, without asking you, or you do it from your laptop:
 `openajar environments login "Shop admin" admin.example.com`. Nothing else in your vault reaches the
 machine.
 
+## A browser the web lets in
+
+The agent's browser is [Camoufox](https://camoufox.com), an open source build of Firefox made so
+that a site sees an ordinary person's browser and not an automation tool. openajar runs it on the
+agent's computer, on a real screen, and adds what a browser alone does not have:
+
+- **A hand, not a script.** The pointer moves along curved paths at a person's speed, keys are held
+  and released with a person's timing, and the wheel scrolls in notches. Over the connection to the
+  machine the timing is corrected, so the page sees what was planned.
+- **One device per computer.** Each computer keeps one browser fingerprint (its GPU, fonts, screen
+  and the rest) through every restart, save and resume, so a site sees the same device come back
+  with the same sign-ins.
+- **Your own address.** A cloud machine goes out from a datacenter address, and many sites refuse
+  those whatever the browser is. Give the browser a static residential proxy and it goes out from an
+  internet provider's address instead.
+
+### Add a proxy
+
+```sh
+openajar proxy add lt1 host:port:user:pass   # as your provider gives it
+openajar proxy test lt1                      # its exit IP, country, timezone and the language the browser will use
+```
+
+That is the whole setup. Every computer opened after that takes one of your proxies for its browser
+and keeps it, so a computer always comes back from the same address. With several proxies, each open
+computer takes a different one. On a server node, add `--environments` and set `browser = "vm"`.
+The details are in [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md#the-browsers-proxy).
+
+- **The location is matched for you.** Before each launch openajar asks where the proxy goes out
+  and sets the browser to that place: its timezone and clock, its language and `Accept-Language`,
+  its number and date formats, and the address WebRTC shows. It hands out no position, like a
+  Firefox where nobody has answered the location prompt. A proxy in Lithuania gives a browser in
+  Vilnius time that asks for Lithuanian, then English. There is nothing to configure. To keep one language wherever the proxy is, set `browser_language = "en-US"` in
+  `environments.toml`.
+- **The password stays with you.** The machine's browser only gets an address on its own loopback.
+  openajar on your side logs in to the proxy, so an agent with a root shell on the machine cannot
+  read the credentials.
+- **It never goes out without it.** If the proxy is down or refuses the login, the browser does not
+  start. It does not fall back to the datacenter address. Names are looked up by the proxy, and
+  nothing of the browser leaves from the machine's own address.
+- **Only the browser uses it.** apt, npm, git and the shell go out as before, so your proxy carries
+  pages and not package downloads.
+
+### Which proxy, and what it costs
+
+Use a **static residential proxy** (also sold as an ISP proxy): one fixed address that belongs to an
+internet provider. It is the right kind for an agent's computer for two reasons.
+
+- **It is a real provider's address that stays.** Sign-ins, the fingerprint and the address all stay
+  together, as they do for a person at home. A rotating pool changes the address between requests,
+  which signs accounts out and looks like many people sharing one browser.
+- **It is the cheap kind for browsing.** A static address is billed per address a month with the
+  traffic included. A rotating pool is billed per gigabyte, and a browser that loads real pages with
+  their images uses gigabytes.
+
+As an example, [IPRoyal](https://iproyal.com/pricing/static-residential-proxies/) listed these prices
+in November 2026 (check the page, prices change):
+
+| | Price |
+|:--|:--|
+| A static residential proxy, 30 days | from **2.70 USD** per address, traffic included (fair use) |
+| The same on a 90 day plan | from **2.40 USD** per address a month |
+| A rotating residential pool, for comparison | from about **7 USD per GB** at 1 GB |
+
+One address per computer that is open at the same time is enough: two agents at once need two, and
+a computer that is saved needs none while it sleeps. Take an address in the country you want sites
+to see, close to where your machines run, since a long way between the two shows up as delay. The
+address matters as much as the browser: some sites keep lists of the ranges proxy sellers resell, so
+if one address is refused where another works, ask your provider for a different one.
+
+### What it gets through
+
+Checked on 24 November 2026 from a Hetzner VM in Nuremberg (Camoufox 0.5.9, Firefox 158), through a
+static residential proxy in Lithuania, with openajar's defaults:
+
+| Check | Result |
+|:--|:--|
+| [BrowserScan](https://www.browserscan.net/bot-detection) | normal on every bot check; authenticity 100%, proxy: no; timezone and language match the address |
+| [whoer.net](https://whoer.net) | disguise 100%; proxy: no, anonymizer: no, blacklist: no |
+| [Fingerprint](https://fingerprint.com) playground | bot, tampering, virtual machine, VPN and proxy: not detected; suspect score 0 |
+| [CreepJS](https://abrahamjuliot.github.io/creepjs/) | 0% headless, 0% stealth, 13% like headless |
+| [bot.sannysoft.com](https://bot.sannysoft.com), [rebrowser bot detector](https://bot-detector.rebrowser.net), [deviceandbrowserinfo](https://deviceandbrowserinfo.com/are_you_a_bot), BotD | pass, not a bot |
+| A shop behind DataDome and one behind PerimeterX | the page, no challenge |
+| eBay: home, search, an item | works. From the machine's datacenter address, without a proxy: 403 on every page |
+| Amazon: home, search, a product, a second search | works, four sessions out of four, arriving through the home page (and its "Continue shopping" button when it shows one) and its search box |
+| Leaks: a packet capture on the machine while the browser worked | none: no DNS, WebRTC or QUIC from the machine's own address |
+| The same address after 140 page loads, a browser restart, and a save and resume | yes |
+
+What it does not get through, from the same runs:
+
+- **A page opened cold by its deep link.** Amazon answered a search link with no cookies from these
+  proxy addresses with an error page, from every browser we tried, stock Firefox and Chrome
+  included. Arriving as a person does (the home page, then the site's own search) worked.
+- **[Pixelscan](https://pixelscan.net)** reports "masking detected". It agrees on the location and
+  finds no proxy and no automation.
+- **A machine with no graphics card.** A cloud VM draws its pages in software, and a check that
+  times the drawing can tell.
+- **Lists of resold addresses.** Services that track proxy sellers labelled two of our three test
+  addresses as a proxy, and one site refused an address outright. That is the address, not the
+  browser.
+
+A proxy is for reaching sites as an ordinary visitor. It does not make a site's rules stop applying:
+mind its terms and its rate limits.
+
 ## What it costs
 
 openajar itself is free and open source. You pay your VM provider directly, with your own account.
@@ -192,6 +298,7 @@ openajar itself is free and open source. You pay your VM provider directly, with
 | A saved computer (about 4 GB) | about **0.05 EUR a month** |
 | A computer kept running all month | about **7.80 EUR a month** |
 | Docker on your own computer | **free** |
+| A static residential proxy for the browser (optional, from a proxy provider) | from about **2.70 USD a month** per address ([more](#which-proxy-and-what-it-costs)) |
 
 Setup sets limits that hold whatever an agent asks: **10 EUR a month, 4 hours per VM, 2 VMs at
 once**. Change them any time with `openajar setup limits`. The agent sees the cost so far, and so do

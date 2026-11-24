@@ -155,7 +155,7 @@ class FakeMachine:
 
     async def exec(self, lane_id, cmd, *, timeout_s=None, stdin=None, grant_id=None, max_bytes=None, oom_check=False):
         self.ran.append(cmd)
-        if cmd == f"test -f {vmbrowser.READY}":
+        if cmd == vmbrowser.READY_CHECK:
             return ExecResult(exit_code=0 if self.installed else 1, stdout="", stderr="", duration_s=0.01)
         if cmd == "sh -s":
             self.installed = True
@@ -525,7 +525,7 @@ async def test_open_with_the_browser_on_the_machine(vm_node):
     assert isinstance(lanes.engine, vmbrowser.RoutedEngine) and isinstance(lanes.displays, vmbrowser.RoutedDisplays)
     assert mgr._vm_browsers.handles(env.browser_lane) and not mgr._vm_browsers.handles(env.terminal_lane)
     ran = [cmd for cmd, _g in vm_node["machine"].ran]
-    assert f"test -f {vmbrowser.READY}" in ran and "sh -s" not in ran  # the image has the browser already
+    assert vmbrowser.READY_CHECK in ran and "sh -s" not in ran  # the image has the browser already
     # the lane is the node's, as always (its tools, its guard, its live view link)
     assert lanes.get(env.browser_lane).spec.proxy_label == f"env-{env.id}" and "browser" in out["links"]
 
@@ -537,7 +537,7 @@ async def test_a_machine_without_the_browser_gets_it_while_it_comes_up(vm_node):
     plain = machine.exec
 
     async def exec_(lane_id, cmd, *, stdin=None, **kw):
-        if cmd == f"test -f {vmbrowser.READY}":
+        if cmd == vmbrowser.READY_CHECK:
             done = any(c == "sh -s" and s == vmbrowser.install_script() for c, s in installs)
             return ExecResult(exit_code=0 if done else 1, stdout="", stderr="", duration_s=0.01)
         if cmd == "sh -s" and stdin == vmbrowser.install_script():
@@ -556,7 +556,7 @@ async def test_a_failed_install_fails_the_environment_with_its_reason(vm_node):
     from test_environments import opened
 
     async def exec_(lane_id, cmd, *, stdin=None, **kw):
-        if cmd == f"test -f {vmbrowser.READY}":
+        if cmd == vmbrowser.READY_CHECK:
             return ExecResult(exit_code=1, stdout="", stderr="", duration_s=0.01)
         if cmd == "sh -s" and stdin == vmbrowser.install_script():
             return ExecResult(exit_code=100, stdout="", stderr="E: Unable to locate package xvfb", duration_s=0.01)

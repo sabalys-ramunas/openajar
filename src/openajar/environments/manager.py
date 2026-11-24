@@ -38,6 +38,7 @@ from openajar.core.errors import InvalidRequest, LaneExists, NotFound, OpenajarE
 from openajar.core.models import ProxyConfig, utcnow
 from openajar.environments.activity import Activity
 from openajar.environments.bringup import BringUp
+from openajar.environments.browserproxy import BrowserProxies
 from openajar.environments.caller import binding_of
 from openajar.environments.checkpoints import Checkpoints
 from openajar.environments.downloads import Downloads
@@ -151,8 +152,8 @@ def check_ref(ref: str | None) -> str | None:
 
 
 class EnvironmentManager(Picking, Sizing, BringUp, Views, Proofs, Uploads, Downloads, Pausing, Saving, Activity,
-                         SshAccess, Updates, Network, Preparing, PrepBuild, WarmPool, Replay, Checkpoints, Watching,
-                         Waking, Recording, Fleet, Logins, Liveness):
+                         SshAccess, Updates, Network, BrowserProxies, Preparing, PrepBuild, WarmPool, Replay,
+                         Checkpoints, Watching, Waking, Recording, Fleet, Logins, Liveness):
     """The environments service. Which environment a call means and attaching by title (Picking), its
     sizing and cost (Sizing), its bring-up (BringUp), its read side (Views), its saves (Saving) and what
     counts as busy (Activity), and in local mode the agent's own ssh (SshAccess) are mixins in their own
@@ -532,6 +533,7 @@ class EnvironmentManager(Picking, Sizing, BringUp, Views, Proofs, Uploads, Downl
             if keep == "live":
                 self.check_keep("live")
             self.check_limits(plan)
+            self.assign_browser_proxy(env)  # the owner's proxy its browser exits through (browserproxy)
             self.store.put(env)
         self._planned = {k: v for k, v in self._planned.items() if v != env_id}
         with contextlib.suppress(Exception):  # the warm pool boots the image the newest open used

@@ -16,6 +16,8 @@ WORKSPACE_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,30}")  # the workspace part o
 # A device's name (AUD-02): one pinned fingerprint plus one proxy that several lanes
 # share, like one office PC with a browser profile per account. Example: biz-a-pc.
 DEVICE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
+# A proxy's label in secrets/proxies.json (`openajar proxy add lt1 ...`), used with fullmatch.
+PROXY_LABEL_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,40}")
 # `none` means "off the device" wherever a device is named (lane set-device, the API's ?to=).
 RESERVED_DEVICE_NAMES = frozenset({"none"})
 

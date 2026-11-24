@@ -195,8 +195,19 @@ With `"vm"` the browser, its screen and its live view run on the VM, bound to th
 The node starts them over the SSH connection it already holds and drives the browser through that
 connection. Every browser tool works the same way, `browser_screenshot(proof=..., width=...)`
 included (proofs stay on the node), and so do the live view and take over. On the VM, `localhost` is
-the VM, so no proxy is needed. It is a fresh browser each time it opens. A VM booted from an image
-without the browser installs it while the environment starts (a few minutes). `ui_check` still runs
+the VM, so no proxy is needed. Each time it opens it is a new browser process, but the same device:
+its first launch draws a fingerprint (user agent, screen, GPU, fonts and the rest), the node
+reads it back from the running browser and keeps it with the environment's data
+(`environments/<id>/fingerprint.json` in the node's home, never on the VM), and every later launch
+gets exactly that one. A save carries it, so a resumed environment, in any chat and on a new machine,
+is the same device; a new environment draws its own. What a pin never holds follows each launch: the
+timezone and WebRTC address come from the browser proxy's exit, the languages (and the speech
+voices drawn for them) from the launch's locale, and the screen and window from the launch when it
+asks for another size (full screen or the desktop's window). When the VM's
+Camoufox is a newer Firefox than the pin says, only the pin's Firefox version moves with it (the old
+pin is kept beside it), as a real Firefox updates itself. A VM booted from an image without the
+browser installs it while the environment starts (a few minutes), and so does one whose browser is at
+other versions than `browser-requirements.txt` pins (an older image). `ui_check` still runs
 studio's browser on the node, through the tunnel. An environment keeps the setting it opened with.
 
 Either way the browser starts while the environment comes up, beside the clone, and keeps starting
@@ -526,6 +537,117 @@ splits: `localhost` and the machine's loopback go through the machine's tunnel (
 before), and every other host goes out from the node through the same list. Sites then see the
 node's address, not the machine's. With `browser = "vm"`, the machine's browser uses the proxy on
 `127.0.0.1:3130` there, and `localhost` stays the machine's own.
+
+### The browser's proxy
+
+A browser that goes out from a cloud machine's address is stopped by many sites. Give the
+environments' browsers a static residential proxy (an HTTP proxy) instead:
+
+```
+openajar proxy add lt1 host:port:user:pass     # with openajar local it joins the environments' list
+openajar proxy test lt1                        # its exit IP, country and timezone
+openajar proxy list                            # "environments" marks the ones environments use
+openajar proxy remove lt1
+```
+
+With openajar local, `proxy add` puts the label in `browser_proxies` in `environments.toml`. On a server
+node, where proxies also serve account lanes, it does that only with `--environments`
+(`--no-environments` takes a label out). The command writes `environments.toml` again, as
+`openajar environments allow` does, so comments in that file are not kept. It applies to environments
+opened from now on:
+
+```toml
+browser_proxies = ["lt1", "lt2", "lt3"]   # the pool; empty (the default): no proxy
+```
+
+Which one. A new environment takes the proxy its title (else its repository) had the last time, when no
+open environment uses that one; otherwise the proxy the fewest open environments use (ties: the list's
+order). It keeps it while it is open: closing and opening its browser, and a restart of the node, keep
+the label and so the address. A save keeps the label and the exit IP the browser had, so a resume (in
+any chat, a paused machine's too) goes out from the same address the sites its sign-ins know have
+seen. When that label is no longer in the list or in `proxies.json`, the resume picks again and its
+`missing` says so; when the label is there but its proxy now exits from another IP (`openajar proxy add
+<label> ... --yes` pointed it at another host), `missing` says that too. The label is the identity:
+`proxy add --yes` and `proxy remove` name the open environments and the saves that use it, since they
+then reach their sites from a new address. An agent never chooses a proxy (there is no `environment_open`
+argument for it) and sees only `network.browser_proxy` in `environment()`: the label, the exit IP and
+its country, never the proxy's host, port or credentials.
+
+Only the browser uses it. The credentials stay on the node: for an environment with a proxy, the node
+runs a forwarder of the browser's own that chains to your proxy, and the machine's SSH connection
+carries it to `127.0.0.1:3132` there. The browser gets only Firefox settings that point at it, with
+`localhost` kept direct (your dev server), WebRTC only through the proxy, HTTP/3 and DNS prefetch off.
+apt, npm, git and the shell keep their own way out (direct on a `full` network, `3130` on a closed one).
+On a `full` network the forwarder lets the browser reach any public host on any port, never a private
+or local address; on a closed one it keeps to the network's list. Plain `http://` pages go through a
+tunnel of the proxy too (a CONNECT to the site's port 80), so your credentials are never in a request
+whose address and headers a page chose. A proxy that refuses a tunnel to port 80 cannot load plain
+`http://` pages (the browser shows a proxy error); `https://` is not affected. One exception on a closed network: a host of a
+[bound secret](#secrets-for-the-app) is answered by the node's secret swap, so the browser's requests to
+it leave from the node's own address, not from the proxy.
+
+It fails closed. Before each launch the node asks ipinfo.io through the proxy. When the proxy cannot
+be reached or refuses its credentials, the browser does not start, and the error names the label and
+says to run `openajar proxy test <label>`. Once it runs, Firefox never falls back from its proxy and
+the forwarder answers 502 when your proxy refuses (without your proxy's address in the answer): the
+browser never goes out from the machine's own address. After `openajar proxy remove`, an environment
+that is open keeps its proxy until it closes or the node restarts; after a restart its browser does not
+start until the environment is closed and opened again.
+
+Where it is. The same check gives the exit's country, timezone and location, and on every launch the
+browser claims what a browser at that address would, nothing of the datacenter's:
+
+- Its clock: the exit's timezone in `Intl` and `Date`, with that zone's offset and summer time.
+- Its position: none, as an untouched Firefox at that address. The Permissions API says `prompt`, and a
+  page that asks for the position waits, as for a person who has not answered the prompt. Camoufox's own
+  way, the exit's city given without a prompt and `granted`, reads as a bot to a site never visited before
+  (the red team's `engine.geo_permission`), and with the position given it answers at once even when the
+  permission says `prompt` (measured), so the browser gets no position at all. `openajar proxy test`
+  still names the place the exit is near.
+- WebRTC: the exit's IP; the machine's own addresses are hidden behind mDNS names, and ICE goes only
+  through the proxy.
+- Its languages: `navigator.languages`, the `Accept-Language` header (with Firefox's own q values),
+  `Intl`'s default locale (how numbers and dates are written) and the browser's own language (a form's
+  messages), the same in pages, frames and workers.
+- Its keyboard: the machine's screen gets the layout of that language (Lithuanian, German, Polish...), and a
+  letter the US layout lacks (ą, ß, é) is typed on its key through the X server, as a person there types it,
+  not inserted with no key press. English keeps the US layout; a language with no layout here, or a
+  machine that cannot (no libXtst), types those letters as text, as before.
+
+The language follows `browser_language` in `environments.toml`:
+
+```toml
+browser_language = "exit"      # the default: the exit country's language, then English
+# browser_language = "en-US"   # a fixed language, wherever the exit is ("de-DE, de, en" for several)
+```
+
+With `"exit"`, a Lithuanian exit gives `lt-LT, lt, en-US, en` (Intl writes `1 234 567,891`), a Japanese one
+`ja-JP, ja, en-US, en`, a Brazilian one `pt-BR, pt, en-US, en`: the language first, then English, as
+Firefox's own builds for those languages and most browsers set up there look. The language is the
+official one most people in the country speak (CLDR's tables, the ones Camoufox's GeoIP draws from, but
+always the main one: a draw by speaker share gives a Lithuanian address Russian about one time in three). Where
+English is an official language a good part of the people use (India, Nigeria, the Philippines), it is
+English (`en-IN, en`). Canada, Belgium and Switzerland follow the region: Quebec, Wallonia and Brussels,
+and Romandy are French, Ticino Italian. A fixed `"en-US"` suits an agent that should read sites in
+English: an English browser at a Lithuanian address is common and no reason to block by itself, but it
+does not match the place, and sites answer in the language the browser asks for. `openajar proxy test` shows what the browser claims through each proxy:
+
+```
+lt1  exit 203.0.113.7  Vilnius, LT  Europe/Vilnius
+     browser: Europe/Vilnius, lt-LT, lt, en-US, en (exit near 54.69,25.28)
+```
+
+When ipinfo.io's answer leaves the country or the timezone out (or names a zone that does not exist),
+the node asks a second service (geojs.io) through the same proxy, and keeps its answer for that exit IP
+for some hours. When neither gives it, the timezone is the country's (where it has several, the zone
+nearest to where the exit is). With no country at all, the clock is left to the browser, and the
+language stays the lane's.
+
+With openajar local the browser claims Linux, what the machine is.
+
+It covers `browser = "vm"` only. An environment whose browser runs on the node (`browser = "node"`)
+exits through its machine as before: that browser's traffic is the tunnel's SOCKS proxy, which does
+not chain to another proxy, so `proxy add` says so on such a node.
 
 ### Secrets for the app
 

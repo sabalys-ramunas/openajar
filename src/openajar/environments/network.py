@@ -34,6 +34,9 @@ NetworkLevel = Literal["full", "limited", "none"]
 LEVELS: tuple[str, ...] = ("full", "limited", "none")   # widest first
 PROXY_PORT_ON_VM = 3130    # the node's allowlist proxy, on the machine's loopback (a -R of its tunnel)
 SWAP_PORT_ON_VM = 3131     # the node's secret swap, where the machine's relay sends bound hosts
+# The browser's own proxy (openajar.environments.browserproxy): a forwarder on the node that chains to the
+# owner's proxy, so the credentials stay on the node. Only the browser on the machine is pointed at it.
+BROWSER_PROXY_PORT_ON_VM = 3132
 RELAY_ADDR = "127.0.10.1"  # bound hosts in the machine's /etc/hosts: its relay listens here on 443
 CA_PATH = "/usr/local/share/ca-certificates/agentos-environment.crt"
 BLOCKED_KEPT = 50          # refused hosts kept per environment
@@ -268,11 +271,47 @@ def vm_script(level: str, *, variables: dict[str, str], ca_pem: str | None, secr
     return "\n".join(lines) + "\n"
 
 
-def vm_browser_prefs(level: str) -> dict[str, object]:
-    """Firefox's settings for a browser on the machine (browser = "vm") in a closed network: the node's
-    proxy on the machine's loopback; localhost stays the machine's own."""
-    if level == "full":
+def vm_browser_prefs(level: str, *, proxied: bool = False) -> dict[str, object]:
+    """Firefox's settings for a browser on the machine (browser = "vm"): with an owner's proxy
+    (`proxied`), the node's browser forwarder on the machine's loopback (BROWSER_PROXY_PORT_ON_VM); else in a
+    closed network the node's allowlist proxy. localhost stays the machine's own either way.
+
+    Proxied, nothing of the browser's leaves past the proxy: WebRTC gathers only through it (no UDP from
+    the machine's own address), HTTP/3 is off (QUIC is UDP, which an HTTP proxy does not carry) and DNS
+    prefetch is off (names are looked up by the proxy, never by the machine's datacenter resolver)."""
+    if not proxied and level == "full":
         return {}
-    return {"network.proxy.type": 1, "network.proxy.http": "127.0.0.1", "network.proxy.http_port": PROXY_PORT_ON_VM,
-            "network.proxy.ssl": "127.0.0.1", "network.proxy.ssl_port": PROXY_PORT_ON_VM,
-            "network.proxy.no_proxies_on": "localhost, 127.0.0.1, ::1", "network.proxy.share_proxy_settings": True}
+    port = BROWSER_PROXY_PORT_ON_VM if proxied else PROXY_PORT_ON_VM
+    prefs: dict[str, object] = {
+        "network.proxy.type": 1, "network.proxy.http": "127.0.0.1", "network.proxy.http_port": port,
+        "network.proxy.ssl": "127.0.0.1", "network.proxy.ssl_port": port,
+        "network.proxy.no_proxies_on": "localhost, 127.0.0.1, ::1", "network.proxy.share_proxy_settings": True}
+    if proxied:
+        from openajar.node.camoufox.prefs import WEBRTC_PROXY_PREFS
+
+        prefs.update({**WEBRTC_PROXY_PREFS, "network.http.http3.enable": False, "network.dns.disablePrefetch": True,
+                      "network.dns.disablePrefetchFromHTTPS": True, "network.predictor.enabled": False})
+        prefs.update(PROXIED_QUIET_PREFS)
+    return prefs
+
+
+# A proxied browser makes no request of its own, beside the pages': each of these would either leave without
+# the proxy or show the exit as a browser whose background traffic no person's browsing makes. Camoufox's build
+# sets most of them as its defaults (camoufox.cfg); as prefs of the launch they hold whatever a build ships.
+# Not in its defaults, and Firefox's own are the risky way: failover_direct (true) and the DoH mode.
+PROXIED_QUIET_PREFS: dict[str, object] = {
+    # a proxy that fails is never skipped for a direct connection from the machine's datacenter address
+    "network.proxy.failover_direct": False,
+    # the connectivity and captive portal checks (detectportal.firefox.com on a timer): a failed one marks
+    # the browser offline or behind a portal, and they run whatever the page does
+    "network.connectivity-service.enabled": False, "network.captive-portal-service.enabled": False,
+    # DNS over HTTPS off by choice (5): names are the proxy's to look up, never a resolver of the browser's
+    "network.trr.mode": 5,
+    # telemetry, health reports, studies (Normandy) and the region lookup: uploads and polls to Mozilla
+    "toolkit.telemetry.enabled": False, "datareporting.healthreport.uploadEnabled": False,
+    "datareporting.policy.dataSubmissionEnabled": False, "app.normandy.enabled": False,
+    "app.shield.optoutstudies.enabled": False, "browser.region.update.enabled": False,
+    "browser.region.network.url": "",
+    # Safe Browsing: its lists are polled from Google every half hour while it is on
+    "browser.safebrowsing.malware.enabled": False, "browser.safebrowsing.phishing.enabled": False,
+}

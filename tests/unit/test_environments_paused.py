@@ -196,6 +196,21 @@ async def test_close_pauses_the_machine_and_open_resumes_it_with_its_processes(n
     assert mgr.get(again["id"]).workdir == "/work/shop"
 
 
+async def test_a_paused_save_carries_the_browsers_pinned_device(node):
+    from openajar.environments import vmpin
+
+    mgr = node["mgr"]
+    out = await opened(node, keep="save")
+    path = vmpin.pin_path(mgr.home, out["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    vmpin.write_private_json(path, {"fonts": ["Pinned Sans"], "agentos:pin": {"version": 2}})
+    closed = await node["call"]("environment_close")
+    assert closed["machine"] == "paused"
+    again = await node["call"]("environment_open", title=TITLE, session="chat-2")
+    assert again["resumed"]["from"] == "paused"
+    assert vmpin.load(mgr, again["id"], "lane").config == {"fonts": ["Pinned Sans"]}
+
+
 async def test_without_cloud_init_the_setup_waits_for_a_check_that_ran(node, monkeypatch):
     """A setup check whose ssh failed (exit 255) is no answer: the node asks again, and runs the setup
     only once the machine said it has none (the docker e2e of 2026-11-18 ran it on a failed check)."""

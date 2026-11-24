@@ -7,7 +7,8 @@ could not even clone the repository. The level goes into the plan, so the machin
 While it runs (`net_forwards`, called as the tunnels start): per environment, on this computer's
 loopback, the allowlist proxy (openajar.environments.envproxy) and, with bound secrets, the swap
 (openajar.environments.swap). The tunnel forwards them into the machine as 127.0.0.1:3130 and :3131
-(`-R`, like the git gateway). For the browser on the node, a split SOCKS proxy.
+(`-R`, like the git gateway). For the browser on the node, a split SOCKS proxy. For a browser on the
+machine with an owner's proxy, its own forwarder to that proxy, as 127.0.0.1:3132 (browserproxy).
 
 After the tunnels (`net_setup`, one step of the bring-up): the machine's side, set by the node over
 SSH (openajar.environments.network.vm_script): the proxy variables, apt's and Docker's proxy, the
@@ -63,6 +64,10 @@ class NetNode:
     swap: Any = None                          # swap.SwapProxy
     swap_port: int | None = None
     socks: Any = None                         # envproxy.SplitSocks
+    browser_forwarder: Any = None             # the browser's own forwarder to the owner's proxy (browserproxy)
+    browser_proxy_port: int | None = None
+    browser_upstream: Any = None              # that proxy (a ProxyConfig: it stays on the node)
+    browser_exit: dict | None = None          # where the last launch's check found the exit (ip, country, ...)
     values: dict[str, tuple[float, Any]] = field(default_factory=dict)
     save_at: float = 0.0
     save_pending: bool = False
@@ -73,6 +78,8 @@ class NetNode:
             out.append((net.PROXY_PORT_ON_VM, self.proxy_port))
         if self.swap_port:
             out.append((net.SWAP_PORT_ON_VM, self.swap_port))
+        if self.browser_proxy_port:
+            out.append((net.BROWSER_PROXY_PORT_ON_VM, self.browser_proxy_port))
         return tuple(out)
 
 
@@ -232,6 +239,7 @@ class Network:
                 node.socks = SplitSocks(free_port(), machine_socks=machine_socks, policy=node.forwarder.policy,
                                         blocked=node.blocked, allow=peer_is_us, forwarder=node.forwarder)
                 await node.socks.start()
+        await self.browser_proxy_up(env, node)  # type: ignore[attr-defined]  (BrowserProxies, on the same manager)
 
         def noted(e: Environment) -> None:
             e.secrets = [b.name for b in bindings]
@@ -330,6 +338,8 @@ class Network:
                 await node.swap.close()
             if node.forwarder is not None:
                 await node.forwarder.close()
+            if node.browser_forwarder is not None:
+                await node.browser_forwarder.close()
         if forget:
             shutil.rmtree(self._net_folder(env_id), ignore_errors=True)
 
@@ -353,13 +363,16 @@ class Network:
 
     def network_view(self, env: Environment) -> dict:
         """`network` of environment() and the web API: the level, the allowed list in short, what was
-        refused, and the names of the bound secrets (never a value)."""
+        refused, the names of the bound secrets (never a value), and the browser's proxy (its label and exit)."""
         node = self._nets.get(env.id)
         blocked = node.blocked.list() if node is not None and node.blocked is not None else list(env.blocked)
         allow = list(node.forwarder.policy.allowlist) if node is not None and node.forwarder is not None else []
         swap_hosts = sorted(node.swap.hosts) if node is not None and node.swap is not None else []
         out = {"policy": env.network, "allowed": net.short_list(env.network, allow, swap_hosts),
                "blocked": blocked[:20], "secrets": list(env.secrets)}
+        proxy = self.browser_proxy_view(env)  # type: ignore[attr-defined]  (BrowserProxies, on the same manager)
+        if proxy is not None:
+            out["browser_proxy"] = proxy
         if env.network != "full" and blocked:
             out["fix"] = f"the owner allows a host with `openajar environments allow --host {blocked[0]['host']}`"
         return out

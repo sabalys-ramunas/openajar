@@ -109,10 +109,14 @@ class Upstream:
 class Forwarder:
     def __init__(self, lane_id: str, policy: EgressPolicy, *, upstream: Upstream | None = None,
                  on_event: Callable[[dict], None] | None = None, max_conns: int = 64,
-                 idle_timeout: float = 300.0, connect_timeout: float = 15.0):
+                 idle_timeout: float = 300.0, connect_timeout: float = 15.0, tunnel_http: bool = False):
         self.lane_id = lane_id
         self.policy = policy
         self.upstream = upstream
+        # Plain http through the upstream as a CONNECT to the host's port, then the request in origin form:
+        # the upstream's credentials are then never in a request whose target and headers the client chose
+        # (a proxy that passed Proxy-Authorization on would hand them to that host).
+        self.tunnel_http = tunnel_http
         self.on_event = on_event
         self.idle_timeout = idle_timeout
         self.connect_timeout = connect_timeout
@@ -232,6 +236,32 @@ class Forwarder:
                 last = e
         raise ConnectionError(f"cannot reach {host}:{port}: {last}")
 
+    def _unreachable(self, e: BaseException) -> str:
+        """The 502's words for a connection that did not open. With an upstream the error names the upstream's
+        own address, which is the owner's to know: it goes to the log here, never to the client."""
+        if not self.upstream:
+            return str(e)
+        log.info("forwarder for %s: its upstream proxy did not answer: %s", self.lane_id, e)
+        return "the upstream proxy did not answer"
+
+    async def _tunnel(self, writer, up_r, up_w, host: str, port: int) -> bool:
+        """CONNECT host:port at the upstream, with its credentials. False, and a 502 to the client, when the
+        upstream refuses or does not answer."""
+        assert self.upstream is not None
+        hp = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+        try:
+            up_w.write(f"CONNECT {hp} HTTP/1.1\r\nHost: {hp}\r\n{self.upstream.auth_header()}\r\n".encode())
+            await up_w.drain()
+            resp = await asyncio.wait_for(up_r.readuntil(b"\r\n\r\n"), self.connect_timeout)
+        except (TimeoutError, OSError, asyncio.IncompleteReadError, asyncio.LimitOverrunError) as e:
+            await self._reply(writer, 502, self._unreachable(e))
+            return False
+        status = resp.split(b" ", 2)[1] if b" " in resp else b"000"
+        if status != b"200":
+            await self._reply(writer, 502, f"upstream proxy refused ({status.decode(errors='replace')})")
+            return False
+        return True
+
     async def _connect(self, reader, writer, target: str) -> None:
         try:
             host, port = split_hostport(target, 443)
@@ -250,18 +280,11 @@ class Forwarder:
             await self._reply(writer, 403, str(e))
             return
         except (TimeoutError, OSError, ConnectionError) as e:
-            await self._reply(writer, 502, str(e))
+            await self._reply(writer, 502, self._unreachable(e))
             return
         try:
-            if self.upstream:
-                hp = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
-                up_w.write(f"CONNECT {hp} HTTP/1.1\r\nHost: {hp}\r\n{self.upstream.auth_header()}\r\n".encode())
-                await up_w.drain()
-                resp = await asyncio.wait_for(up_r.readuntil(b"\r\n\r\n"), self.connect_timeout)
-                status = resp.split(b" ", 2)[1] if b" " in resp else b"000"
-                if status != b"200":
-                    await self._reply(writer, 502, f"upstream proxy refused ({status.decode(errors='replace')})")
-                    return
+            if self.upstream and not await self._tunnel(writer, up_r, up_w, host, port):
+                return
             writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
             await writer.drain()
             await self._splice(reader, writer, up_r, up_w)
@@ -299,7 +322,7 @@ class Forwarder:
         if not any(h.lower().startswith("host:") for h in out_headers):
             out_headers.insert(0, f"Host: {u.netloc}")
         out_headers.append("Connection: close")
-        if self.upstream:
+        if self.upstream and not self.tunnel_http:
             line = f"{method} {target} {version}\r\n"
             extra = self.upstream.auth_header()
         else:
@@ -315,9 +338,11 @@ class Forwarder:
             await self._reply(writer, 403, str(e))
             return
         except (TimeoutError, OSError, ConnectionError) as e:
-            await self._reply(writer, 502, str(e))
+            await self._reply(writer, 502, self._unreachable(e))
             return
         try:
+            if self.upstream and self.tunnel_http and not await self._tunnel(writer, up_r, up_w, host, port):
+                return
             up_w.write((line + "\r\n".join(out_headers) + "\r\n" + extra + "\r\n").encode("latin-1"))
             await up_w.drain()
             body = asyncio.create_task(self._copy(reader, up_w, limit=length, eof=False, out=True))

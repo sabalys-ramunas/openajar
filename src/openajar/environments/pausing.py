@@ -210,22 +210,27 @@ class Pausing:
                                        environment=env.id, kept=env.keep == "live")
 
     async def _restore_any(self, env: Environment) -> Environment:
-        """The bring-up's restore: a paused machine's (_restore_paused), else Saving's, and when a
-        paused machine was gone at the provider, `missing` says so."""
+        """The bring-up's restore: a paused machine's (_restore_paused), else Saving's. `missing` then
+        says when a paused machine was gone at the provider, and when the browser's proxy is not the one
+        the save had (openajar.environments.browserproxy)."""
         if (env.resumed or {}).get("from") == "paused":
-            return await self._restore_paused(env)
-        env = await self._restore(env)
-        if not (env.resumed or {}).get("paused_missing"):
+            env = await self._restore_paused(env)
+        else:
+            env = await self._restore(env)
+        got = env.resumed or {}
+        gone = "the paused machine is gone at the provider, so this is a fresh machine with the saved files"
+        said = [n for n in (gone if got.get("paused_missing") else "", got.get("browser_proxy_note")) if n]
+        if not said:
             return env
 
-        def said(e: Environment) -> None:
+        def say(e: Environment) -> None:
             r = dict(e.resumed or {})
             r.pop("paused_missing", None)
-            gone = "the paused machine is gone at the provider, so this is a fresh machine with the saved files"
-            r["missing"] = [gone, *(r.get("missing") or [])]
+            r.pop("browser_proxy_note", None)
+            r["missing"] = [*said, *(r.get("missing") or [])]
             e.resumed = r
 
-        return self.store.update(env.id, said)
+        return self.store.update(env.id, say)
 
     async def _restore_paused(self, env: Environment) -> Environment:
         """The machine is the one that was paused: its disk, processes and files are there. Its clone is
@@ -241,7 +246,7 @@ class Pausing:
         resumed = dict(env.resumed or {})
         if env.repo:
             await self._clone(env)  # the clone is there: this finds it, and the branch it is on
-        state = await self._saved_signins(m, path) if m.signins else None
+        state = await self._saved_signins(m, path, env) if (m.signins or m.fingerprint) else None
         await signins.restore(self, env, state)
         services = await self._check_services(env, m)
         resumed.update({"files_restored": 0, "commits_restored": 0, "services": services, "branch": m.branch,
@@ -262,8 +267,9 @@ class Pausing:
 
         return self.store.update(env.id, back)
 
-    async def _saved_signins(self, m: SaveManifest, path: Path) -> dict | None:
-        from openajar.environments import signins
+    async def _saved_signins(self, m: SaveManifest, path: Path, env: Environment | None = None) -> dict | None:
+        """The save's browser sign-ins; with `env`, its browser's pinned device goes back too (vmpin)."""
+        from openajar.environments import signins, vmpin
 
         key = await self._saves_key(create=False) if m.encrypted else None
         with tempfile.TemporaryDirectory(prefix="openajar-restore-") as t:
@@ -271,7 +277,9 @@ class Pausing:
                 files = await asyncio.to_thread(open_payload, m, path, Path(t), key)
             except (SaveCorrupt, SaveFailed) as e:
                 raise RestoreFailed(f"the save {m.id} does not open: {e.message}") from None
-            return signins.read_saved(files.get(signins.PAYLOAD))
+            if env is not None:
+                vmpin.restore(self, env, files.get(vmpin.PAYLOAD))
+            return signins.read_saved(files.get(signins.PAYLOAD)) if m.signins else None
 
     async def _check_services(self, env: Environment, m: SaveManifest) -> list[dict]:
         """Each saved service, checked on the resumed machine (nothing is started: it never stopped). One

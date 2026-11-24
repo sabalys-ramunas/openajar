@@ -6,6 +6,66 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-24
+
+This version adds settings (`browser_proxies` and `browser_language` in `environments.toml`) and changes
+what an environment's browser on its machine shows a site. Nothing changes for a browser with no proxy
+except that it is now one device from launch to launch.
+
+### Added
+
+- An environment's browser can exit through your own static residential proxy, so sites see a home
+  address instead of a datacenter's. `openajar proxy add lt1 host:port:user:pass` puts it in
+  `browser_proxies` in `environments.toml` (with openajar local by default, on a server node with
+  `--environments`), and each environment opened from then on takes the proxy the fewest open ones use. A
+  save keeps it, so a resume keeps its address. The credentials stay on this computer: a forwarder here
+  chains to the proxy and reaches the machine's browser as `127.0.0.1:3132`; apt, npm and the shell keep
+  their own way out. Before each launch the node checks the proxy, and the browser does not start without
+  it. The browser's timezone, languages and WebRTC address follow the exit. `environment()` shows
+  `network.browser_proxy` (label, exit IP, country). Browsers that run on the node (`browser = "node"`) are
+  not covered yet.
+- An environment's browser on its machine is the same device every time it opens: the fingerprint its first
+  launch draws is read back from the running browser, kept on the node with the environment's data, and given
+  to every later launch, so a site sees the same cookies and address come from the same computer. A save
+  carries it, so a resume (in any chat, on a new machine) is that device too; a new environment draws its own.
+  The timezone, WebRTC address and languages still follow each launch (the proxy's exit), and nothing
+  of the proxy is in the pin. A newer Firefox on the machine moves only the pin's version. A machine whose browser stack is at other
+  versions than openajar pins (an older image) gets it installed again when the environment comes up.
+- A proxied browser claims the exit's place on every launch: its timezone, WebRTC's address and its
+  languages. It hands out no position, and its geolocation permission is `prompt`, as in an untouched Firefox. With `browser_language = "exit"` in
+  `environments.toml` (the default) `navigator.languages`, the `Accept-Language` header (with Firefox's own
+  q values), Intl's number and date formats and the browser's own language are the exit country's, then
+  English (`lt-LT, lt, en-US, en` at a Lithuanian address); `browser_language = "en-US"` keeps a fixed
+  language. A thin answer from ipinfo.io is filled from a second service through the proxy, else from the
+  country, never from the datacenter. `openajar proxy test` prints what the browser claims through each proxy.
+- `openajar proxy remove <label>` and `openajar proxy test [label]` (exit IP, country and timezone through
+  each proxy; exits 1 when one fails). `openajar proxy list` marks the proxies environments use.
+- A new environment with the title or repository of an earlier one takes the proxy that one had, when no
+  open environment uses it, so a computer comes back from the same address without a save too. A save keeps
+  the exit IP, and a resume says so in `missing` when the address has moved since.
+- Letters a US keyboard does not have (ą, ė, ö, ñ and the like) reach a page on the machine's browser as
+  real key presses: a keyboard helper on the machine, with the layout of the browser's language. They
+  arrived as text with no key event before.
+- README: what the browser is (Camoufox), how to give it a static residential proxy and what one costs,
+  and the checks and sites it was run against on a real machine, with the ones it does not pass.
+
+### Changed
+
+- Typing, clicks and wheel notches reach a browser on a far machine with the timing the plan drew. Each
+  key, button and wheel call is a round trip, and a key planned for 98 ms was held 204 ms as the page saw
+  it on a machine 36 ms away. A browser beside the node (a lane on a server node) is timed as before.
+- The browser on an environment's machine is hardened the way a node's own lanes are, at the launch that
+  draws its device: a GPU name whose limits the machine's software renderer really has, the storage quota
+  most Firefox users show, the machine's own core count, and on the desktop a window that says where it
+  really is. Its geolocation permission is `prompt` and it hands out no position, proxied or not.
+- A proxied browser makes no request of its own past the proxy: no fallback to a direct connection, no
+  connectivity or captive-portal check, no DNS over HTTPS, no telemetry. Plain `http://` pages go through a
+  tunnel of the proxy (a CONNECT to port 80), so the credentials never ride in a request a page chose, and
+  the forwarder's errors no longer name the proxy's address.
+
+- The browser on an environment's machine claims Linux when the node names no OS (openajar local), instead
+  of a random OS each launch.
+
 ## [0.5.4] - 2026-11-22
 
 From the second field report of an agent's run in an environment (2026-11-21).

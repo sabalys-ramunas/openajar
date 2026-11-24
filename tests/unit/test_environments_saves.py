@@ -373,6 +373,31 @@ async def test_round_trip_from_the_files_when_the_snapshot_is_gone(node):
     assert "wip" in git(w, "stash", "list")
 
 
+async def test_a_save_carries_the_browsers_pinned_device_to_the_resumed_environment(node):
+    """openajar.environments.vmpin: the node's pin of the environment's browser goes into the save's sealed
+    payload, the node's copy goes when it closes, and the resumed environment (a new id) has it back."""
+    from openajar.environments import vmpin
+    from openajar.node.camoufox.pin import PIN_META
+
+    mgr = node["mgr"]
+    out = await opened(node, keep="save")
+    pin = {"navigator.userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:158.0) Gecko/20100101 Firefox/158.0",
+           "fonts": ["Pinned Sans"], PIN_META: {"version": 2, "screen": [1920, 1080]}}
+    path = vmpin.pin_path(mgr.home, out["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    vmpin.write_private_json(path, pin)
+    closed = await node["call"]("environment_close")
+    m, _ = mgr.saves().find(closed["saved"]["save_id"])
+    assert m.fingerprint is True and vmpin.PAYLOAD in m.checksums
+    assert not path.exists()  # the node's copy went with the environment
+    again = await node["call"]("environment_open", title=TITLE, session="chat-2")
+    assert again["id"] != out["id"]
+    assert json.loads(vmpin.pin_path(mgr.home, again["id"]).read_text()) == pin
+    await node["call"]("environment_close", discard=True, session="chat-2")
+    fresh = await opened(node, title="Another page", session="chat-3")  # not a resume: no device of another's
+    assert not vmpin.pin_path(mgr.home, fresh["id"]).exists()
+
+
 # ------------------------------------------------------------------ 3, 8, 11: the reaper
 
 

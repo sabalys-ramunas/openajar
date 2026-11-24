@@ -172,7 +172,9 @@ def test_the_session_starts_openbox_and_the_helper_with_the_browsers_place(ctl):
     w, h = vmbrowser.DESKTOP_WINDOW
     edge = ctl.ns["CSD_EDGE"]  # the browser draws its own title bar, with GTK's edge round it
     top = ctl.ns["TOP_BAR_H"]  # openbox counts from below the top bar
-    assert f"<x>{(1920 - w) // 2 - edge - 1}</x>" in rc and f"<y>{(1080 - h) // 2 - edge - 1 - top}</y>" in rc
+    # where the page works out its content from the claimed centred window (vmharden.every_launch): the window's
+    # origin at the claim, and the edge lower, as the bottom edge counts in outerHeight (measured on the machine)
+    assert f"<x>{(1920 - w) // 2}</x>" in rc and f"<y>{(1080 - h) // 2 + edge - top}</y>" in rc
     assert f"<y>{540 - top}</y>" in rc  # the agent's commands, from the middle of the screen down
     assert "OPENAJAR_" not in rc
     theme = ctl.run / "desktop" / "data" / "themes" / "openajar" / "openbox-3"
