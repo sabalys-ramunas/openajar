@@ -27,6 +27,7 @@ it with the vendor: openajar cannot know the answer before that.
 
 from __future__ import annotations
 
+import itertools
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -53,8 +54,9 @@ PAGE_WORDS = re.compile(
     r"new-?account|account-?create|my-?account|auth|authenticate|authorize|oauth2?|oidc|sso|saml|session|sessions|"
     r"password|reset-?password|forgot(?:-?password)?|verify-?email|checkout|checkouts|payment|payments|pay|billing|"
     r"purchase|donate)$", re.IGNORECASE)
-_EXTENSION = re.compile(r"\.(?:php|html?|aspx?|jsp|cgi|do)$", re.IGNORECASE)
-MAX_FRAMES = 50
+_EXTENSION = re.compile(r"\.(?:php|html?|aspx?|jspx?|cgi|do|action|cfm|pl)$", re.IGNORECASE)
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")  # userLogin -> user-Login
+MAX_FRAMES = 200  # frames read for fields; a page with more is refused, not read in part
 HOST_WORDS = frozenset({"login", "signin", "signup", "auth", "accounts", "account", "sso", "id", "checkout", "pay",
                         "payment", "payments", "billing", "secure"})
 
@@ -102,16 +104,23 @@ _SENSITIVE_JS = """
   for (const name of fields) { const f = document.getElementsByName(name)[0]; if (f && f.form) { form = f.form; break; } }
   const near = (el) => shown(el) || (form && el.form === form);
   // the inputs of the document and of its open shadow roots (a login form in a web component is one too)
+  // What is past a limit was not read, and a page not read in full is refused (`cut`), never taken as clean
+  let cut = '';
+  let budget = 200000;
   const inputsIn = (root, depth) => {
     let out = Array.from(root.querySelectorAll('input'));
-    if (depth < 5) {
-      for (const el of Array.from(root.querySelectorAll('*')).slice(0, 5000)) {
-        if (el.shadowRoot) out = out.concat(inputsIn(el.shadowRoot, depth + 1));
-      }
+    const all = root.querySelectorAll('*');
+    if (all.length > budget) { cut = 'more elements than openajar reads'; return out; }
+    budget -= all.length;
+    for (const el of all) {
+      if (!el.shadowRoot) continue;
+      if (depth >= 8) { cut = 'shadow roots nested deeper than openajar reads'; break; }
+      out = out.concat(inputsIn(el.shadowRoot, depth + 1));
     }
     return out;
   };
-  const inputs = inputsIn(document, 0).slice(0, 1000);
+  let inputs = inputsIn(document, 0);
+  if (inputs.length > 5000) { cut = 'more input fields than openajar reads'; inputs = inputs.slice(0, 5000); }
   const ac = /(^|\\s)(current-password|new-password|one-time-code|username|webauthn|cc-number|cc-csc|cc-exp|cc-exp-month|cc-exp-year)(\\s|$)/i;
   const card = /(card.?num|cardnumber|cc-?num|\\bcvv|\\bcvc|security.?code|card.?exp|expiry)/i;
   for (const el of inputs) {  // a disabled one too: a multi-step login shows its password field disabled first
@@ -122,16 +131,19 @@ _SENSITIVE_JS = """
     if (!near(el)) continue;
     const auto = el.getAttribute('autocomplete') || '';
     if (ac.test(auto)) { why.push('a field for ' + auto.trim().split(/\\s+/).pop()); break; }
-    if (card.test((el.name || '') + ' ' + (el.id || ''))) { why.push('a card field'); break; }
+    if (card.test((el.name || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('placeholder') || '') + ' ' +
+                  (el.getAttribute('aria-label') || ''))) { why.push('a card field'); break; }
   }
-  return {why, action: form ? (form.getAttribute('action') || '') : ''};
+  return {why, cut, action: form ? (form.getAttribute('action') || '') : ''};
 }
 """
 
 # The token into the widget's field(s), then the page's callback when it named one. Runs in the isolated world:
 # the fields are the page's own DOM, and the callback is reached through the page's window (wrappedJSObject).
 _HAND_JS = """
-([kind, token, callback]) => {
+([kind, token, callback, expected]) => {
+  // the address is read here, in the same step that writes the token: a page that moved since the guards ran gets none
+  if (expected && location.href.split('#')[0] !== expected.split('#')[0]) return {filled: 0, called: 'none', moved: true};
   const names = {turnstile: ['cf-turnstile-response'], recaptcha_v2: ['g-recaptcha-response'],
                  hcaptcha: ['h-captcha-response', 'g-recaptcha-response']}[kind] || [];
   let filled = 0;
@@ -262,7 +274,8 @@ async def full_page(page: Page) -> bool:
 
 def _word(part: str) -> str | None:
     """`part` (one piece of a path or a query value) when it or its first or last word names such a step."""
-    part = _EXTENSION.sub("", part.strip().lower()).replace("_", "-")
+    part = _CAMEL.sub("-", part.strip().split(";")[0])  # ";jsessionid=..." is not part of the name
+    part = _EXTENSION.sub("", part.lower()).replace("_", "-")
     if not part:
         return None
     words = [w for w in part.split("-") if w]
@@ -278,9 +291,15 @@ def _path_words(url: str) -> list[str]:
     except ValueError:
         return []
     pieces = (parts.path or "").split("/")
+    route = parts.fragment.lstrip("!")
+    if route.startswith("/"):  # a single-page app's route: "/#/login", "/app#!/signup?x=1"
+        pieces += route.split("?")[0].split("/")
     for key, values in query.items():
         pieces += [p for v in values for p in v.split("/")] + ([key] if values == [""] else [])
     words = [w for w in (_word(p) for p in pieces) if w]
+    named = [p.strip().lower().replace("_", "-") for p in (parts.path or "").split("/") if p.strip()]
+    # two parts that name the step together: "/customer/account/create/"
+    words += [f"{a}/{b}" for a, b in itertools.pairwise(named) if PAGE_WORDS.match(f"{a}-{b}")]
     host = (parts.hostname or "")
     first = host.split(".")[0]
     if first in HOST_WORDS and host.count(".") >= 2:
@@ -299,30 +318,47 @@ async def sensitive(page: Page, widget: Widget | None) -> list[str]:
     main = await quietly(page.evaluate(_SENSITIVE_JS, fields), None, timeout=5.0)
     if isinstance(main, dict):
         why += [str(w) for w in main.get("why") or []]
+        if main.get("cut"):
+            why.append(f"the page could not be read in full ({main['cut']})")
         action = str(main.get("action") or "")
         if action and _path_words(action):
             why.append(f"its form goes to {_path_words(action)[0]!r}")
     elif main is None:
         why.append("the page could not be read to check it is not a sign-up, login or payment page")
-    for frame in list(getattr(page, "frames", []))[1:MAX_FRAMES]:
+    frames = list(getattr(page, "frames", []))[1:]
+    for frame in frames:  # every frame: an address costs nothing to read
         host = urlsplit(getattr(frame, "url", "") or "").hostname or ""
         if any(host_is(host, h) for h in PAYMENT_HOSTS):
             why.append(f"a payment frame ({host})")
             break
-    for frame in list(getattr(page, "frames", []))[1:MAX_FRAMES]:
+    if len(frames) > MAX_FRAMES:
+        why.append(f"the page has more frames ({len(frames)}) than openajar reads to check it")
+    for frame in frames[:MAX_FRAMES]:
         host = urlsplit(getattr(frame, "url", "") or "").hostname or ""
         if not host or from_frame_url(frame.url) is not None or any(host_is(host, h) for h in
                                                                      ("google.com", "recaptcha.net", "hcaptcha.com",
                                                                       "challenges.cloudflare.com")):
             continue
         inner = await quietly(frame.evaluate(_SENSITIVE_JS, []), None, timeout=3.0)
-        if isinstance(inner, dict) and inner.get("why"):
-            why.append(f"{inner['why'][0]} in a frame ({host})")
+        if isinstance(inner, dict) and (inner.get("why") or inner.get("cut")):
+            why.append(f"{(inner.get('why') or ['a part that could not be read in full'])[0]} in a frame ({host})")
+            break
+        if inner is None and not _gone(frame):  # a frame that left the page has nothing to read; one that stays
+            why.append(f"a frame ({host}) could not be read to check it")  # and does not answer is not clean
             break
     return list(dict.fromkeys(why))
 
 
-async def hand(page: Page, widget: Widget, token: str) -> dict[str, Any]:
-    """Put the token where the widget would, and call the page's callback when it named one: {filled, called}."""
-    out = await quietly(page.evaluate(_HAND_JS, [widget.kind, token, widget.callback or ""]), None, timeout=10.0)
+def _gone(frame: Any) -> bool:
+    try:
+        return bool(frame.is_detached())
+    except Exception:  # noqa: BLE001 - a stand-in frame, or one already torn down
+        return False
+
+
+async def hand(page: Page, widget: Widget, token: str, expected_url: str = "") -> dict[str, Any]:
+    """Put the token where the widget would, and call the page's callback when it named one: {filled, called}.
+    With `expected_url`, only when the document is still at that address (`moved` when it is not)."""
+    out = await quietly(page.evaluate(_HAND_JS, [widget.kind, token, widget.callback or "", expected_url]), None,
+                        timeout=10.0)
     return out if isinstance(out, dict) else {"filled": 0, "called": "none"}

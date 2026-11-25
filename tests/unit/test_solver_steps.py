@@ -166,7 +166,7 @@ async def test_the_owners_solver_answers_a_puzzle_the_click_left(tmp_path):
     assert out.steps[1] == "click: no checkbox to click (an image puzzle shows)"
     assert out.steps[2].startswith("solver: main (2Captcha) answered the Cloudflare Turnstile widget for 0.00145 USD "
                                    "(reported): the check passed; token in 1 field(s); the page's callback: called")
-    assert page.handed == [["turnstile", DUMMY_TOKEN, "onPass"]]
+    assert page.handed == [["turnstile", DUMMY_TOKEN, "onPass", "https://shop.example.com/contact?order=42"]]
     task = svc.requests[0][1]["task"]
     assert task["websiteURL"] == "https://shop.example.com/contact"  # never the query
     said = json.dumps(out.steps)

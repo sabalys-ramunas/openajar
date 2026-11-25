@@ -734,11 +734,14 @@ openajar solver remove main      # the entry and its key; the record stays
   (2Captcha and Anti-Captcha do), the assumed cost when it may have charged and did not say (CapSolver; a
   timeout; a call cut off by its deadline or a cancel), or nothing for an error answer. A pending line nobody
   settled counts at the assumed cost. So a looping agent, several at once, or a call cut off mid-solve stop at
-  the cap. The one overspend left: a solve the service charges more for than the assumed cost, by that
-  difference, for the solves already in flight; the next reservation sees it and refuses.
+  the cap. `--assumed-cost` is at least 0.0005, so no solve counts nothing. The one overspend left: a solve the
+  service charges more for than the assumed cost, by that difference, for the solves already in flight; the next
+  reservation sees it and refuses.
 - **The record fails closed.** When `solver/solves.jsonl` cannot be read or written (permissions, a symlink,
-  bytes that are not UTF-8), or holds a line openajar did not write (a cost that is not a number from 0 to
-  1000, a bad time), nothing is sent until you fix or move it. `solver list` and `solver log` say which line.
+  bytes that are not UTF-8), or holds a line openajar did not write (a cost that is not a number from 0 to 1000,
+  a bad time), nothing is sent until you fix it. `solver list` and `solver log` say which line. A line whose
+  write never finished (a full disk, the power) is not such a line: its try was never sent, it spends nothing,
+  and the next write removes it. A lock another process never lets go refuses the try after 10 seconds.
 
 The agent uses it through one tool, `browser_challenge(on)` in the `browser` toolset (`tools_more("browser")`,
 or `tools_call`). Its steps, in order, each only when the one before did not get past the check:
@@ -773,15 +776,18 @@ What it never does:
   `#challenge-stage`, the orchestrate script). The step says it cannot solve that kind, and the browser goes to
   the human.
 - **A sign-up, login or payment page, as far as it can tell.** Before it asks the service, and again before the
-  token goes in, it reads the page (structure, never its words), in the document, its open shadow roots and
-  every frame: a password field (a disabled one too: a multi-step login shows it so first), a one-time-code,
-  username (a passwordless login) or card field that shows, or any such field in the widget's own form; an
-  autocomplete token for one; a payment provider's frame (Stripe, PayPal, Braintree, Adyen, Shopify, Klarna and
-  others); a word for such a step in the address, its query or the form's action (login, sign_in, wp-login,
-  register, session, checkout, my-account, payment...). Any of them refuses. It errs on the side of refusing (a
-  contact form beside a visible login box is refused too). It can miss a sign-up made only of an email field
-  with no `autocomplete="username"` on a page whose address says nothing, a form in a closed shadow root, and a
-  sign-up whose check comes before any of its fields show.
+  token goes in, it reads the page (structure, never its words), in the document, its open shadow roots and its
+  frames (up to 200; every frame's address is read for a payment provider). A page it cannot read in full is
+  refused: more elements, fields or frames than it reads, or a frame that does not answer. The signs: a password
+  field (a disabled one too: a multi-step login shows it so first), a one-time-code, username (a passwordless
+  login) or card field that shows, or any such field in the widget's own form; an autocomplete token for one; a
+  card field named so in its name, id, placeholder or label; a payment provider's frame (Stripe, PayPal,
+  Braintree, Adyen, Shopify, Klarna and others); a word for such a step in the address, its query or the form's
+  action (login, sign_in, wp-login, userLogin, register, session, checkout, my-account, payment, a single-page
+  app's `#/login`...). Any of them refuses. It errs on the side of refusing (a contact form beside a visible
+  login box is refused too). It can miss a sign-up made only of an email field with no `autocomplete="username"`
+  on a page whose address says nothing, a form in a closed shadow root, and a sign-up whose check comes before
+  any of its fields show.
 - **A widget inside another site's frame.** Only a widget in the page's own document is sent: one inside a third
   party's frame would go under this page's address, and its token could not reach this page.
 - **reCAPTCHA Enterprise**: refused when the page loads its script or its frame. Also any widget it finds no

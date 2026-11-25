@@ -68,7 +68,8 @@ def solver_add(
                                                                   "reads the job as JSON on stdin and the key in "
                                                                   "OPENAJAR_SOLVER_KEY.")] = None,
     assumed_cost: Annotated[float, typer.Option("--assumed-cost", help="What one solve counts against the cap when "
-                                                                       "the service does not report its cost (USD).")]
+                                                                       "the service does not report its cost (USD, at "
+                                                                       "least 0.0005).")]
     = settings.DEFAULT_ASSUMED_COST,
     yes: Annotated[bool, typer.Option("--yes", help="Replace an entry of the same name.")] = False,
 ) -> None:

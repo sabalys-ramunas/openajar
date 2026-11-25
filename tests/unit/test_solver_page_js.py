@@ -150,3 +150,39 @@ async def test_review_9_the_full_page_markers_are_read(page):
     assert await widgets.full_page(page)
     await page.set_content(CONTACT)
     assert not await widgets.full_page(page)
+
+
+# ---- the second review of 2026-11-25 (test_solver_review2 has the rest) ----
+
+async def test_review2_a_login_form_far_down_a_big_page_counts(page):
+    await page.set_content(CONTACT + '<div>' + '<span>x</span>' * 6000 + '''</div><login-box></login-box><script>
+      customElements.define('login-box', class extends HTMLElement { constructor() { super();
+        this.attachShadow({mode: 'open'}).innerHTML = '<form action="/x"><input name=user>' +
+          '<input type=password name=pw></form>'; }});
+    </script>''')
+    assert "a password field" in await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
+
+
+async def test_review2_a_page_too_large_to_read_in_full_is_refused(page):
+    await page.set_content(CONTACT + '<div id=big></div>')
+    await page.evaluate("""() => { const big = document.getElementById('big'); const frag = document.createDocumentFragment();
+      for (let i = 0; i < 200100; i++) frag.appendChild(document.createElement('i')); big.appendChild(frag); }""")
+    why = await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
+    assert any("could not be read in full" in w for w in why), why
+
+
+async def test_review2_a_card_field_named_only_by_its_placeholder_counts(page):
+    await page.set_content(CONTACT.replace("<button>", '<input name="f1" autocomplete="off" '
+                                                       'placeholder="Card number"><button>'))
+    assert "a card field" in await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
+
+
+async def test_review2_the_token_goes_only_into_the_page_it_was_asked_for(page):
+    await page.set_content(CONTACT)
+    widget, _ = await widgets.find(page)
+    out = await widgets.hand(page, widget, "XXXX.DUMMY.TOKEN.XXXX", "https://shop.example.com/contact")
+    assert out == {"filled": 0, "called": "none", "moved": True}  # the document is about:blank, not that address
+    assert await page.evaluate("() => document.getElementsByName('cf-turnstile-response')[0].value") == ""
+    assert await page.title() == ""
+    here = await page.evaluate("() => location.href")
+    assert (await widgets.hand(page, widget, "XXXX.DUMMY.TOKEN.XXXX", here + "#top"))["filled"] == 1

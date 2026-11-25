@@ -30,6 +30,7 @@ PROVIDERS: tuple[str, ...] = ("capsolver", "2captcha", "anticaptcha", "command",
 BUILT_IN: frozenset[str] = frozenset({"capsolver", "2captcha", "anticaptcha"})
 ANY_SITE = "*"
 DEFAULT_ASSUMED_COST = 0.003   # US dollars: above the list price of one Turnstile or reCAPTCHA v2 token at all three
+MIN_ASSUMED_COST = 0.0005  # US dollars: below any service's price for a token
 MAX_CAP = 1000.0               # a month's cap above this is a typo, not a choice
 
 _HOME: Path | None = None
@@ -47,7 +48,8 @@ class SolverEntry(BaseModel):
     command: str | None = None       # the command hook's command line (no shell)
     monthly_cap: float = Field(gt=0, le=MAX_CAP)   # US dollars a calendar month (UTC)
     sites: list[str] = Field(min_length=1)          # hosts it may answer for (a host covers its subdomains); "*" any
-    assumed_cost: float = Field(default=DEFAULT_ASSUMED_COST, ge=0, le=1)
+    # never 0: a solve that counts nothing would never reach the cap (a service that reports no cost counts this)
+    assumed_cost: float = Field(default=DEFAULT_ASSUMED_COST, ge=MIN_ASSUMED_COST, le=1)
     added: str = ""
 
     @field_validator("sites")

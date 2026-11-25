@@ -226,8 +226,13 @@ async def _solver(ix: Any, page: Page, report: SignalReport, *, browser: str,
             ledger.settle(pending, home_dir, result=ledger.NOT_PASSED, cost=cost, cost_from=cost_from,
                           note=f"not used: {moved}")
             return await ix.report(page), False, f"solver: the token was not used: {moved}"
-        handed = await widgets.hand(page, widget, answer.token)
+        handed = await widgets.hand(page, widget, answer.token, url)
         del answer
+        if handed.get("moved"):  # between the guards and the write: the document is no longer the one asked for
+            moved = "the page moved on before the token came"
+            ledger.settle(pending, home_dir, result=ledger.NOT_PASSED, cost=cost, cost_from=cost_from,
+                          note=f"not used: {moved}")
+            return await ix.report(page), False, f"solver: the token was not used: {moved}"
         report = await _settle(ix, page)
     except BaseException:
         ledger.settle(pending, home_dir, result=ledger.CANCELLED, cost=cost, cost_from=cost_from,

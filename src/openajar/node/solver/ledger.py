@@ -20,8 +20,11 @@ already sent (that solve's difference; the spend then shows it and the next solv
 
 The record fails closed. A record that cannot be read (missing permission, a symlink, bytes that are not UTF-8) or a
 line in it that is not a solve as written here (a cost that is not a number from 0 to 1000, a time that is not one)
-makes every reservation refuse, with where the problem is, until the owner fixes or moves the file. A record that
-cannot be written refuses too: nothing is sent unless its reservation is on disk.
+makes every reservation refuse, with where the problem is, until the owner fixes the file. A record that cannot be
+written refuses too: nothing is sent unless its reservation is on disk, whole and synced. What follows the record's
+last newline is a write that never finished (a full disk, the power), so its try was never sent: it spends nothing
+and the next write removes it. Every write holds the record's lock, and a lock nobody lets go refuses the try after
+LOCK_WAIT_S.
 
 A try the guards refused (the month's cap, a site off the list, a sign-up, login or payment page) is a line too, with
 no cost, so the owner sees what an agent asked for. That line is best effort: it spends nothing.
@@ -38,6 +41,7 @@ import os
 import re
 import secrets
 import stat
+import time
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
@@ -50,6 +54,8 @@ DIR = "solver"
 FILE = Path(DIR) / "solves.jsonl"
 LOCK_FILE = Path(DIR) / ".lock"
 MAX_COST = 1000.0
+LOCK_WAIT_S = 10.0  # for the lock, then the try is refused: a holder that hangs never hangs the tool with it
+NOTE_LOCK_WAIT_S = 2.0  # for a line that sends nothing (a settle, a refused try), written from the node's own loop
 
 # results
 PENDING = "pending"          # reserved, sent or about to be: counts at the assumed cost until settled
@@ -137,7 +143,7 @@ def _raw(home: Path) -> bytes:
 
 def _line(raw: bytes, n: int, where: Path) -> Solve:
     bad = LedgerError(f"line {n} of the solve record {where} is not a solve openajar wrote: fix or delete that line "
-                      "(or move the file away) to solve again")
+                      "to solve again")
     try:
         data: Any = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
@@ -160,7 +166,11 @@ def read_all(home: Path) -> list[Solve]:
     the record or a line in it cannot be read."""
     where = record_path(home)
     tries: dict[str, Solve] = {}
-    for n, raw in enumerate(_raw(home).split(b"\n"), start=1):
+    lines = _raw(home).split(b"\n")
+    # what follows the last newline is a write that never finished (a full disk, the power): its try was never
+    # sent, since a request goes out only after its line is whole and synced, so it spends nothing. The next
+    # write removes it (_append)
+    for n, raw in enumerate(lines[:-1], start=1):
         if not raw.strip():
             continue
         solve = _line(raw, n, where)
@@ -189,9 +199,12 @@ def _append(home: Path, solve: Solve) -> None:
     try:
         folder = _folder(home)
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        fd = os.open(p, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
-            os.write(fd, (json.dumps(asdict(solve), separators=(",", ":")) + "\n").encode())
+            _drop_unfinished(fd)
+            data = (json.dumps(asdict(solve), separators=(",", ":")) + "\n").encode()
+            while data:  # a short write (a disk nearly full) goes on, or raises: never half a line taken as done
+                data = data[os.write(fd, data):]
             os.fsync(fd)
         finally:
             os.close(fd)
@@ -199,8 +212,23 @@ def _append(home: Path, solve: Solve) -> None:
         raise LedgerError(f"the solve record {p} cannot be written ({e.strerror or e})") from None
 
 
+def _drop_unfinished(fd: int) -> None:
+    """Cut what follows the record's last newline: a line whose write never finished (read_all says why it spent
+    nothing), so the next line does not join it."""
+    size = os.fstat(fd).st_size
+    if not size:
+        return
+    back = min(size, 1 << 16)
+    tail = os.pread(fd, back, size - back)
+    if tail.endswith(b"\n"):
+        return
+    keep = size - back + tail.rfind(b"\n") + 1  # nothing kept of it when the tail holds no newline at all
+    log.warning("the solve record ends in an unfinished line (%d bytes); removing it", size - keep)
+    os.ftruncate(fd, keep)
+
+
 @contextlib.contextmanager
-def _locked(home: Path) -> Iterator[None]:
+def _locked(home: Path, wait_s: float = LOCK_WAIT_S) -> Iterator[None]:
     folder = _folder(home)
     try:
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -208,7 +236,16 @@ def _locked(home: Path) -> Iterator[None]:
     except OSError as e:
         raise LedgerError(f"the solve record's lock in {folder} cannot be taken ({e.strerror or e})") from None
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        until = time.monotonic() + wait_s
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= until:
+                    raise LedgerError(f"the solve record's lock in {folder} is held by another openajar process "
+                                      f"that does not let it go (waited {wait_s:.0f} s)") from None
+                time.sleep(0.05)
         yield
     finally:
         os.close(fd)  # closing lets the lock go
@@ -232,8 +269,9 @@ def settle(pending: Solve, home: Path, *, result: str, cost: float, cost_from: s
     """The try's outcome, as a line with the reservation's id. When it cannot be written the pending line stands, at
     the assumed cost (logged)."""
     try:
-        _append(home, replace(pending, result=result, cost=round(max(0.0, min(cost, MAX_COST)), 6),
-                              cost_from=cost_from, note=note[:300]))
+        with _locked(home, NOTE_LOCK_WAIT_S):  # every write is under the lock: none meets another's half line
+            _append(home, replace(pending, result=result, cost=round(max(0.0, min(cost, MAX_COST)), 6),
+                                  cost_from=cost_from, note=note[:300]))
     except LedgerError:
         log.warning("could not settle solve %s; it counts at its assumed cost", pending.id, exc_info=True)
 
@@ -241,6 +279,7 @@ def settle(pending: Solve, home: Path, *, result: str, cost: float, cost_from: s
 def write(home: Path, solve: Solve) -> None:
     """A line that spends nothing (a refused try). Best effort: one that cannot be written is logged."""
     try:
-        _append(home, solve)
+        with _locked(home, NOTE_LOCK_WAIT_S):
+            _append(home, solve)
     except LedgerError:
         log.warning("could not write the solve record in %s", record_path(home), exc_info=True)
