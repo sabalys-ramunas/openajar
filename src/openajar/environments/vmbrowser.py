@@ -371,8 +371,10 @@ class VmBrowsers:
             raise EngineError(f"{lane_id} is not the browser of an environment on its machine")
         tunnel = self.svc.tunnel_of(env.id)
         if tunnel is None or not tunnel.alive or not getattr(tunnel, "vm_browser", False):
-            raise EngineError(f"environment {env.id}'s connection to its machine is down; the node starts it "
-                              "again within a minute")
+            from openajar.environments.errors import EnvironmentNotReady
+
+            raise EnvironmentNotReady(f"environment {env.id}'s connection to its machine is down; the node starts it "
+                                      "again within a minute. Nothing ran")
         return env, tunnel
 
     # ---- the machine
@@ -798,8 +800,9 @@ class VmBrowsers:
         # the owner's proxy (openajar.environments.browserproxy): checked first, and no browser without it
         proxied = await getattr(self.svc, "browser_proxy_options", _no_proxy)(env)
         options["firefox_user_prefs"].update(vm_browser_prefs(getattr(env, "network", "full"), proxied=bool(proxied)))
-        options.update(proxied)
-        from openajar.environments import vmkeys, vmpin
+        from openajar.environments import machineplace, vmkeys, vmpin
+
+        options.update(proxied or await machineplace.place_options(self.svc, env))  # no proxy: the machine's place
 
         # the environment's one device: its pin, or the first launch's draw read back (vmpin)
         pinning = vmpin.prepare(self.svc, env, spec.id, options, build=self.builds.get(env.id))

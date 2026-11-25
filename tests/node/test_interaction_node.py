@@ -205,8 +205,12 @@ async def test_a_covered_target_is_refused_until_the_overlay_is_gone(page, site_
     covered = one_ref(snap.text, "button", "Covered action")
     accept = one_ref(snap.text, "button", "Accept")
 
-    with pytest.raises(InvalidRequest, match="covers the target"):
+    from openajar.node.snapshot import OUTLINES
+
+    OUTLINES.remember(page, "agent-1", page.url, snap.text)  # what browser_snapshot keeps of what the agent saw
+    with pytest.raises(InvalidRequest, match="covers the target") as err:
         await ia.act(page, covered, ActionKind.CLICK)
+    assert f'dialog "Cookie notice", which has button "Accept" [ref={accept}]' in err.value.message  # what to close
     assert await page.evaluate("document.body.dataset.coveredClicks") == "0"
 
     gone = await ia.act(page, accept, ActionKind.CLICK)

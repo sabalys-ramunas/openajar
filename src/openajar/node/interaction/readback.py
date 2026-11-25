@@ -55,7 +55,8 @@ _STATE_JS = """
 # Page facts for the signal (sites.PageFacts): iframe sources (absolute, via the src property) with
 # whether they render at a real size on the page (not hidden, not transparent, not parked off the page
 # like reCAPTCHA's idle challenge frame), script sources, and which marker elements (by id, passed in
-# from sites.MARKER_SELECTORS) exist and show. Reads only; never the page's text.
+# from sites.MARKER_SELECTORS) exist and show, and which widget token fields (sites.PASSED_FIELDS) hold a token
+# (whether one does, never the token). Reads only; never the page's text.
 _SHOWN_JS = """
 (el, minPx) => {
   const r = el.getBoundingClientRect();
@@ -65,7 +66,7 @@ _SHOWN_JS = """
 }
 """.strip()
 _MARKERS_JS = """
-([selectors, minPx]) => {
+([selectors, minPx, fields]) => {
   const shown = (el) => (SHOWN)(el, minPx);
   const frames = Array.from(document.querySelectorAll('iframe[src], frame[src]')).slice(0, 300)
     .map((f) => ({src: f.src, visible: shown(f)}));
@@ -75,7 +76,9 @@ _MARKERS_JS = """
     const el = document.querySelector(sel);
     if (el) elements[sel] = shown(el);
   }
-  return {frames, scripts, elements};
+  const passed = (fields || []).filter((name) =>
+    Array.from(document.getElementsByName(name)).slice(0, 20).some((f) => typeof f.value === 'string' && f.value.length > 0));
+  return {frames, scripts, elements, passed};
 }
 """.replace("SHOWN", _SHOWN_JS)
 

@@ -2,7 +2,12 @@
 carries, so a captcha, a checkpoint or a rate limit holds the lane whoever caused it (openajar.node.lanes,
 "Holds"). Installed once where the runtime is composed: `interaction = lanes.watch(interaction)`.
 A bad signal the manager could not record a hold for fails the call that read it (agent_paused)
-instead of passing its result on: it never goes on as if the page had shown nothing."""
+instead of passing its result on: it never goes on as if the page had shown nothing.
+
+One exception, and only where an agent may click a check (interaction.checks.allowed: an environment's
+browser on its machine, never an account's): a check that asks for one click on a checkbox (sites.CHECKBOX_DETAILS)
+is not held, because the snapshot gives the agent its ref. An image puzzle, and every other signal, holds as
+everywhere."""
 
 from __future__ import annotations
 
@@ -12,8 +17,10 @@ from typing import TYPE_CHECKING, Any
 from openajar.core.errors import AgentPaused
 from openajar.core.models import Signal
 from openajar.core.signals import QUIET
+from openajar.node.interaction import checks
 from openajar.node.interfaces import Page
 from openajar.node.lanes.base import _host
+from openajar.node.sites import CHECKBOX_DETAILS
 
 if TYPE_CHECKING:
     from openajar.node.lanes.manager import LaneManagerImpl
@@ -46,12 +53,12 @@ class SignalWatch:
 
     async def navigate(self, page: Page, url: str, *args: Any, **kwargs: Any) -> Any:
         result = await self._inner.navigate(page, url, *args, **kwargs)
-        await self._seen(page, getattr(result, "signal", None), getattr(result, "url", None) or url)
+        await self._seen(page, getattr(result, "signal", None), getattr(result, "url", None) or url, _detail(result))
         return result
 
     async def act(self, page: Page, *args: Any, **kwargs: Any) -> Any:
         result = await self._inner.act(page, *args, **kwargs)
-        await self._seen(page, getattr(result, "signal", None), getattr(result, "url", None))
+        await self._seen(page, getattr(result, "signal", None), getattr(result, "url", None), _detail(result))
         return result
 
     async def signal(self, page: Page, *args: Any, **kwargs: Any) -> Any:
@@ -64,12 +71,14 @@ class SignalWatch:
 
     async def snapshot(self, page: Page, *args: Any, **kwargs: Any) -> Any:
         result = await self._inner.snapshot(page, *args, **kwargs)
-        await self._seen(page, getattr(result, "signal", None), getattr(result, "url", None) or getattr(page, "url", None))
+        await self._seen(page, getattr(result, "signal", None), getattr(result, "url", None) or getattr(page, "url", None),
+                         _detail(result))
         return result
 
     async def wait(self, page: Page, *args: Any, **kwargs: Any) -> Any:
         result = await self._inner.wait(page, *args, **kwargs)
-        await self._seen(page, getattr(result, "signal", None), getattr(result, "url", None) or getattr(page, "url", None))
+        await self._seen(page, getattr(result, "signal", None), getattr(result, "url", None) or getattr(page, "url", None),
+                         _detail(result))
         return result
 
     async def upload(self, page: Page, *args: Any, **kwargs: Any) -> Any:
@@ -81,16 +90,23 @@ class SignalWatch:
         """A picture carries no signal of its own: the page's is read beside it (a read only)."""
         png = await self._inner.screenshot(page, *args, **kwargs)
         if self._lanes.lane_for_page(page) is not None:
+            detail = None
             try:
-                value = await self._inner.signal(page)
+                if checks.allowed(page):  # its detail says whether it is a check the agent may click
+                    report = await self._inner.report(page)
+                    value, detail = report.signal, report.detail
+                else:
+                    value = await self._inner.signal(page)
             except Exception:  # noqa: BLE001 - a dialog or a closing tab: the picture still stands
                 value = None
-            await self._seen(page, value, getattr(page, "url", None))
+            await self._seen(page, value, getattr(page, "url", None), detail)
         return png
 
-    async def _seen(self, page: Page, signal: Any, url: Any) -> None:
+    async def _seen(self, page: Page, signal: Any, url: Any, detail: str | None = None) -> None:
         if signal is None:
             return
+        if detail in CHECKBOX_DETAILS and checks.allowed(page):
+            return  # an environment's browser: the agent has the check's ref (interaction.checks)
         lane_id = self._lanes.lane_for_page(page)
         if lane_id is None:
             return
@@ -105,6 +121,11 @@ class SignalWatch:
             value = str(getattr(signal, "value", signal))[:40]
             raise AgentPaused(f"{lane_id} shows {value}, and openajar could not hold the browser for a human, so "
                               "this call stops here. Do not retry; tell your user.") from None
+
+
+def _detail(result: Any) -> str | None:
+    detail = getattr(result, "signal_detail", None)
+    return detail if isinstance(detail, str) else None
 
 
 def _quiet(signal: Any) -> bool:

@@ -390,6 +390,8 @@ class BringUp:
         old = self._tunnels.get(env.id)
         if old is not None and old.alive:
             return
+        if old is not None:  # a dead one still holds its ports (its guards), its sockets and any ssh of it still running
+            await old.stop()
         git = self._get("git")
         gateway = None
         if git is not None and callable(getattr(git, "vm_listener", None)):
@@ -399,7 +401,9 @@ class BringUp:
                 log.warning("environment %s: no git gateway listener: %s", env.id, e)
         on_vm = {"vm_browser": True, "browser_port": old.browser_port if old else None} if env.browser == "vm" else {}
         tunnel = Tunnel(vms.remote(rec), gateway_port=gateway, socks_port=old.socks_port if old else None, **on_vm)
+        tunnel.free_first = bool(getattr(old, "remote_taken", False))  # the machine refused its -R: free it first
         tunnel.net_forwards = await self.net_forwards(env)  # a closed network's proxy, the secret swap
+        self.watch_link(env, tunnel)  # type: ignore[attr-defined]  (Relink: a drop brings it back at once)
         await tunnel.start()
         self._tunnels[env.id] = tunnel
         self._wrap_proxies_loader()

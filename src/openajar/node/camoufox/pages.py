@@ -305,7 +305,7 @@ def forget_context(context: Any) -> int:
     from openajar.node.interaction import dialogs, pages
 
     registries = (_TRACKERS, egress._GUARDS, dialogs._GUARDS, pages._PAGES, pages._EXPECT,
-                  pages._REPORTS, typist._NETWORKS, human.X_KEYBOARDS, human.IDLE_LANES,
+                  pages._REPORTS, typist._NETWORKS, human.X_KEYBOARDS, human.X_POINTERS, human.IDLE_LANES,
                   human._IDLE, human.POINTERS, human._GROUND, devtools._CAPTURES)
     dropped = 0
     for registry in registries:

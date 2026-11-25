@@ -24,7 +24,7 @@ Actions, each printing one JSON line:
   on that screen, listening on 127.0.0.1:<port> only, at a path the node made at random. With `pin`, the browser
   is the environment's pinned device (SERVE). With `report_prefs`, the answer's `running` is what the browser
   process was started with, read back from its environment: the node pins it on a first launch
-  (openajar.environments.vmpin). With `keys` {layout}, the answer's `keys` is the keyboard helper (KEYS).
+  (openajar.environments.vmpin). With `keys` {layout}, the answer's `keys` is the keyboard helper and the hand (KEYS).
 - clipboard {limit, timeout, nothing}: the text the browser copied, for the live view's "copy" button.
 - stop {what: ["browser", "display"]}: ends them (each runs in a process group of its own).
 - status: which of them run.
@@ -133,10 +133,14 @@ server.launch_server(**o)
 # helper presses the keys for the characters it types, through XTest, for the node's relay on a socket of its
 # own: one line "<code point> <hold ms>" in, "ok" or "no" out. Only characters past ASCII (the rest stay on
 # Playwright). The characters it can type go to `table` once it listens. Started with the browser, stopped with it.
+# It is also the hand on the screen for a click Playwright's input cannot make (a check's checkbox in a frame
+# Playwright does not reach: openajar.node.interaction.checks): "glide <x0> <y0> <x1> <y1> <ms>" puts the pointer at
+# x0, y0 when it is elsewhere and moves it along a hand's curve to x1, y1 in about ms; "press <hold ms>" presses
+# and releases the left button. The timing is kept here, on the machine, not over the connection.
 KEYS = r"""
-import ctypes, json, os, socket, subprocess, sys, time
+import ctypes, json, math, os, random, socket, subprocess, sys, time
 layout, sock_path, table_path = sys.argv[1], sys.argv[2], sys.argv[3]
-subprocess.run(["setxkbmap", "-layout", layout], check=True, timeout=15)
+subprocess.run(["setxkbmap", "-layout", layout or "us"], check=True, timeout=15)
 x11, xtst, xkb = (ctypes.CDLL(n) for n in ("libX11.so.6", "libXtst.so.6", "libxkbcommon.so.0"))
 x11.XOpenDisplay.restype, x11.XOpenDisplay.argtypes = ctypes.c_void_p, [ctypes.c_char_p]
 x11.XGetKeyboardMapping.restype = ctypes.POINTER(ctypes.c_ulong)
@@ -146,6 +150,10 @@ x11.XKeysymToKeycode.restype, x11.XKeysymToKeycode.argtypes = ctypes.c_ubyte, [c
 x11.XFlush.argtypes = x11.XFree.argtypes = [ctypes.c_void_p]
 x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
 xtst.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+xtst.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_ulong]
+xtst.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+x11.XDefaultRootWindow.restype, x11.XDefaultRootWindow.argtypes = ctypes.c_ulong, [ctypes.c_void_p]
+x11.XQueryPointer.argtypes = [ctypes.c_void_p, ctypes.c_ulong, *[ctypes.c_void_p] * 7]
 xkb.xkb_keysym_to_utf32.restype, xkb.xkb_keysym_to_utf32.argtypes = ctypes.c_uint32, [ctypes.c_uint32]
 d = x11.XOpenDisplay(None)
 if not d:
@@ -180,10 +188,68 @@ def key(code, down):
     xtst.XTestFakeKeyEvent(d, code, 1 if down else 0, 0)
     x11.XFlush(d)
 
+def pointer():
+    w, i = ctypes.c_ulong(), ctypes.c_int()
+    xs, ys, m = ctypes.c_int(), ctypes.c_int(), ctypes.c_uint()
+    x11.XQueryPointer(d, x11.XDefaultRootWindow(d), ctypes.byref(w), ctypes.byref(w), ctypes.byref(xs),
+                      ctypes.byref(ys), ctypes.byref(i), ctypes.byref(i), ctypes.byref(m))
+    return xs.value, ys.value
+
+def move(x, y):
+    xtst.XTestFakeMotionEvent(d, -1, int(x), int(y), 0)
+    x11.XFlush(d)
+
+def glide(x0, y0, x1, y1, ms):
+    # the pointer leaves from where the page last saw it, along a curve that bows a little, slow at both ends
+    if pointer() != (x0, y0):
+        move(x0, y0)
+    dx, dy = x1 - x0, y1 - y0
+    dist = math.hypot(dx, dy) or 1.0
+    nx, ny = -dy / dist, dx / dist
+    b1, b2 = random.uniform(-0.15, 0.15) * dist, random.uniform(-0.1, 0.1) * dist
+    c1 = (x0 + dx * 0.3 + nx * b1, y0 + dy * 0.3 + ny * b1)
+    c2 = (x0 + dx * 0.7 + nx * b2, y0 + dy * 0.7 + ny * b2)
+    steps, began, last = max(4, int(ms / 12)), time.monotonic(), None
+    for k in range(1, steps + 1):
+        u = k / steps
+        t = u * u * u * (10 - 15 * u + 6 * u * u)
+        v = 1 - t
+        p = (round(v ** 3 * x0 + 3 * v * v * t * c1[0] + 3 * v * t * t * c2[0] + t ** 3 * x1),
+             round(v ** 3 * y0 + 3 * v * v * t * c1[1] + 3 * v * t * t * c2[1] + t ** 3 * y1))
+        if k == steps:
+            p = (x1, y1)
+        if p != last:
+            move(*p)
+            last = p
+        wait = began + u * ms / 1000 - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+
+def hand(words):
+    if words[0] == "glide" and len(words) == 6:
+        x0, y0, x1, y1 = (int(float(w)) for w in words[1:5])
+        glide(x0, y0, x1, y1, min(max(float(words[5]), 50.0), 3000.0))
+    elif words[0] == "press" and len(words) == 2:
+        xtst.XTestFakeButtonEvent(d, 1, 1, 0)
+        x11.XSync(d, 0)
+        time.sleep(min(max(float(words[1]), 20.0), 500.0) / 1000)
+        xtst.XTestFakeButtonEvent(d, 1, 0, 0)
+        x11.XSync(d, 0)
+    else:
+        raise ValueError(words[0])
+
 while True:
     conn, _ = srv.accept()
     io = conn.makefile("rwb", buffering=0)
     for line in io:
+        words = line.split()
+        if words and words[0] in (b"glide", b"press"):
+            try:
+                hand([w.decode() for w in words])
+                io.write(b"ok\n")
+            except (ValueError, IndexError):
+                io.write(b"no\n")
+            continue
         try:
             cp, hold = line.split()
             code, mods = table[int(cp)]
@@ -605,8 +671,8 @@ def browser(req):
     proc = _spawn("browser", [VENV_PY, "-I", "-c", SERVE, path], env)
     _wait(proc, "browser", lambda: _tcp_listening(port), BROWSER_WAIT_S)
     out = {"ok": True, "port": port}
-    if isinstance(req.get("keys"), dict) and req["keys"].get("layout"):
-        out["keys"] = _keys(str(req["keys"]["layout"]))
+    if isinstance(req.get("keys"), dict):  # with no layout (an English browser): the US one, and the hand
+        out["keys"] = _keys(str(req["keys"].get("layout") or ""))
     else:
         _plain_layout()
     if "report_prefs" in req:

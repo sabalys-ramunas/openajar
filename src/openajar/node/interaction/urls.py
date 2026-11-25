@@ -10,15 +10,15 @@ from urllib.parse import urlsplit
 
 from openajar.core.errors import InvalidRequest
 from openajar.node.sites import is_challenge_frame
-from openajar.node.snapshot import REF_RE
+from openajar.node.snapshot import REF_RE, is_check_ref
 
 ALLOWED_SCHEMES = ("http", "https")
 
 
 def normalize_ref(ref: str) -> str:
-    """Accept `e12`, `ref=e12` or `[ref=e12]`; reject anything else."""
+    """Accept `e12`, `ref=e12` or `[ref=e12]` (and a check's `c1`, interaction.checks); reject anything else."""
     value = (ref or "").strip().strip("[]").strip().removeprefix("ref=")
-    if not REF_RE.match(value):
+    if not REF_RE.match(value) and not is_check_ref(value):
         raise InvalidRequest(f"not a snapshot ref: {ref!r} (refs look like e12)")
     return value
 

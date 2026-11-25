@@ -96,8 +96,14 @@ class TargetNotVisible(InvalidRequest):
 
 
 class TargetCovered(InvalidRequest):
-    """Another element (a banner, a dialog, a sticky header) sits on top of the target."""
+    """Another element (a banner, a dialog, a sticky header) sits on top of the target. `point`: where the press
+    was tested (the top page's viewport), so the interaction can say what is there (interaction.covered)."""
     code = "target_covered"
+
+    def __init__(self, message: str, point: tuple[float, float] | None = None):
+        super().__init__(message)
+        self.point = point
+        self.details: dict = {}
 
 
 async def quietly(awaitable: Any, default: Any = None, *, timeout: float | None = None) -> Any:
@@ -459,7 +465,7 @@ async def _aim_once(page: Page, target: Target, attempts: int) -> tuple[float, f
         if await _hits(target, x, y):
             return x, y
     raise TargetCovered("another element covers the target (a banner, dialog or sticky header?); "
-                        "deal with it first, then snapshot again")
+                        "deal with it first, then snapshot again", point=(x, y))
 
 
 async def _hits(target: Target, x: float, y: float) -> bool:
@@ -725,6 +731,18 @@ async def still(page: Page) -> None:
 
 # A lane's X keyboard by its browser context (engine_camoufox sets it, forget_context drops it).
 X_KEYBOARDS: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
+
+
+# A lane's hand on its X screen by its browser context (openajar.environments.vmkeys sets it for an environment's
+# browser on its machine): glide(start, end, ms) and press_button(hold_ms) as real X input, in screen pixels.
+X_POINTERS: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
+
+
+def x_pointer(page: Page) -> Any:
+    try:
+        return X_POINTERS.get(page.context)
+    except (AttributeError, TypeError):  # a test's stand-in page has no context
+        return None
 
 
 def x_keyboard(page: Page) -> Any:

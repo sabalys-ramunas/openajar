@@ -7,6 +7,7 @@ The facts are structural only:
 - the page URL and the main document's HTTP status;
 - the iframes on the page (URL and whether they render at a real size, on the page) and its script URLs;
 - whether a few marker elements exist (by id, never by text);
+- which challenge widgets hold their token (whether the field is filled, never the token itself);
 - the cookies the browser would send to the URL, read with Playwright's `context.cookies(url)`, which
   the page cannot see.
 Page text is never an input. Accounts are run in many languages and the account's language beats the
@@ -16,8 +17,9 @@ Signals (core.models.Signal), first match wins:
 1. unknown       nothing loaded (an unreadable page with no status is unknown too, after 3 to 5).
 2. captcha       a vendor puzzle that is actually challenging: a challenge frame that renders at a real
    blocked       size, or a challenge page marker. A vendor script that is merely loaded (bot sensors,
-                 invisible reCAPTCHA, an Arkose pre-check) never counts. DataDome's "blocked visitor"
-                 frame is `blocked`.
+                 invisible reCAPTCHA, an Arkose pre-check) never counts, nor a widget that was passed
+                 (Turnstile, hCaptcha or reCAPTCHA with its token in its form field: it stays on the
+                 page as "Success!"). DataDome's "blocked visitor" frame is `blocked`.
 3. per site URL  checkpoint (the site asks the account holder a question), captcha, blocked or
                  rate_limited pages by URL; and login pages (logged_out, see 5).
 4. status        site statuses (LinkedIn's 999), then 429 rate_limited and 403 blocked.
@@ -182,6 +184,9 @@ class VendorRule:
     selector: str | None = None     # elements: a CSS selector by id, never by text
     visible: bool = True
     label: str = ""
+    # a widget's frame: the form field the widget writes its token into once it is passed (Turnstile,
+    # hCaptcha, reCAPTCHA). A passed widget stays on the page ("Success!") and is no longer a challenge.
+    passed_field: str = ""
 
     @property
     def detail(self) -> str:
@@ -370,23 +375,34 @@ _CF_CHALLENGE = "Cloudflare challenge page"
 _HUMAN = "HUMAN (PerimeterX)"
 _ARKOSE = "Arkose (FunCaptcha)"
 _INVISIBLE_ANCHOR = r"^/recaptcha/(?:api2|enterprise)/anchor\b.*[?&]size=invisible"
+_RECAPTCHA_FIELD = "g-recaptcha-response"
+_ANCHOR = r"^/recaptcha/(?:api2|enterprise)/anchor\b"
+# A check that is a checkbox (one click, then the vendor decides) has a label of its own; the vendor's other
+# frames (hCaptcha's and reCAPTCHA's image puzzles) keep "<vendor> frame". CHECKBOX_DETAILS lists them.
+HCAPTCHA_CHECKBOX = "hCaptcha checkbox"
+RECAPTCHA_CHECKBOX = "reCAPTCHA checkbox"
 
 VENDORS: tuple[VendorRule, ...] = (
     # Google reCAPTCHA: the v3 / invisible badge is a 256x60 anchor frame on normal pages.
     VendorRule("reCAPTCHA", "frame", None, "google.com", _INVISIBLE_ANCHOR, label="invisible reCAPTCHA badge"),
     VendorRule("reCAPTCHA", "frame", None, "recaptcha.net", _INVISIBLE_ANCHOR, label="invisible reCAPTCHA badge"),
-    VendorRule("reCAPTCHA", "frame", A, "google.com", r"^/recaptcha/"),
-    VendorRule("reCAPTCHA", "frame", A, "recaptcha.net", r"^/recaptcha/"),
+    VendorRule("reCAPTCHA", "frame", A, "google.com", _ANCHOR, label=RECAPTCHA_CHECKBOX, passed_field=_RECAPTCHA_FIELD),
+    VendorRule("reCAPTCHA", "frame", A, "recaptcha.net", _ANCHOR, label=RECAPTCHA_CHECKBOX,
+               passed_field=_RECAPTCHA_FIELD),
+    VendorRule("reCAPTCHA", "frame", A, "google.com", r"^/recaptcha/", passed_field=_RECAPTCHA_FIELD),
+    VendorRule("reCAPTCHA", "frame", A, "recaptcha.net", r"^/recaptcha/", passed_field=_RECAPTCHA_FIELD),
     VendorRule("reCAPTCHA", "script", None, "google.com", r"^/recaptcha/"),
     VendorRule("reCAPTCHA", "script", None, "gstatic.com", r"^/recaptcha/"),
     VendorRule("reCAPTCHA", "script", None, "recaptcha.net"),
     # hCaptcha
     VendorRule("hCaptcha", "frame", None, "hcaptcha.com", r"frame=checkbox-invisible", label="invisible hCaptcha"),
-    VendorRule("hCaptcha", "frame", A, "hcaptcha.com"),
+    VendorRule("hCaptcha", "frame", A, "hcaptcha.com", r"frame=checkbox(?:&|$)", label=HCAPTCHA_CHECKBOX,
+               passed_field="h-captcha-response"),
+    VendorRule("hCaptcha", "frame", A, "hcaptcha.com", passed_field="h-captcha-response"),
     VendorRule("hCaptcha", "script", None, "hcaptcha.com"),
     # Cloudflare: Turnstile frames; challenge pages ("Just a moment") by their markers and first-party
     # orchestrate scripts. /cdn-cgi/challenge-platform/scripts/jsd/ is bot management on normal pages.
-    VendorRule("Cloudflare Turnstile", "frame", A, "challenges.cloudflare.com"),
+    VendorRule("Cloudflare Turnstile", "frame", A, "challenges.cloudflare.com", passed_field="cf-turnstile-response"),
     VendorRule("Cloudflare Turnstile", "script", None, "challenges.cloudflare.com"),
     VendorRule("Cloudflare", "script", A, None, r"^/cdn-cgi/challenge-platform/h/[^/]+/orchestrate/"
                r"(?:chl_page|managed|jsch|captcha)/", label=_CF_CHALLENGE),
@@ -420,6 +436,15 @@ STATUSES: tuple[tuple[int, Signal], ...] = ((429, R), (403, B))
 SITES_BY_KEY: dict[str, Site] = {s.key: s for s in SITES}
 _BY_WORD: dict[str, Site] = {w: s for s in SITES for w in (s.key, *s.aliases)}
 MARKER_SELECTORS: tuple[str, ...] = tuple(dict.fromkeys(r.selector for r in VENDORS if r.selector))
+# The token fields of the widgets above: interaction.py reads which of them hold a token (never the token)
+PASSED_FIELDS: tuple[str, ...] = tuple(dict.fromkeys(r.passed_field for r in VENDORS if r.passed_field))
+# The rules of Cloudflare's own check, which often clears by itself within seconds ("Just a moment",
+# "Verifying..."): a navigation gives it that time before it reads the signal (interaction.autocheck)
+CLOUDFLARE_DETAILS: frozenset[str] = frozenset(r.detail for r in VENDORS if r.vendor.startswith("Cloudflare")
+                                               and r.signal is not None)
+# The checks that ask a person for one click on a checkbox and no puzzle: Cloudflare's (its page and Turnstile),
+# and the checkbox frames of hCaptcha and reCAPTCHA. A puzzle frame on the page wins over them (_vendor_signal).
+CHECKBOX_DETAILS: frozenset[str] = CLOUDFLARE_DETAILS | {HCAPTCHA_CHECKBOX, RECAPTCHA_CHECKBOX}
 
 
 def site(key: str | None) -> Site | None:
@@ -666,6 +691,7 @@ class PageFacts:
     scripts: tuple[str, ...] = ()
     elements: Mapping[str, bool] = field(default_factory=dict)   # selector -> visible, for markers found
     cookies: Cookies | None = None       # None: could not be read, so logged_out is never guessed
+    passed: frozenset[str] = frozenset()  # PASSED_FIELDS that hold a token: those widgets were passed
 
 
 @dataclass(frozen=True, slots=True)
@@ -687,8 +713,12 @@ class SignalReport:
 
 
 def _vendor_signal(facts: PageFacts) -> tuple[Signal, str] | None:
-    for f in facts.frames:
-        rule = vendor_rule("frame", f.url)
+    # a puzzle that shows wins over the checkbox it came from: the checkbox frame stays on the page beside it
+    ruled = [(f, vendor_rule("frame", f.url)) for f in facts.frames]
+    for f, rule in sorted(ruled, key=lambda fr: fr[1] is not None and fr[1].detail in (HCAPTCHA_CHECKBOX,
+                                                                                         RECAPTCHA_CHECKBOX)):
+        if rule is not None and rule.passed_field and rule.passed_field in facts.passed:
+            continue  # the widget was passed (by itself, or by a person): it shows "Success!", nothing to do
         if rule is not None and rule.signal is not None and (f.visible or not rule.visible):
             return rule.signal, rule.detail
     for rule in VENDORS:

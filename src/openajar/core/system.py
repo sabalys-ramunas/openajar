@@ -99,6 +99,23 @@ print(json.dumps(out))
 """
 
 
+def ipv4_first(address: tuple[str, int], timeout: Any = socket._GLOBAL_DEFAULT_TIMEOUT,  # type: ignore[attr-defined]
+               source_address: Any = None, **_: Any) -> socket.socket:
+    """socket.create_connection that tries the host's IPv4 addresses first, then the system's own order: on a
+    dual stack connection a request then leaves from the IPv4 address, the one most sites see."""
+    host, port = address[0], address[1]
+    try:
+        infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+    except OSError:
+        infos = []
+    for info in infos:
+        try:
+            return socket.create_connection((str(info[4][0]), port), timeout, source_address)
+        except OSError:
+            continue
+    return socket.create_connection((host, port), timeout, source_address)
+
+
 def redact(text: str, *secrets: str | None) -> str:
     """Replace every occurrence of each secret with ***. The longest secret goes first, so a short one
     (a username) inside a longer one (a password that starts with it) cannot leave a piece behind."""
@@ -405,17 +422,23 @@ class Host:
         finally:
             conn.close()
 
-    def _through_proxy(self, proxy: ProxyConfig, url: str, *, timeout: float, accept: str) -> str:
-        """GET an HTTPS URL through the proxy (HTTP CONNECT); the body's first 4 KiB as text.
-        Raises OSError with a message that never contains the proxy's credentials."""
+    def _through_proxy(self, proxy: ProxyConfig | None, url: str, *, timeout: float, accept: str) -> str:
+        """GET an HTTPS URL through the proxy (HTTP CONNECT); the body's first 4 KiB as text. No proxy:
+        straight from this computer, over IPv4 when it has a route (ipv4_first). Raises OSError with a
+        message that never contains the proxy's credentials."""
         target = urlsplit(url)
-        headers = {}
-        if proxy.username:
-            token = base64.b64encode(f"{proxy.username}:{proxy.password or ''}".encode()).decode()
-            headers["Proxy-Authorization"] = f"Basic {token}"
-        conn = http.client.HTTPSConnection(proxy.host, proxy.port, timeout=timeout,
-                                           context=ssl.create_default_context())
-        conn.set_tunnel(target.hostname or "", target.port or 443, headers=headers)
+        if proxy is None:
+            conn = http.client.HTTPSConnection(target.hostname or "", target.port or 443, timeout=timeout,
+                                               context=ssl.create_default_context())
+            conn._create_connection = ipv4_first  # type: ignore[attr-defined]  # http.client connects with it
+        else:
+            headers = {}
+            if proxy.username:
+                token = base64.b64encode(f"{proxy.username}:{proxy.password or ''}".encode()).decode()
+                headers["Proxy-Authorization"] = f"Basic {token}"
+            conn = http.client.HTTPSConnection(proxy.host, proxy.port, timeout=timeout,
+                                               context=ssl.create_default_context())
+            conn.set_tunnel(target.hostname or "", target.port or 443, headers=headers)
         try:
             conn.request("GET", target.path or "/", headers={"User-Agent": "openajar-ops", "Accept": accept})
             resp = conn.getresponse()
@@ -424,7 +447,7 @@ class Host:
                 raise OSError(f"HTTP {resp.status} from {target.hostname}")
             return text
         except (OSError, ValueError, http.client.HTTPException) as e:
-            message = redact(str(e) or type(e).__name__, proxy.username, proxy.password)
+            message = redact(str(e) or type(e).__name__, *((proxy.username, proxy.password) if proxy else ()))
             if "407" in message:
                 raise OSError("the proxy rejected its credentials (HTTP 407)") from None
             raise OSError(message) from None
@@ -450,9 +473,10 @@ class Host:
         assert last is not None
         raise last
 
-    def proxy_exit_info(self, proxy: ProxyConfig, *, timeout: float = 15.0) -> dict[str, str]:
+    def proxy_exit_info(self, proxy: ProxyConfig | None, *, timeout: float = 15.0) -> dict[str, str]:
         """The exit IP through this proxy and where ipinfo.io places it, in one request:
-        {"ip", "country", "region", "city", "timezone", "loc"} (only the keys ipinfo gave). Raises OSError."""
+        {"ip", "country", "region", "city", "timezone", "loc"} (only the keys ipinfo gave). No proxy: this
+        computer's own exit, over IPv4 when it has one. Raises OSError."""
         text = self._through_proxy(proxy, EXIT_INFO_URL, timeout=timeout, accept="application/json")
         try:
             data = json.loads(text)
@@ -463,7 +487,7 @@ class Host:
         out["ip"] = ip
         return out
 
-    def proxy_exit_geo(self, proxy: ProxyConfig, *, timeout: float = 15.0) -> dict[str, str]:
+    def proxy_exit_geo(self, proxy: ProxyConfig | None, *, timeout: float = 15.0) -> dict[str, str]:
         """The same as proxy_exit_info from a second service (geojs.io), in ipinfo's keys. Raises OSError."""
         text = self._through_proxy(proxy, EXIT_GEO_URL, timeout=timeout, accept="application/json")
         try:

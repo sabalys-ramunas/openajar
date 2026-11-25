@@ -15,6 +15,7 @@ from openajar.core.models import NavigateResult
 from openajar.core.text import first_line
 from openajar.node import human
 from openajar.node.human import quietly
+from openajar.node.interaction.autocheck import cloudflare_check, past_automatic_check
 from openajar.node.interaction.dialogs import _DialogOpened, _pending_error, dialog_guard
 from openajar.node.interaction.pages import _Navigations, _title, _url_of
 from openajar.node.interaction.urls import _strip_fragment, check_url, same_origin, through_vm
@@ -115,7 +116,9 @@ class NavigateMixin:
         and a same-origin fetch, not an address typed into the bar); otherwise, or when the click
         does not take the page there, go there directly once whatever the click started has finished
         (never two navigations at once). Either way the page ends on the checked address, or the
-        error says where it is. A click runs the page's own handlers, so it is an act: only a caller
+        error says where it is. On Cloudflare's check ("Just a moment...") it waits up to
+        autocheck.AUTO_CHECK_S for the check to let the browser through by itself, as a person waits,
+        before it reads the signal. A click runs the page's own handlers, so it is an act: only a caller
         allowed to act on the lane may ask for one (tools.browser_navigate). `on_click` runs right
         before the mouse goes down, so the caller can record the click whatever comes of it (the page
         may land elsewhere, or the navigation fail); it does not run when no press was made."""
@@ -154,9 +157,13 @@ class NavigateMixin:
         finally:
             if link is not None:
                 await quietly(link.dispose(), timeout=2.0)
+        report = await self.report(page)
+        if cloudflare_check(report):  # "Just a moment...": give it the seconds a person gives it
+            report = await past_automatic_check(page, report, self.report)
+            status = self._status_for_current(page) or status
         title = await _title(page)
         human.begin_idle(page)
-        return NavigateResult(url=page.url, title=title, status=status, **(await self.report(page)).public())
+        return NavigateResult(url=page.url, title=title, status=status, **report.public())
 
     async def _link_to(self, page: Page, target: str) -> ElementHandle | None:
         """The link on the page to `target` (_LINK_TO_JS), when the target is another page of the

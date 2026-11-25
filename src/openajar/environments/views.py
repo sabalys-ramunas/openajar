@@ -208,7 +208,7 @@ class Views:
         """EnvDetail of the contract, and what environment() returns to an agent. A machine that stopped for good
         (openajar.environments.liveness) shows as state gone, with `machine_gone`, and nothing is asked of it."""
         repos = None
-        if env.gone_at is None and env.open and env.state != "starting" and env.vm_id:
+        if env.gone_at is None and env.open and env.state != "starting" and env.vm_id and not self.link_down(env.id):  # type: ignore[attr-defined]
             repos = await self.git_repos(env)
             if repos is None and env.state == "ready" and await self.machine_gone(env, cause="environment()"):  # type: ignore[attr-defined]
                 env = self.store.get(env.id)  # type: ignore[attr-defined]
@@ -234,6 +234,8 @@ class Views:
         from openajar.environments import timings
 
         out["bringup"] = timings.view(self, env)  # each step of its bring-up and its seconds
+        if (link := self.link_view(env)) is not None:  # type: ignore[attr-defined]  (Relink: it dropped, or came back)
+            out["link"] = link
         busy = self.in_background(env.id)  # type: ignore[attr-defined]  (Saving, on the same manager)
         if busy:
             out["background"] = f"{busy}: an agent's environment_{'close' if busy == 'closing' else 'save'} goes on"

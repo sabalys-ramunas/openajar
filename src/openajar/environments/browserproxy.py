@@ -26,6 +26,10 @@ runs on its machine (browser = "vm") exits through one of them:
   languages and WebRTC agree with the address sites see. The browser hands out no position (vmharden drops
   the geolocation keys: an untouched Firefox has none to give). Camoufox's own GeoIP stays off on the machine.
 
+The reserved label `this-computer` (openajar.environments.thiscomputer, `openajar proxy this-computer`) needs no
+entry in proxies.json: its forwarder has no upstream and connects to the sites itself, from this computer, to
+public addresses only, and the launch's check asks ipinfo.io straight from here.
+
 An environment whose browser runs on the node (browser = "node") is not covered: that browser's traffic is
 the tunnel's SOCKS proxy (or envproxy.SplitSocks), which does not chain to an upstream.
 """
@@ -58,6 +62,7 @@ from openajar.environments.exitplace import (
     with_language,
 )
 from openajar.environments.models import Environment
+from openajar.environments.thiscomputer import THIS_COMPUTER, DirectForwarder, exit_name, is_this_computer
 
 log = logging.getLogger("openajar.environments")
 
@@ -65,6 +70,11 @@ PROBE_TIMEOUT_S = 8.0     # the exit check before a launch, through the owner's 
 BROWSER_MAX_CONNS = 256   # a browser keeps many connections open (the allowlist proxy's 64 is for programs)
 RECENT_KEPT = 200         # how far back a new environment looks for the label its title had (last_browser_proxy)
 LOCAL_SUFFIXES = (".localhost", ".local", ".internal", ".home.arpa")
+
+
+def known_labels(proxies: dict[str, Any]) -> set[str]:
+    """The labels an environment can exit through: the owner's proxies, and this computer itself."""
+    return {*proxies, THIS_COMPUTER}
 
 
 def pick(pool: list[str], known: dict[str, Any] | set[str], in_use: list[str]) -> str | None:
@@ -183,11 +193,12 @@ _MORE: dict[str, tuple[float, dict[str, str]]] = {}  # exit IP -> (when, the sec
 MORE_KEPT_S = 6 * 3600
 
 
-def _probe(proxy: ProxyConfig, timeout: float) -> dict[str, str]:
-    """ipinfo.io through the proxy (the check before each launch). When it leaves the country, position or
-    timezone out, or answers with an error although the proxy carried the request, the second source
-    (Host.proxy_exit_geo, geojs.io) fills the gaps; its answer is kept for the exit IP a while, so a relaunch
-    asks only ipinfo. The proxy's own failure (no connection, 407) raises at once."""
+def _probe(proxy: ProxyConfig | None, timeout: float) -> dict[str, str]:
+    """ipinfo.io through the proxy (the check before each launch), or straight from this computer when there
+    is none (this-computer: over IPv4 when it has one). When it leaves the country, position or timezone out,
+    or answers with an error although the proxy carried the request, the second source (Host.proxy_exit_geo,
+    geojs.io) fills the gaps; its answer is kept for the exit IP a while, so a relaunch asks only ipinfo. The
+    proxy's own failure (no connection, 407) raises at once."""
     import time
 
     from openajar.core.system import Host
@@ -226,6 +237,12 @@ def _merged(info: dict[str, str], more: dict[str, str]) -> dict[str, str]:
 
 
 def gone_words(label: str) -> str:
+    if is_this_computer(label):
+        return ("This computer's own connection is not set up for this environment's browser (the owner turned it "
+                "off with `openajar proxy this-computer --off`, or it was not on when the environment came up), so "
+                "the browser did not start: it never goes out another way. Close this environment and open it "
+                "again, and it takes what the owner's list has now. The owner turns it on again with "
+                "`openajar proxy this-computer`.")
     return (f"The browser's proxy {label} is not set up for this environment (it was removed from this node's "
             "proxies, or was missing when the environment came up), so the browser did not start: it never goes "
             "out without its proxy. Close this environment and open it again, and it takes one of the proxies "
@@ -233,6 +250,10 @@ def gone_words(label: str) -> str:
 
 
 def failed_words(label: str, why: str) -> str:
+    if is_this_computer(label):
+        return (f"The browser goes out through this computer's own connection, and its check did not work: {why}. "
+                "The browser did not start, since it never goes out another way. This computer may be offline or "
+                "asleep: tell the owner to check its connection and run `openajar proxy test this-computer`.")
     return (f"The browser's proxy {label} did not work: {why}. The browser did not start, since it never goes out "
             f"without its proxy. Tell the owner to run `openajar proxy test {label}`.")
 
@@ -293,7 +314,7 @@ class BrowserProxies:
         label = None
         pool = self.browser_proxy_pool() if env.browser == "vm" else []
         if pool:
-            known = self.owner_proxies()
+            known = known_labels(self.owner_proxies())
             in_use = [e.browser_proxy for e in self.store.open() if e.browser_proxy and e.id != env.id]
             last = self.last_browser_proxy(env) if saved is None else None
             if saved in pool and saved in known:
@@ -303,10 +324,10 @@ class BrowserProxies:
             else:
                 label = pick(pool, known, in_use)
         if saved and label != saved and resumed is not None:
-            now = f"now exits through the proxy {label}" if label else "now goes out from the machine itself"
-            resumed["browser_proxy_note"] = (f"the browser's proxy {saved} is no longer one this node's environments "
-                                             f"use, so the browser {now}: a new address, so sites may ask to sign "
-                                             "in again")
+            now = f"now exits through {exit_name(label)}" if label else "now goes out from the machine itself"
+            was = exit_name(saved) if is_this_computer(saved) else f"the browser's proxy {saved}"
+            resumed["browser_proxy_note"] = (f"{was} is no longer one this node's environments use, so the browser "
+                                             f"{now}: a new address, so sites may ask to sign in again")
         env.browser_proxy = label
         if resumed is not None:
             env.resumed = resumed
@@ -315,6 +336,9 @@ class BrowserProxies:
         """Start env's browser forwarder on this computer's loopback (Network._net_up), when it has a proxy.
         A label that is not in proxies.json starts nothing, so the launch fails closed (browser_proxy_options)."""
         if env.browser != "vm" or not env.browser_proxy:
+            return
+        if is_this_computer(env.browser_proxy):
+            await self._direct_up(env, node)
             return
         proxy = self.owner_proxies().get(env.browser_proxy)
         if proxy is None:
@@ -334,6 +358,22 @@ class BrowserProxies:
         node.browser_forwarder, node.browser_upstream = fwd, proxy
         node.browser_proxy_port = int(server.sockets[0].getsockname()[1])
 
+    async def _direct_up(self, env: Environment, node: Any) -> None:
+        """this-computer's forwarder (thiscomputer.DirectForwarder): no upstream, public addresses only. Not when
+        the owner has turned it off meanwhile (`openajar proxy this-computer --off`): the launch then fails closed."""
+        if THIS_COMPUTER not in self.browser_proxy_pool():
+            log.warning("environment %s: its browser exits through this computer, which is no longer in "
+                        "browser_proxies; its browser will not start", env.id)
+            return
+        closed = node.forwarder
+        policy = closed.policy if closed is not None else OpenPolicy()
+        fwd = DirectForwarder(env.id, policy, node.blocked, intercept=getattr(closed, "intercept", None),
+                              max_conns=BROWSER_MAX_CONNS)
+        server = await asyncio.start_server(fwd._client, "127.0.0.1", 0)
+        node.servers.append(server)
+        node.browser_forwarder, node.browser_upstream, node.browser_direct = fwd, None, True
+        node.browser_proxy_port = int(server.sockets[0].getsockname()[1])
+
     async def browser_proxy_options(self, env: Any) -> dict[str, Any]:
         """What a launch of env's browser on its machine adds to Camoufox's options: {} without a proxy, else
         what it takes from the exit (exit_options: its place as config, its country's languages as the locale,
@@ -344,18 +384,21 @@ class BrowserProxies:
             return {}
         node = self._nets.get(env.id)
         proxy = getattr(node, "browser_upstream", None)
-        if node is None or proxy is None:
+        direct = bool(getattr(node, "browser_direct", False))
+        if node is None or (proxy is None and not direct):
             raise EngineError(gone_words(label))
         probe = self.proxy_probe or _probe
         try:
             # ipinfo, and the second source only when its answer is thin (_probe): two requests at most
             info = await asyncio.wait_for(asyncio.to_thread(probe, proxy, PROBE_TIMEOUT_S), 2 * PROBE_TIMEOUT_S + 2)
         except (OSError, TimeoutError) as e:
-            why = redact(str(e) or "no answer in time", proxy.username, proxy.password)
+            why = redact(str(e) or "no answer in time", *((proxy.username, proxy.password) if proxy else ()))
             log.warning("environment %s: its browser's proxy %s failed its check: %s", env.id, label, why)
             raise EngineError(failed_words(label, why)) from None
         before = (getattr(node, "browser_exit", None) or {}).get("ip")
         node.browser_exit = info
+        if direct and getattr(node, "browser_forwarder", None) is not None:
+            node.browser_forwarder.follow(info)  # its family, and never its own exit address
         self.exit_moved(env, label, before or self.saved_exit_ip(env), info.get("ip"))
         return exit_options(info, self.browser_language())
 
@@ -393,9 +436,14 @@ class BrowserProxies:
         see a new IP. Logged, and said in the resume's `missing` for the agent."""
         if not was or not now or was == now:
             return
-        log.warning("environment %s: its browser's proxy %s now exits from %s, it was %s", env.id, label, now, was)
-        words = (f"the browser's proxy {label} now exits from {now}, and the browser had {was} before: a new "
-                 "address, so sites may ask to sign in again")
+        log.warning("environment %s: its browser's exit %s is now %s, it was %s", env.id, label, now, was)
+        if is_this_computer(label):
+            words = (f"the browser goes out through this computer, whose address is now {now}, and the browser had "
+                     f"{was} before (this computer is on another network, or a VPN is on): a new address, so sites "
+                     "may ask to sign in again")
+        else:
+            words = (f"the browser's proxy {label} now exits from {now}, and the browser had {was} before: a new "
+                     "address, so sites may ask to sign in again")
 
         def say(e: Environment) -> bool:
             r = dict(e.resumed or {})

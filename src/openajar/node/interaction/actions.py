@@ -13,6 +13,8 @@ from openajar.core.models import ActionKind, ActionResult, Signal
 from openajar.core.text import first_line
 from openajar.node import human, human_fields
 from openajar.node.human import quietly
+from openajar.node.interaction.autocheck import past_automatic_check
+from openajar.node.interaction.checks import click_check
 from openajar.node.interaction.dialogs import (
     _DIALOG_OPEN,
     DialogGuard,
@@ -25,6 +27,7 @@ from openajar.node.interaction.dialogs import (
 from openajar.node.interaction.pages import _open_pages, _url_of
 from openajar.node.interaction.readback import _state, diff_state
 from openajar.node.interaction.urls import _strip_fragment, normalize_ref
+from openajar.node.snapshot import is_check_ref
 
 Page = Any           # playwright.async_api.Page
 ElementHandle = Any  # playwright.async_api.ElementHandle
@@ -46,6 +49,8 @@ class ActMixin:
             raise InvalidRequest(f"unknown action {action!r}; use one of: "
                                  + ", ".join(a.value for a in ActionKind)) from None
         ref = normalize_ref(ref)
+        if is_check_ref(ref):  # a site's "are you human" checkbox (checks.py)
+            return await click_check(self, page, ref, kind)
         await human.still(page)
         if kind in (ActionKind.TYPE, ActionKind.FILL, ActionKind.SELECT, ActionKind.PRESS) and not text:
             what = {"select": "the option label", "press": "the key, for example Enter"}.get(kind.value, "the text")
@@ -67,6 +72,10 @@ class ActMixin:
             in_view = await self._race(page, self._perform(page, target, kind, text), guard)
         except _DialogOpened as opened:
             return await self._after(page, kind, ref, pages_before, choosers_before, guard, opened=opened.dialog)
+        except human.TargetCovered as e:  # say what covers it, with its ref (interaction.covered)
+            from openajar.node.interaction.covered import explain
+
+            raise await explain(page, e) from None
         except OpenajarError:
             raise
         except Exception as e:
@@ -98,9 +107,12 @@ class ActMixin:
         if page.is_closed():
             return await self._after(page, kind, ref, pages_before, choosers_before, guard)
         notes = await self._side_effects(page, pages_before, choosers_before, guard, ref)
+        report = await self.report(page)
+        if _strip_fragment(page.url) != _strip_fragment(url_before):  # it led to Cloudflare's check: as navigate
+            report = await past_automatic_check(page, report, self.report)
         human.begin_idle(page)
         return ActionResult(ok=ok, action=kind, ref=ref, url=page.url, changed=changed,
-                            detail="; ".join([detail, *notes]), **(await self.report(page)).public())
+                            detail="; ".join([detail, *notes]), **report.public())
 
     async def _after(self, page: Page, kind: ActionKind, ref: str, pages_before: set[Any], choosers_before: int,
                      guard: DialogGuard | None, *, opened: PageDialog | None = None) -> ActionResult:

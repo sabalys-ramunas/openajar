@@ -23,7 +23,8 @@ node may have no Camoufox at all (openajar local):
 
 What a pin never holds, so it follows each launch instead (`per_launch`): pin.LAUNCHER_KEYS (how a launch
 behaves), and where the browser is: the timezone, the position and the WebRTC address come from the
-owner's proxy's exit on every launch (openajar.environments.browserproxy), and the geolocation
+owner's proxy's exit on every launch (openajar.environments.browserproxy), or with no proxy from the
+machine's own place (openajar.environments.machineplace), and the geolocation
 permission (pin.GEO_PREF) goes with them; so do the launch's languages (the locale:* keys, Accept-Language
 and the browser's own language, intl.locale.requested), which follow the exit's country with a proxy, and
 the speech voices Camoufox draws for them. The control script takes each of these from the launch's own
@@ -158,6 +159,7 @@ def prepare(svc: Any, env: Any, lane_id: str, options: dict[str, Any], *, build:
     pin = load(svc, env.id, lane_id)
     if pin is None:
         vmharden.first_draw(options)
+        vmharden.work_area(options, str((options.get("os") or ["linux"])[0]))
         return Prepared(env.id, lane_id, None, request, screen, window)
     moved = bump(svc, env.id, lane_id, pin, build)
     if moved is not None:
@@ -169,6 +171,8 @@ def prepare(svc: Any, env: Any, lane_id: str, options: dict[str, Any], *, build:
     prefs = held_prefs(pin.meta)
     options["config"] = config
     options["os"] = [os_of(pin.config)]
+    vmharden.work_area(options, options["os"][0])
+    config = options["config"]
     if isinstance(pin.meta.get("canvas_noise"), bool):
         options["canvas_noise"] = pin.meta["canvas_noise"]
     options.setdefault("firefox_user_prefs", {}).update(prefs)

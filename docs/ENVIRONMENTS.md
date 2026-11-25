@@ -201,7 +201,8 @@ reads it back from the running browser and keeps it with the environment's data
 (`environments/<id>/fingerprint.json` in the node's home, never on the VM), and every later launch
 gets exactly that one. A save carries it, so a resumed environment, in any chat and on a new machine,
 is the same device; a new environment draws its own. What a pin never holds follows each launch: the
-timezone and WebRTC address come from the browser proxy's exit, the languages (and the speech
+timezone and WebRTC address come from the browser proxy's exit (with no proxy, from the machine's own
+place, below), the languages (and the speech
 voices drawn for them) from the launch's locale, and the screen and window from the launch when it
 asks for another size (full screen or the desktop's window). When the VM's
 Camoufox is a newer Firefox than the pin says, only the pin's Firefox version moves with it (the old
@@ -635,7 +636,14 @@ does not match the place, and sites answer in the language the browser asks for.
 ```
 lt1  exit 203.0.113.7  Vilnius, LT  Europe/Vilnius
      browser: Europe/Vilnius, lt-LT, lt, en-US, en (exit near 54.69,25.28)
+     second source: geojs.io agrees (Vilnius, LT)
 ```
+
+The last line is a second geolocation source's view of the same exit. Sites place an address with one
+database or another, so when the two put it in different countries the line says so plainly: some sites then
+treat the address as the other country's (one test proxy was in Lithuania for ipinfo.io and in Hong Kong for
+other databases, and TikTok refused it as Hong Kong's). It also says when the second request left from
+another address (a proxy that rotates).
 
 When ipinfo.io's answer leaves the country or the timezone out (or names a zone that does not exist),
 the node asks a second service (geojs.io) through the same proxy, and keeps its answer for that exit IP
@@ -643,11 +651,97 @@ for some hours. When neither gives it, the timezone is the country's (where it h
 nearest to where the exit is). With no country at all, the clock is left to the browser, and the
 language stays the lane's.
 
-With openajar local the browser claims Linux, what the machine is.
+With openajar local the browser claims Linux, what the machine is. Its screen's work area is the whole
+screen, as Firefox itself reports it on Linux whatever panels a desktop has (an untouched Firefox on the
+machine's desktop, with its top bar and dock, reads the same).
+
+Cloudflare's check. Cloudflare's "Just a moment..." page and its Turnstile widget often let the browser
+through by themselves after some seconds, with no click. So `browser_navigate`, and a `browser_act` that
+lands on such a page, wait up to 20 seconds for that, as a person waits, before they report the page's
+signal. A widget that has passed (its token is in its form field, and it shows "Success!") is not a
+challenge, so it no longer stops the browser. Whether the check passes by itself depends mostly on the
+address: on a real machine an untouched Firefox, stock Camoufox and this browser got the same answers on
+every page tried, from the datacenter's address and from a home one. A check that still wants a person
+after the wait (the "Verify you are human" checkbox) holds the browser for the human as before.
+
+With no proxy the browser goes out from its machine's own address, and claims that machine's place: the
+timezone of where ipinfo.io places the machine's public address (asked from this computer once per
+machine), and that address for WebRTC. When ipinfo.io does not answer, the timezone is the one of the
+server's location (Hetzner's `nbg1` and `fsn1` are Europe/Berlin, `hel1` Europe/Helsinki, `ash`
+America/New_York, `hil` America/Los_Angeles, `sin` Asia/Singapore). When neither is known (a docker
+machine on this computer), the browser starts as before, its clock UTC, and the node's log says so. The
+launch never waits more than a few seconds for this and never fails for it. Its languages stay `en-US`
+whatever `browser_language` says, and it gets no position, as with a proxy.
+
+A check the agent can click. In an environment's browser on its machine, a site's "are you human" checkbox
+(Cloudflare's, hCaptcha's, reCAPTCHA's "I'm not a robot") shows at the top of the snapshot as a checkbox with
+a ref, and the browser is not held for it:
+
+```
+- checkbox "Verify you are human (Cloudflare check)" [ref=c1] [cursor=pointer]
+- text: a site's check on this browser. Click c1 once (browser_act); an image puzzle after it is for your human
+```
+
+The check sits in a frame of another site, often in a closed shadow root, where the page's outline has no
+node, and on Cloudflare's own challenge page the frame is out of Playwright's reach altogether: its pointer
+events never arrive there. So openajar finds the checkbox the way a person does, in a picture of the check,
+and `browser_act(ref="c1", action="click")` clicks it with real input on the machine's screen (the keyboard
+helper's X hand): a glide to just beside the check, a short move onto the box, a press held as a hand holds
+it. Then it waits for the vendor's answer and says it: the check passed, an image puzzle appeared (openajar
+never solves one: tell your human and wait with `browser_wait_handback`), or it did not pass (do not click
+again in a loop). A check still at work by itself ("Verifying...") shows a line that says to wait instead of
+a ref. An account's browser never gets a check ref, and a challenge there still holds it for its human.
 
 It covers `browser = "vm"` only. An environment whose browser runs on the node (`browser = "node"`)
 exits through its machine as before: that browser's traffic is the tunnel's SOCKS proxy, which does
 not chain to another proxy, so `proxy add` says so on such a node.
+
+#### This computer's own connection
+
+With openajar local, the browser can also go out through the computer openajar runs on, with no proxy:
+
+```
+openajar proxy this-computer          # on: prints the address this computer exits from now, and its country
+openajar proxy test this-computer     # the same check a launch makes
+openajar proxy this-computer --off    # off (as `openajar proxy remove this-computer`)
+```
+
+It puts the reserved label `this-computer` in `browser_proxies`. It needs no entry in `proxies.json`, and
+`proxy add this-computer ...` is refused. It can stand alone or sit in the list beside proxies; the pick,
+the save and the resume treat it like any label, and `environment()` shows it as
+`network.browser_proxy` with the label `this-computer`, the exit IP and its country.
+
+The browser's forwarder for it has no upstream: it connects to the sites itself, from this computer, so
+the browser's traffic goes machine, SSH tunnel, this computer, site. Before each launch the node asks
+ipinfo.io straight from this computer (with the same second source as for a proxy), and the browser
+claims that exit's timezone, languages and WebRTC address. The check asks over IPv4 first, and the
+forwarder connects over the family the check answered over, so a dual stack home shows sites one
+address; it uses the other family only for a name that has none in this one. When the check fails
+(this computer offline or asleep) the browser does not start.
+
+From this computer the forwarder reaches public addresses only: never a local name, a private, loopback,
+link-local or CGNAT address (also inside an IPv4-mapped or NAT64 IPv6), this computer's own public
+addresses and the household's IPv6 `/56`, or the exit address itself (the router seen from inside), and
+never port 25. Names are looked up on this computer once per connection, and the connection goes to the
+address that was checked. A closed network's list still applies first, and an entry in it that names a
+private address stays refused. [THREAT-MODEL.md](THREAT-MODEL.md#this-computer-as-the-exit-this-computer)
+has the details.
+
+What it costs:
+
+- Every page travels through your home connection twice: down to this computer, then up to the machine.
+  Your upload speed is the limit, and video is heavy.
+- It works only while this computer is on and online. openajar local saves the environments when the
+  computer sleeps, so this matters for a computer left open.
+- The address is your household's. What an agent does on a site counts for your home: a site that bans the
+  agent bans your home address.
+- Every environment that takes it shares the one address. For several agents at once, or accounts that must
+  not be linked, a static residential proxy per environment is still the way.
+- When the laptop changes network or a VPN is on, the address changes. The browser's timezone and language
+  follow it at the next launch, and a resume's `missing` says the address moved.
+
+On a server node it works too, but the server's own address is a datacenter's, which sites stop as they
+stop the machine's, so `proxy this-computer` says it gains nothing there.
 
 ### Secrets for the app
 
@@ -1523,6 +1617,19 @@ open a fresh one under another title. `save_limit`: forget saves you no longer n
   that no remote has, and stashes. `environment_close` refuses for the same reasons.
 - A daemon restart never deletes environments; the reaper picks up where it was. A server the node
   made but no longer knows about is deleted as an orphan.
+- **A link that drops** (the SSH connection that carries an environment's tunnels: the browser, its live
+  view, the git gateway and the network's ports) comes back by itself. The drop is noticed at once (its
+  ssh ends), and the node first lets the VM firewall follow this computer's address when it moved (local
+  mode: docs/LOCAL.md "The VM firewall"), then starts the tunnel again, with tries after 3, 10, 20 and 30
+  seconds and then on the reaper's pass each minute. The dead connection is stopped first, so this
+  computer's ports and sockets are free for the new one, which takes the same ports. When the machine
+  still holds a reverse port of the old connection (its sshd has not seen it end, as after this
+  computer's address changed), the node ends the sshd sessions that listen on its own reverse ports there
+  (3129 to 3132) and tries once more. A browser that ran is started again with the link, live view
+  included, with the sign-ins it last kept; open tabs do not come back. Meanwhile a call that needs the
+  machine runs nothing and gets `environment_not_ready` (what happened, and that the node is on it), and
+  `environment()` waits up to a minute for the link and shows `link`: `down` (since when, why, the tries)
+  or, for ten minutes after, `back`.
 - **A machine that stops** (its container killed, its server powered off or deleted outside openajar, its
   host lost) is found once and said everywhere. A command whose ssh cannot reach the machine, the reaper
   finding its tunnel down, `environment()` finding git on it silent, and `environment_open` with its
@@ -1622,7 +1729,7 @@ Not on it:
 | `which_environment` | a call without the machine's handle: no `on` from a client with no session id, or a title or an id in `on` | the agent passes the `on` its environment_open gave, or opens its own |
 | `environment_already_open` | the title names an open environment with another repository | the agent picks another title |
 | `environment_in_use` | another chat of the agent holds the live machine with this title | the agent opens its own with another title; `take_over=true` once the holder has been quiet for `take_over_minutes` |
-| `environment_not_ready` | the environment is starting, or its tunnel is down after a restart | wait a minute; `openajar environments show ID` |
+| `environment_not_ready` | the environment is starting, or its link is down (a restart, a dropped connection, this computer's address moved) and the node is bringing it back | wait a minute; `openajar environments show ID`, and `openajar logs --level warn --since 10m` if it does not come back |
 | `machine_gone`, or `state: "gone"` | the machine stopped for good: the provider says its container or server is off or no longer exists ("Costs and the reaper") | the agent opens the same title again and gets a new machine; if it happens often, `docker ps -a` or the Hetzner console, and `openajar logs --level warn --since 30m` |
 | `unsaved_work` on close | uncommitted changes or commits not pushed; "mode change only" names files whose content is as committed (a `chmod +x`) | commit and push, or close with `discard=true` if the work may go |
 | `approval_pending` with `kind: "repo_connect"` | the repository is private and not connected, or its key or token was refused; nothing was rented | open the card's `review_url` and paste a token (see "Connect a repository"), or at the node `openajar environments repo add github.com/me/shop --token` |

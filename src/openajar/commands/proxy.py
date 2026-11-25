@@ -1,4 +1,5 @@
-"""`openajar proxy`: the proxies lanes and environments' browsers exit through."""
+"""`openajar proxy`: the proxies lanes and environments' browsers exit through, and `this-computer`, the
+environments' browsers out through this computer's own connection (openajar.environments.thiscomputer)."""
 
 from __future__ import annotations
 
@@ -13,10 +14,11 @@ from openajar.core.config import (
     load_proxies,
     save_proxies,
 )
-from openajar.core.models import PROXY_LABEL_RE
+from openajar.core.models import PROXY_LABEL_RE, ProxyConfig
 
 proxy_app = typer.Typer(no_args_is_help=True, help="Proxies that lanes and environments' browsers exit through.")
 
+THIS_COMPUTER = "this-computer"  # openajar.environments.thiscomputer.THIS_COMPUTER: a label no proxy may take
 LOCAL_NAME = "local"  # openajar.local.paths.NAME: the name `openajar local` gives its node (not imported: a circle)
 
 
@@ -118,6 +120,9 @@ def proxy_add(
     credentials stay on this computer."""
     if not PROXY_LABEL_RE.fullmatch(label):
         raise typer.BadParameter("lowercase letters, digits, dot, dash or underscore", param_hint="LABEL")
+    if label == THIS_COMPUTER:
+        raise fail(f"{THIS_COMPUTER} is reserved: it means this computer's own connection, with no proxy. Run "
+                   f"`openajar proxy {THIS_COMPUTER}` to use it, or give this proxy another label.")
     cfg = initialized_config()
     proxy = parse_proxy(label, spec)
     proxies = load_proxies(cfg)
@@ -162,14 +167,17 @@ def proxy_list() -> None:
     exit through."""
     cfg = initialized_config()
     proxies = load_proxies(cfg)
-    if not proxies:
-        typer.echo("No proxies. Add one with `openajar proxy add <label> host:port:user:pass`.")
-        return
     pool = _pool(cfg.home)
+    if not proxies and THIS_COMPUTER not in pool:
+        typer.echo("No proxies. Add one with `openajar proxy add <label> host:port:user:pass`, or use this "
+                   f"computer's own connection with `openajar proxy {THIS_COMPUTER}`.")
+        return
     for p in sorted(proxies.values(), key=lambda p: p.label):
         auth = "with credentials" if p.username else "without credentials"
         typer.echo(f"{p.label}  {p.host}:{p.port}  {auth}" + ("  environments" if p.label in pool else ""))
-    gone = [label for label in pool if label not in proxies]
+    if THIS_COMPUTER in pool:
+        typer.echo(f"{THIS_COMPUTER}  this computer's own connection  environments")
+    gone = [label for label in pool if label not in proxies and label != THIS_COMPUTER]
     if gone:
         typer.echo(f"environments.toml names proxies that are not here: {', '.join(gone)} (environments skip them).")
 
@@ -180,9 +188,12 @@ def proxy_remove(label: Annotated[str, typer.Argument(help="The proxy's label, a
     """Delete a proxy from secrets/proxies.json and from the environments' list. Refused while a lane or
     device uses it. An environment open now keeps exiting through it until it closes or this node restarts.
     After a restart its browser does not start (it never goes out without its proxy): close it and open it
-    again."""
+    again. `remove this-computer` turns this computer's own connection off, as `proxy this-computer --off` does."""
     from openajar.core.layout import proxy_users
 
+    if label == THIS_COMPUTER:
+        _this_computer_off(initialized_config())
+        return
     cfg = initialized_config()
     proxies = load_proxies(cfg)
     pool = _pool(cfg.home)
@@ -224,29 +235,125 @@ def proxy_test(label: Annotated[str | None, typer.Argument(help="One proxy's lab
                timeout: Annotated[float, typer.Option(help="Seconds to wait for each proxy.")] = 10.0) -> None:
     """Ask ipinfo.io through each proxy: its exit IP, country and timezone, or why it failed, and what an
     environment's browser through it claims (its timezone and languages: environments.toml
-    browser_language), asked the way a launch asks. Exits 1 when any proxy fails."""
+    browser_language), asked the way a launch asks. A second source (geojs.io) is asked too, and a country
+    it places the exit in otherwise is said plainly: sites use either kind of database. Exits 1 when any
+    proxy fails."""
     from openajar.core.system import redact
     from openajar.environments.browserproxy import _probe, claims_words
 
     cfg = initialized_config()
     proxies = load_proxies(cfg)
     language = _browser_language(cfg.home)
-    if label is not None and label not in proxies:
+    if label is not None and label not in proxies and label != THIS_COMPUTER:
         raise fail(f"no proxy {label!r}; `openajar proxy list` shows the ones there are")
-    chosen = [proxies[label]] if label is not None else sorted(proxies.values(), key=lambda p: p.label)
+    if label is not None:
+        chosen: list[tuple[str, ProxyConfig | None]] = [(label, proxies.get(label) if label != THIS_COMPUTER else None)]
+    else:
+        chosen = [(p.label, p) for p in sorted(proxies.values(), key=lambda p: p.label)]
+        if THIS_COMPUTER in _pool(cfg.home):
+            chosen.append((THIS_COMPUTER, None))
     if not chosen:
         typer.echo("No proxies. Add one with `openajar proxy add <label> host:port:user:pass`.")
         return
     failed = 0
-    for p in chosen:
+    for name, p in chosen:
         try:
             info = _probe(p, timeout)  # the launch's own check, with its second source for a thin answer
         except OSError as e:
             failed += 1
-            typer.echo(f"{p.label}  failed: {redact(str(e) or type(e).__name__, p.username, p.password)}")
+            secrets = (p.username, p.password) if p is not None else ()
+            typer.echo(f"{name}  failed: {redact(str(e) or type(e).__name__, *secrets)}")
             continue
-        where = ", ".join(x for x in (info.get("city"), info.get("country")) if x) or "unknown place"
-        typer.echo(f"{p.label}  exit {info['ip']}  {where}  {info.get('timezone') or 'no timezone'}")
-        typer.echo(f"{' ' * len(p.label)}  {claims_words(info, language)}")
+        typer.echo(f"{name}  exit {info['ip']}  {_where(info)}  {info.get('timezone') or 'no timezone'}")
+        typer.echo(f"{' ' * len(name)}  {claims_words(info, language)}")
+        typer.echo(f"{' ' * len(name)}  {_second_opinion(p, timeout, info)}")
     if failed:
         raise typer.Exit(1)
+
+
+def _second_opinion(proxy: ProxyConfig | None, timeout: float, info: dict[str, str]) -> str:
+    """What a second geolocation source (geojs.io, Host.proxy_exit_geo) says of the same exit, in one line: that it
+    agrees, or plainly that it does not. Sites place an address with one database or another, so an exit two of
+    them put in different countries is treated as either (one test proxy was in Lithuania for ipinfo.io and in
+    Hong Kong for others, and TikTok refused it as Hong Kong's)."""
+    from openajar.core.system import Host, redact
+
+    try:
+        more = Host().proxy_exit_geo(proxy, timeout=timeout)
+    except OSError as e:
+        why = redact(str(e) or type(e).__name__, *((proxy.username, proxy.password) if proxy is not None else ()))
+        return f"second source: geojs.io did not answer ({why}), so only ipinfo.io placed this exit"
+    if more.get("ip") != info.get("ip"):
+        return (f"second source: geojs.io saw another exit, {more.get('ip')}: this proxy changes its address "
+                "between requests, so sites may see a new one at each visit")
+    mine, theirs = info.get("country"), more.get("country")
+    if mine and theirs and mine.upper() != theirs.upper():
+        return (f"second source: geojs.io places this exit in {theirs}, ipinfo.io in {mine}. The databases "
+                f"disagree, so some sites treat this address as {theirs}'s and may refuse it or show that "
+                "country's pages. Pick another proxy for a site that does")
+    return f"second source: geojs.io agrees ({_where(more)})"
+
+
+def _where(info: dict[str, str]) -> str:
+    return ", ".join(x for x in (info.get("city"), info.get("country")) if x) or "unknown place"
+
+
+@proxy_app.command("this-computer")
+def proxy_this_computer(
+    off: Annotated[bool, typer.Option("--off", help="Stop: environments opened from now on take another of "
+                                                    "browser_proxies, or none.")] = False,
+    timeout: Annotated[float, typer.Option(help="Seconds to wait for the exit check.")] = 10.0,
+) -> None:
+    """Let environments' browsers exit through this computer's own connection, with no proxy. Free, and with
+    openajar local sites see your home address, which has a real household's reputation.
+
+    Every page then travels through your home connection twice (down to this computer, up to the machine), so
+    your upload speed is the limit. It works only while this computer is on and online. Every environment shares
+    the one address, and what an agent does there counts for your household. It sits in browser_proxies beside
+    any proxies, taking turns with them. --off turns it off (as `openajar proxy remove this-computer` does)."""
+    cfg = initialized_config()
+    if off:
+        _this_computer_off(cfg)
+        return
+    pool = _pool(cfg.home)
+    if THIS_COMPUTER not in pool:
+        _set_pool(cfg.home, [*pool, THIS_COMPUTER])
+    typer.echo("Environments' browsers will exit through this computer's own connection: environments opened "
+               "from now on." + (' Environments here run their browser on the node, which this does not cover: set '
+                                 'browser = "vm" in environments.toml.' if _browser_runs_on_node(cfg) else ""))
+    from openajar.environments.browserproxy import _probe
+
+    try:
+        info = _probe(None, timeout)
+        typer.echo(f"This computer exits from {info['ip']} ({_where(info)}) now.")
+    except OSError as e:
+        typer.echo(f"Could not check this computer's exit now: {e or type(e).__name__}. A browser does not start "
+                   f"until this check works (`openajar proxy test {THIS_COMPUTER}`).")
+    if not _is_local(cfg):
+        typer.echo("This node is a server: its own address is a datacenter's, which sites stop as they stop the "
+                   "machine's, so it gains nothing here. Use a static residential proxy (`openajar proxy add`).")
+        return
+    typer.echo("Sites see your home address: what an agent does there counts for your household, and every "
+               "environment shares it.")
+    typer.echo("Pages come down to this computer and go up to the machine, so your upload speed is the limit, and it "
+               "works only while this computer is on and online.")
+
+
+def _this_computer_off(cfg: NodeConfig) -> None:
+    pool = _pool(cfg.home)
+    if THIS_COMPUTER not in pool:
+        typer.echo("This computer's own connection was not in the environments' list (browser_proxies): nothing "
+                   "changed.")
+        return
+    _set_pool(cfg.home, [p for p in pool if p != THIS_COMPUTER])
+    typer.echo("Environments' browsers no longer exit through this computer: environments opened from now on take "
+               "another of browser_proxies, or none.")
+    still = _open_through(cfg.home, THIS_COMPUTER)
+    if still:
+        typer.echo(f"Open environments still exit through it until they close or this node restarts: "
+                   f"{', '.join(still)}. After a restart their browser does not start. Close and open them again.")
+    saved = _saves_through(cfg.home, THIS_COMPUTER)
+    if saved:
+        typer.echo(f"Saves that exited through it take another exit when they resume, a new address for the sites "
+                   f"they were signed in to: {', '.join(saved[:10])}{f' and {len(saved) - 10} more' if len(saved) > 10 else ''}"
+                   f". Run `openajar proxy {THIS_COMPUTER}` again to keep their address.")

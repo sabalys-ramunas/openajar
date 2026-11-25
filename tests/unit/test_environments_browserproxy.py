@@ -276,7 +276,9 @@ async def test_the_browser_exits_through_the_node_and_nothing_secret_reaches_the
         assert "proxy" not in opts and opts["os"] == ["linux"] and opts["geoip"] is False
         assert opts["firefox_user_prefs"]["network.proxy.ssl_port"] == 3132
         place = {k: v for k, v in browserproxy.exit_options(EXIT)["config"].items() if not k.startswith("geolocation:")}
-        assert {k: v for k, v in opts["config"].items() if not k.startswith("window.")} == place
+        # besides the place: the window and the work area each launch claims (vmharden)
+        assert {k: v for k, v in opts["config"].items() if not k.startswith(("window.", "screen.avail"))} == place
+        assert opts["config"]["screen.availHeight"] == 1080
         assert opts["firefox_user_prefs"]["permissions.default.geo"] == 0  # no position: the page's ask waits
         assert opts["config"]["timezone"] == "Europe/Vilnius"
         assert opts["locale"] == ["lt-LT", "lt", "en-US", "en"]  # the exit country's (browser_language "exit")
@@ -540,8 +542,10 @@ def test_proxy_test_says_each_exit_or_why_it_failed(home, monkeypatch):
         return dict(EXIT)
 
     monkeypatch.setattr(system.Host, "proxy_exit_info", exit_info)
+    monkeypatch.setattr(system.Host, "proxy_exit_geo", lambda self, proxy, *, timeout: dict(EXIT))
     out = _cli("proxy", "test", "lt1")
     assert out.exit_code == 0 and "lt1  exit 203.0.113.7  Vilnius, LT  Europe/Vilnius" in out.output
+    assert "second source: geojs.io agrees (Vilnius, LT)" in out.output
     out = _cli("proxy", "test")
     assert out.exit_code == 1 and "lt2  failed: cannot connect" in out.output
     _no_secret(out.output, "lt1", "lt2")
@@ -752,10 +756,37 @@ def test_proxy_test_says_what_the_browser_claims_there(home, monkeypatch):
 
     _proxies(home, "lt1")
     monkeypatch.setattr(system.Host, "proxy_exit_info", lambda self, proxy, *, timeout: dict(EXIT))
+    monkeypatch.setattr(system.Host, "proxy_exit_geo", lambda self, proxy, *, timeout: dict(EXIT))
     out = _cli("proxy", "test", "lt1")
     assert out.exit_code == 0, out.output
     assert "browser: Europe/Vilnius, lt-LT, lt, en-US, en (exit near 54.69,25.28)" in out.output
     assert "—" not in out.output
+
+
+def test_proxy_test_says_plainly_when_a_second_source_places_the_exit_elsewhere(home, monkeypatch):
+    """The 2026-11-24 sites run: ipinfo.io placed one proxy in Lithuania, other databases in Hong Kong, and TikTok
+    refused it as Hong Kong's. geojs.io, the second source the launch already has, is asked too."""
+    from openajar.core import system
+
+    _proxies(home, "lt1")
+    monkeypatch.setattr(system.Host, "proxy_exit_info", lambda self, proxy, *, timeout: dict(EXIT))
+    hk = {"ip": EXIT["ip"], "country": "HK", "city": "Hong Kong", "timezone": "Asia/Hong_Kong"}
+    monkeypatch.setattr(system.Host, "proxy_exit_geo", lambda self, proxy, *, timeout: dict(hk))
+    out = _cli("proxy", "test", "lt1")
+    assert out.exit_code == 0, out.output
+    assert ("second source: geojs.io places this exit in HK, ipinfo.io in LT. The databases disagree, so some "
+            "sites treat this address as HK's") in out.output
+    monkeypatch.setattr(system.Host, "proxy_exit_geo", lambda self, proxy, *, timeout: {**hk, "ip": "198.51.100.3"})
+    assert "geojs.io saw another exit, 198.51.100.3" in _cli("proxy", "test", "lt1").output
+
+    def down(self, proxy, *, timeout):
+        raise OSError(f"HTTP 503 for {proxy.password}")
+
+    monkeypatch.setattr(system.Host, "proxy_exit_geo", down)
+    out = _cli("proxy", "test", "lt1")
+    assert out.exit_code == 0 and "geojs.io did not answer (HTTP 503" in out.output
+    _no_secret(out.output, "lt1")
+    assert "\u2014" not in out.output
 
 
 def test_every_key_the_exit_sets_follows_each_launch_and_is_never_pinned():

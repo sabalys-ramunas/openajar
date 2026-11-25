@@ -14,6 +14,7 @@ from openajar.core.tools import ToolContext
 from openajar.node import egress, human
 from openajar.node.claims import READ
 from openajar.node.fields import FormUnreadable, read_form_diff
+from openajar.node.snapshot import is_check_ref
 from openajar.node.tools.outline import active_page
 from openajar.node.tools.session import driven_session
 
@@ -40,7 +41,7 @@ async def form_before_submit(ctx: ToolContext, on: str, ref: str, action: Action
     modifier, a type or fill whose text holds a newline, and a select. One definition, so no key the
     gate counts as a submit gets past Ask me first unread (review of the fix wave, finding 2)."""
     mode = egress._press_mode(action.value, text)
-    if mode is None:
+    if mode is None or is_check_ref(ref):  # a check's checkbox is in its vendor's frame: no form of the page
         return None, None
     allowed = getattr(ctx, "can_access_lane", None)
     if callable(allowed) and not allowed(on):

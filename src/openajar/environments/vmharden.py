@@ -16,6 +16,10 @@ handed out with no prompt, and the window claimed at one place on the desktop wh
   machine's software renderer enforces (the machine has no GPU), with the canvas uncovered: Camoufox would
   cover it with new random data on every read once a GPU is named, and the device would not be one. The core count is the machine's own, set
   by the control script (vmbrowser_ctl SERVE), which knows it.
+- Every launch of a Linux identity (`work_area`): the screen's work area is the whole screen, as Firefox's own
+  fingerprinting protection reports it on Linux whatever panels the desktop has (measured: an untouched Firefox
+  161 on the machine's desktop, whose top bar and dock openbox reserves, reads availHeight 1080 on a 1080 screen).
+  A draw sometimes claimed 1032 or 1050, a value no Firefox on Linux shows.
 - A pin made before this (`upgrade`, once): only the quota pref is added. Its GPU stays: the renderer is
   what a site knows the device by, and a new one is a new device. The meta records what was kept.
 """
@@ -48,6 +52,15 @@ def every_launch(options: dict[str, Any]) -> None:
         config["window.screenY"] = max(0, (screen[1] - window[1]) // 2)
     options["config"] = config
     options.setdefault("firefox_user_prefs", {})[GEO_PREF] = 0
+
+
+def work_area(options: dict[str, Any], target_os: str) -> None:
+    """A Linux identity's work area: the whole screen of this launch, as Firefox itself reports it on Linux."""
+    screen = list(options.get("screen") or [])
+    if target_os != "linux" or len(screen) != 2:
+        return
+    options["config"] = {**(options.get("config") or {}), "screen.availWidth": screen[0],
+                         "screen.availHeight": screen[1], "screen.availLeft": 0, "screen.availTop": 0}
 
 
 def first_draw(options: dict[str, Any]) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 import pytest
 
@@ -19,6 +20,7 @@ from openajar.node.interaction import (
 from openajar.node.interaction.readback import _MARKERS_JS
 from openajar.node.sites import (
     MARKER_SELECTORS,
+    PASSED_FIELDS,
     Frame,
     LaneExpectation,
     PageFacts,
@@ -41,11 +43,11 @@ def facts(*, frames=(), scripts=(), elements=None, status=200, url=SHOP, cookies
 # ---- vendor frames, scripts and markers --------------------------------------------------------
 
 CHALLENGE_FRAMES = [
-    ("https://www.google.com/recaptcha/api2/anchor?ar=1&k=key&co=x&hl=lt&v=1&size=normal", "reCAPTCHA frame"),
+    ("https://www.google.com/recaptcha/api2/anchor?ar=1&k=key&co=x&hl=lt&v=1&size=normal", "reCAPTCHA checkbox"),
     ("https://www.google.com/recaptcha/api2/bframe?hl=lt&v=1&k=key", "reCAPTCHA frame"),
-    ("https://www.google.com/recaptcha/enterprise/anchor?k=key&size=normal", "reCAPTCHA frame"),
-    ("https://www.recaptcha.net/recaptcha/api2/anchor?k=key", "reCAPTCHA frame"),
-    ("https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=checkbox&id=1", "hCaptcha frame"),
+    ("https://www.google.com/recaptcha/enterprise/anchor?k=key&size=normal", "reCAPTCHA checkbox"),
+    ("https://www.recaptcha.net/recaptcha/api2/anchor?k=key", "reCAPTCHA checkbox"),
+    ("https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=checkbox&id=1", "hCaptcha checkbox"),
     ("https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=challenge&id=1", "hCaptcha frame"),
     ("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv/x/normal",
      "Cloudflare Turnstile frame"),
@@ -218,7 +220,7 @@ async def test_report_reads_cookies_through_the_context_for_the_page_url():
     assert (got.signal, got.detail) == (Signal.LOGGED_OUT, "instagram session cookie sessionid missing")
     assert ctx.asked == [["https://www.instagram.com/explore/"]]
     (script, arg), = page.scripts
-    assert script == _MARKERS_JS and arg == [list(MARKER_SELECTORS), 30]
+    assert script == _MARKERS_JS and arg == [list(MARKER_SELECTORS), 30, list(PASSED_FIELDS)]
 
 
 async def test_report_without_a_lane_binding_never_says_logged_out():
@@ -246,6 +248,34 @@ async def test_report_sees_challenge_frames_and_reads_no_text():
     page = ReadOnlyPage("https://www.linkedin.com/checkpoint/challenge/x", FakeContext(), markers)
     got = await PlaywrightInteraction().report(page)
     assert (got.signal, got.detail) == (A, "Arkose (FunCaptcha) frame")
+
+
+async def test_a_passed_widget_is_no_challenge_and_its_token_is_never_read():
+    # Turnstile's non-interactive check passed by itself: its frame stays on the page as "Success!"
+    frame = {"src": "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/f/av0/rch/x/0x4AA/auto",
+             "visible": True}
+    waiting = ReadOnlyPage("https://peet.ws/turnstile-test/non-interactive.html", FakeContext(),
+                           {"frames": [frame], "scripts": [], "elements": {}})
+    got = await PlaywrightInteraction().report(waiting)
+    assert (got.signal, got.detail) == (A, "Cloudflare Turnstile frame")
+    passed = ReadOnlyPage("https://peet.ws/turnstile-test/non-interactive.html", FakeContext(),
+                          {"frames": [frame], "scripts": [], "elements": {}, "passed": ["cf-turnstile-response"]})
+    assert (await PlaywrightInteraction().report(passed)).signal is OK
+    assert set(PASSED_FIELDS) == {"cf-turnstile-response", "h-captcha-response", "g-recaptcha-response"}
+    assert ".value.length > 0" in _MARKERS_JS and "return {frames, scripts, elements, passed}" in _MARKERS_JS
+
+
+def test_a_passed_widget_does_not_hide_another_vendors_challenge():
+    hcaptcha = Frame("https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=challenge", True)
+    turnstile = Frame("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/f/x", True)
+    facts = PageFacts(url="https://example.com/", frames=(turnstile, hcaptcha),
+                      passed=frozenset({"cf-turnstile-response"}))
+    assert classify_page(facts).detail == "hCaptcha frame"
+    assert classify_page(replace(facts, passed=frozenset(PASSED_FIELDS))).signal is OK
+    # a Cloudflare challenge page is one by its markers, whatever its widget holds
+    page = PageFacts(url="https://www.glassdoor.com/", elements={"#challenge-form": False}, frames=(turnstile,),
+                     passed=frozenset({"cf-turnstile-response"}))
+    assert classify_page(page).detail == "Cloudflare challenge page"
 
 
 def test_the_marker_script_reads_structure_only():
@@ -374,3 +404,15 @@ def test_snapshot_header_lines():
 
 def test_interaction_module_keeps_its_old_names():
     assert ia_mod.classify_signal is classify_signal
+
+
+def test_a_puzzle_wins_over_the_checkbox_it_came_from():
+    checkbox = Frame("https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=checkbox&id=1", True)
+    puzzle = Frame("https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=challenge&id=1", True)
+    assert classify_page(PageFacts(url="https://example.com/", frames=(checkbox,))).detail == "hCaptcha checkbox"
+    assert classify_page(PageFacts(url="https://example.com/", frames=(checkbox, puzzle))).detail == "hCaptcha frame"
+    anchor = Frame("https://www.google.com/recaptcha/api2/anchor?k=key&size=normal", True)
+    idle = Frame("https://www.google.com/recaptcha/api2/bframe?k=key", False)  # parked off the page until a puzzle
+    assert classify_page(PageFacts(url="https://example.com/", frames=(anchor, idle))).detail == "reCAPTCHA checkbox"
+    assert classify_page(PageFacts(url="https://example.com/",
+                                   frames=(anchor, replace(idle, visible=True)))).detail == "reCAPTCHA frame"

@@ -34,7 +34,12 @@ Who may use the port:
   such lookup for TCP, so there another account on the same Mac could use the port.
 
 The connection uses the VM's own key and pinned host key (openajar.vms.ssh), and forwards nothing
-else: no agent, no X11, no other port. If it drops, the environment's reaper starts it again.
+else: no agent, no X11, no other port. If it drops, the node starts it again (openajar.environments.relink):
+the dead tunnel is stopped first, so its guards give up their ports and its folder its sockets, and the new
+one takes the same ports. A `-R` the machine still holds for a session it has not seen end (this computer's
+address changed, so the old connection never said goodbye, and sshd keeps it until TCP gives up, hours
+later) fails the new connection; the node then ends the sshd sessions that listen on its own reverse ports
+on the machine (`free_remote_command`) and tries once more.
 """
 
 from __future__ import annotations
@@ -60,6 +65,8 @@ VM_BROWSER_PORT = 47613    # the browser server on the machine's loopback (vmbro
 VM_VNC_SOCKET = "/run/agentos-browser/vnc.sock"  # its VNC server (vmbrowser_ctl.py)
 VM_DESK_SOCKET = "/run/agentos-browser/desk.sock"  # its desktop's helper (desktop/desk.py), when the desktop runs
 START_WAIT_S = 10.0
+FREE_TIMEOUT_S = 20.0
+REMOTE_TAKEN = "remote port forwarding failed"  # ssh's words when the machine refused a -R (ExitOnForwardFailure)
 RELAY_CHUNK = 65536
 PROC_TCP = ("/proc/net/tcp", "/proc/net/tcp6")
 
@@ -107,6 +114,19 @@ def net_tunnel_argv(remote: RemoteHost, forwards: tuple[tuple[int, int], ...]) -
     for on_vm, here in forwards:
         out += ["-R", f"127.0.0.1:{int(on_vm)}:127.0.0.1:{int(here)}"]
     return out + base[-2:]
+
+
+def free_remote_command(ports: tuple[int, ...]) -> str:
+    """The command that ends the sshd sessions on the machine that listen on these loopback ports (the node's own
+    reverse ports: 3129 to 3132), so a new tunnel can take them. Only sshd's processes: a program of the agent's
+    that listens there is left alone, and the new -R then says so."""
+    which = " or ".join(f"sport = :{int(p)}" for p in sorted(set(ports)))
+    return (f"ss -Htlnp '( {which} )' | grep -oE '\"sshd(-session)?\",pid=[0-9]+' | grep -oE '[0-9]+$' "
+            "| sort -u | xargs -r kill")
+
+
+class _RemoteTaken(OSError):
+    """The machine refused one of the tunnel's -R forwards: something there listens on its port already."""
 
 
 # ---------------------------------------------------------------- who opened a connection
@@ -235,6 +255,12 @@ class Tunnel:
         self.browser_guard: Guard | None = None
         self.dir: str | None = None
         self.last_error = ""
+        # called once when one of its ssh processes exits by itself (the link dropped), not on stop()
+        self.on_exit: Callable[[], None] | None = None
+        self._watch: asyncio.Task | None = None
+        # a -R the machine refused after start() returned (its -D answered first): the next tunnel frees it first
+        self.remote_taken = False
+        self.free_first = False
 
     @property
     def alive(self) -> bool:
@@ -268,9 +294,35 @@ class Tunnel:
                 (os.path.join(self.dir, "browser"), f"127.0.0.1:{VM_BROWSER_PORT}"),
                 (os.path.join(self.dir, "desk"), VM_DESK_SOCKET))
 
+    def _remote_ports(self) -> tuple[int, ...]:
+        return ((GATEWAY_PORT_ON_VM,) if self.gateway_port else ()) + tuple(on_vm for on_vm, _ in self.net_forwards)
+
     async def start(self) -> None:
         if self.alive:
             return
+        if self.free_first:
+            await self._free_remote()
+        try:
+            await self._start_once()
+        except _RemoteTaken as e:
+            log.info("the tunnel to %s: the machine still holds a reverse port of an earlier connection (%s); "
+                     "ending that session there and trying again", self.remote.host_alias, e)
+            await self._free_remote()
+            await self._start_once()
+
+    async def _free_remote(self) -> None:
+        ports = self._remote_ports()
+        if not ports:
+            return
+        proc = await self._ssh([*ssh_base(self.remote), free_remote_command(ports)])
+        try:
+            await asyncio.wait_for(proc.wait(), FREE_TIMEOUT_S)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+
+    async def _start_once(self) -> None:
         await self.stop()
         # a short path (a Unix socket's is at most 104 bytes on macOS), in a folder only we can open
         self.dir = tempfile.mkdtemp(prefix="agentos-env-")
@@ -291,7 +343,8 @@ class Tunnel:
                     err = (await proc.stderr.read()).decode(errors="replace").strip() if proc.stderr else ""
                     self.last_error = err[-300:] or f"ssh exited {proc.returncode}"
                     await self.stop()
-                    raise OSError(f"the tunnel to the environment's machine did not start: {self.last_error}")
+                    kind = _RemoteTaken if REMOTE_TAKEN in err else OSError
+                    raise kind(f"the tunnel to the environment's machine did not start: {self.last_error}")
             if await _answers(sock):
                 self.guard = Guard(self.socks_port, sock)
                 if self.vm_browser and self.browser_port:
@@ -304,11 +357,34 @@ class Tunnel:
                     except OSError as e:
                         await self.stop()
                         raise OSError(f"the tunnel's port {guard.port} on this computer is taken: {e}") from None
+                self._watch = asyncio.create_task(self._watch_exit(), name=f"tunnel-{self.remote.host_alias}")
                 return
             await asyncio.sleep(0.2)
         await self.stop()
         raise OSError("the tunnel to the environment's machine did not answer within "
                       f"{START_WAIT_S:g} s")
+
+    async def _watch_exit(self) -> None:
+        """Wait for any of its ssh processes to end; one that ends by itself is the link dropping (on_exit)."""
+        procs = [p for p in (self.proc, self.git_proc, self.net_proc) if p is not None]
+        waits = [asyncio.ensure_future(p.wait()) for p in procs]
+        try:
+            await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for w in waits:
+                w.cancel()
+        self._watch = None
+        for proc in procs:
+            if proc.returncode is not None and proc.stderr is not None:
+                with contextlib.suppress(Exception):
+                    err = (await asyncio.wait_for(proc.stderr.read(), 2)).decode(errors="replace").strip()
+                    self.last_error = err[-300:] or self.last_error
+                    self.remote_taken = self.remote_taken or REMOTE_TAKEN in err
+        if self.on_exit is not None:
+            try:
+                self.on_exit()
+            except Exception:
+                log.exception("the tunnel's drop handler failed")
 
     @staticmethod
     async def _ssh(argv: list[str]) -> asyncio.subprocess.Process:
@@ -317,6 +393,9 @@ class Tunnel:
             stderr=asyncio.subprocess.PIPE, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"})
 
     async def stop(self) -> None:
+        watch, self._watch = self._watch, None
+        if watch is not None and watch is not asyncio.current_task():
+            watch.cancel()  # stopped on purpose: no drop to tell
         for guard in (self.guard, self.browser_guard):
             if guard is not None:
                 await guard.stop()
