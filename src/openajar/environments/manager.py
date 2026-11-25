@@ -72,6 +72,7 @@ from openajar.environments.preparing import Preparing
 from openajar.environments.prepbuild import PrepBuild
 from openajar.environments.proofs import Proofs
 from openajar.environments.recording import Recording
+from openajar.environments.relink import Relink
 from openajar.environments.replay import Replay
 from openajar.environments.saving import Saving
 from openajar.environments.sizing import Sizing
@@ -153,7 +154,7 @@ def check_ref(ref: str | None) -> str | None:
 
 class EnvironmentManager(Picking, Sizing, BringUp, Views, Proofs, Uploads, Downloads, Pausing, Saving, Activity,
                          SshAccess, Updates, Network, BrowserProxies, Preparing, PrepBuild, WarmPool, Replay,
-                         Checkpoints, Watching, Waking, Recording, Fleet, Logins, Liveness):
+                         Checkpoints, Watching, Waking, Recording, Fleet, Logins, Liveness, Relink):
     """The environments service. Which environment a call means and attaching by title (Picking), its
     sizing and cost (Sizing), its bring-up (BringUp), its read side (Views), its saves (Saving) and what
     counts as busy (Activity), and in local mode the agent's own ssh (SshAccess) are mixins in their own
@@ -844,14 +845,10 @@ class EnvironmentManager(Picking, Sizing, BringUp, Views, Proofs, Uploads, Downl
             if (rec.state == "ready" and (tunnel is None or not tunnel.alive) and env.state == "ready"
                     and await self.machine_gone(env, cause="its tunnel went down")):
                 continue  # gone: the agent's next call says so (openajar.environments.liveness)
-            if rec.state == "ready" and (tunnel is None or not tunnel.alive):
-                try:
-                    await self._start_tunnel(env)
-                    await self._make_browser(env)  # a lane manager that keeps lanes in memory lost it on a restart
-                    self._screen_soon(env)  # the screen the machine kept, or a new one
-                    out["tunnels"].append(env.id)
-                except Exception as e:  # noqa: BLE001
-                    log.warning("environment %s: tunnel did not start: %s", env.id, e)
+            # down: the firewall follows this computer, then the tunnel, the browser lane and the screen (relink)
+            if (rec.state == "ready" and (tunnel is None or not tunnel.alive)
+                    and await self.relink_once(env, cause="the reaper found its tunnel down")):
+                out["tunnels"].append(env.id)
             if rec.state == "ready":
                 await self.ssh_keep(env, now)  # local mode: the agent's own ssh, and its use counted as use
                 await self.quiet_upgrade(env, now)  # a keep "live" machine's security updates (openajar.environments.updates)

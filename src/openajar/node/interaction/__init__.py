@@ -51,6 +51,7 @@ from openajar.core.models import Signal, SnapshotResult
 from openajar.core.text import first_line
 from openajar.node.human import quietly
 from openajar.node.interaction.actions import ActMixin
+from openajar.node.interaction.checks import check_lines
 from openajar.node.interaction.dialogs import (
     _DIALOG_OPEN,
     DIALOG_TIMEOUT,
@@ -97,6 +98,7 @@ from openajar.node.interaction.waits import (
 from openajar.node.sites import (
     MARKER_SELECTORS,
     MIN_VISIBLE_PX,
+    PASSED_FIELDS,
     Frame,
     PageFacts,
     SignalReport,
@@ -246,9 +248,14 @@ class PlaywrightInteraction(NavigateMixin, ActMixin, UploadMixin, WaitMixin):
             raise
         except Exception as e:
             raise EngineError(f"snapshot failed: {first_line(e, 300)}") from e
-        update: dict[str, Any] = (await self.report(page)).public()
+        report = await self.report(page)
+        update: dict[str, Any] = report.public()
+        checks = await check_lines(page, report)  # a site's "are you human" checkbox, with a ref (checks.py)
+        if checks:
+            update["text"] = "\n".join([*checks, snap.text])
+            update["ref_count"] = snap.ref_count + len(checks)
         if header:
-            update["text"] = "\n".join([*header, snap.text])
+            update["text"] = "\n".join([*header, update.get("text", snap.text)])
             update["notices"] = header
         return snap.model_copy(update=update)
 
@@ -288,14 +295,15 @@ class PlaywrightInteraction(NavigateMixin, ActMixin, UploadMixin, WaitMixin):
     async def _facts(self, page: Page, url: str) -> PageFacts:
         self._track(page)
         status = self._status_for_current(page)
-        markers = await quietly(page.evaluate(_MARKERS_JS, [list(MARKER_SELECTORS), MIN_VISIBLE_PX]))
+        markers = await quietly(page.evaluate(_MARKERS_JS, [list(MARKER_SELECTORS), MIN_VISIBLE_PX, list(PASSED_FIELDS)]))
         cookies = await _read_cookies(page, url)
         if markers is None:
             return PageFacts(url=url, status=status, readable=False, cookies=cookies)
         frames = [Frame(f.get("src") or "", bool(f.get("visible"))) for f in markers.get("frames") or []]
         frames += await self._frames_in_hidden_dom(page, {f.url for f in frames})
         return PageFacts(url=url, status=status, frames=tuple(frames), scripts=tuple(markers.get("scripts") or ()),
-                         elements=dict(markers.get("elements") or {}), cookies=cookies)
+                         elements=dict(markers.get("elements") or {}), cookies=cookies,
+                         passed=frozenset(str(f) for f in markers.get("passed") or ()))
 
     async def _frames_in_hidden_dom(self, page: Page, seen: set[str]) -> list[Frame]:
         """Challenge frames that a DOM query cannot see (closed shadow roots), found through the

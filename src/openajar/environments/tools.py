@@ -594,6 +594,9 @@ async def environment(ctx: ToolContext, *, on: str | None = None) -> dict:
         return out
     if env.state == "starting":  # a machine coming up: wait here for ready (about a minute), never a poll loop
         env = await _wait_ready(mgr, env)
+    elif mgr.link_down(env.id) is not None:  # its link dropped: wait here for it, as for ready
+        progress.step("waiting for the link to the machine")
+        await mgr.wait_link(env.id, mgr.ready_wait_s)
     out = await mgr.detail(env, calls=CALLS_SHOWN)
     out.pop("viewer", None)
     out.pop("commands", None)
@@ -618,6 +621,8 @@ async def environment(ctx: ToolContext, *, on: str | None = None) -> dict:
         out["on"] = " ".join(str(on).split())
     if out.get("machine_gone"):
         out["next"] = out["machine_gone"]["next"]
+    elif (out.get("link") or {}).get("state") == "down":
+        out["next"] = out["link"]["next"]
     elif env.state == "starting":
         from openajar.environments.bringup import starting_words
 

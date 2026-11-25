@@ -6,6 +6,82 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-25
+
+This version adds one reserved label for `browser_proxies` (`this-computer`) and changes what an agent
+sees on a site's "are you human" check in an environment's browser: the checkbox now has a ref the agent
+may click once. An account's browser is held for any challenge, as before.
+
+### Added
+
+- An environment's browser can exit through this computer's own connection, with no proxy:
+  `openajar proxy this-computer` puts the reserved label `this-computer` in `browser_proxies` and prints the
+  address this computer goes out from now. With openajar local that is your home address, free, with a real
+  household's reputation. It stands alone or takes turns with proxies, and a save and a resume keep it like
+  any label. The node's forwarder connects to the sites itself and reaches public addresses only: never your
+  home network, your router or this computer's own services (local names, private, loopback, link-local and
+  CGNAT addresses, also inside IPv4-mapped or NAT64 IPv6, this computer's own public addresses and the
+  household's IPv6 prefix), and never port 25. Before each launch the node asks ipinfo.io straight from this
+  computer, over IPv4 first, and the forwarder keeps to that address family, so sites see the address the
+  browser claims. When the check fails the browser does not start. `openajar proxy test this-computer` makes
+  the same check, `openajar proxy this-computer --off` (or `proxy remove this-computer`) turns it off, and
+  `proxy add this-computer` is refused. The README says what it costs: your upload speed, a computer that has
+  to be on, and one address that every environment shares and that counts for your household.
+- In an environment's browser, a site's "are you human" checkbox (Cloudflare's, hCaptcha's, reCAPTCHA's) shows
+  at the top of the snapshot as a checkbox with a ref like `c1`, and `browser_act` clicks it once with real
+  input on the machine's screen, then says what came of it: passed, an image puzzle for your human (never
+  solved), or not passed. The checkbox sits in another site's frame, often in a closed shadow root, so the
+  outline had no node for it, and on Cloudflare's challenge page Playwright's own clicks never reach it.
+  openajar finds it in a picture of the check. The browser is not held for such a check; an image puzzle
+  holds it for you as before, and an account's browser is held for any challenge, as before.
+- The keyboard helper on an environment's machine starts with every browser, an English one too, and is also
+  the hand for that click.
+
+### Changed
+
+- `openajar proxy test` also asks a second geolocation source (geojs.io, which the launch's check already
+  uses) and says plainly when it places the exit in another country than ipinfo.io does, since sites use
+  either kind of database and may then treat the address as the other country's. It also says when the
+  second request left from another address (a rotating proxy).
+- On Cloudflare's check ("Just a moment...", "Verifying..."), `browser_navigate` and a `browser_act` that
+  lands on it wait up to 20 seconds for the check to let the browser through by itself, as a person waits,
+  before they report the page's signal. Read at once, a check that was about to pass held the browser for a
+  person with nothing left to do (Glassdoor's cleared by itself in about 15 seconds on a residential address).
+- A Turnstile, hCaptcha or reCAPTCHA widget that has passed (its token is in its form field, and it shows
+  "Success!") is no longer a challenge. A form with a widget that passed by itself held the browser for a person.
+- An environment's browser that claims Linux reports its whole screen as the work area, as Firefox itself
+  does on Linux. Some pins claimed 1032 or 1050 px of a 1080 screen, which no Firefox on Linux shows.
+
+### Fixed
+
+- With openajar local, the VM firewall follows this computer's address while it is awake, not only at start
+  and after a sleep. When the address moved (a hotspot, a VPN, the provider's own NAT: three times in an hour
+  in one test), every environment's link went down for good, since the firewall still named the old address.
+  Now a tunnel that drops is the signal: the node looks up the address, moves the firewall to it (the old one
+  goes in the same step), and brings the tunnel and the browser back, with tries after 3, 10, 20 and 30
+  seconds. A look once a minute while VMs run catches a move nothing noticed. A move needs a second lookup
+  service not to disagree, and an answer that is a private or reserved address is never used. During the
+  gap a call runs nothing and gets `environment_not_ready` saying the link is coming back, and
+  `environment()` waits for it and shows `link`.
+- An environment's browser on its machine with no proxy claims the machine's own place: the timezone of
+  where ipinfo.io places the machine's address (else of the server's Hetzner location) and that address for
+  WebRTC, every launch, never pinned. It claimed UTC from a datacenter in Germany, which fingerprint pages
+  flag ("privacy settings"). Its languages stay `en-US`. When the place cannot be learned, the browser
+  starts as before and the log says so.
+- A click on an element something covers now says what covers it, so the agent can close it in one step:
+  the covering element's ref (or that of its closest ancestor with one), else the dialog or fixed bar it
+  sits in with the refs of the buttons in it, from the last snapshot the agent saw, as in
+  `another element covers the target: dialog "Cookie notice", which has button "Accept" [ref=e5]`. The
+  error's `details` carry the same as `covered_by`. Before, the message only guessed "a banner, dialog or
+  sticky header?", and cookie boxes, sign-in promos and location choosers stopped agents on 5 sites in one
+  test.
+- A tunnel to an environment's machine that dropped now comes back. The node started a new one on the
+  dead one's ports while the dead one still held them, so every try failed with "the tunnel's port ... is
+  taken" and the environment's browser stayed down. The dead tunnel is now stopped first (its ports, its
+  sockets, the live view's included, and any of its ssh still running), and the new one takes the same
+  ports and carries the same forwards, the browser proxy's `127.0.0.1:3132` included. When the machine
+  still holds a reverse port of the old connection, the node ends that session there and tries once more.
+
 ## [0.6.0] - 2026-11-24
 
 This version adds settings (`browser_proxies` and `browser_language` in `environments.toml`) and changes

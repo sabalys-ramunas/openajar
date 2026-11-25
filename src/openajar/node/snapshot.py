@@ -65,6 +65,12 @@ HINT_MAX_CHARS = 40
 HINT_PARTS = 3           # distinct words groups joined into one hint
 
 REF_RE = re.compile(r"^(?:f\d+)?e\d+$")
+# A site's "are you human" check in an environment's browser (openajar.node.interaction.checks): c1, c2...
+CHECK_REF_RE = re.compile(r"^c\d+$")
+
+
+def is_check_ref(ref: str) -> bool:
+    return bool(CHECK_REF_RE.match(ref or ""))
 _LINE_RE = re.compile(r"^(?P<indent> *)- (?P<body>.*)$")
 _ROLE_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
 _JSON = json.JSONDecoder()

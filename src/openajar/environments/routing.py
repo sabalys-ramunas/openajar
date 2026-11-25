@@ -212,6 +212,8 @@ def route(runtime: Any, tool: str, kwargs: dict[str, Any], *, session: str | Non
         not_yet(env, clock() if callable(clock) else None)
     if getattr(env, "gone_at", None) is not None and tool not in ON_ONLY and callable(getattr(svc, "refuse_gone", None)):
         svc.refuse_gone(env)  # its machine stopped: machine_gone, with how the title goes on (a job's output still reads)
+    if tool not in ON_ONLY and callable(getattr(svc, "refuse_link_down", None)):
+        svc.refuse_link_down(env)  # its link dropped and is coming back: environment_not_ready, nothing ran
     kwargs["on"] = env.browser_lane if kind == "browser" else env.terminal_lane
     links = getattr(svc, "_desk_links", None)  # the desktop brings the browser forward (openajar.environments.desklink)
     if links is not None:

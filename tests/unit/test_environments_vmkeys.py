@@ -22,10 +22,10 @@ def test_the_layout_follows_the_browsers_first_language(locale, layout):
     assert vmkeys.layout_for(locale) == layout
 
 
-def test_the_launch_asks_for_the_helper_only_with_a_layout():
+def test_the_launch_asks_for_the_helper_with_its_layout_or_the_us_one():
     assert vmkeys.request({"locale": ["lt-LT", "lt", "en-US", "en"]}, "en-US") == {"keys": {"layout": "lt"}}
     assert vmkeys.request({}, "de-DE") == {"keys": {"layout": "de"}}  # no exit language: the lane's own
-    assert vmkeys.request({}, "en-US") == {}
+    assert vmkeys.request({}, "en-US") == {"keys": {"layout": None}}  # the US layout, and the hand
 
 
 class _Pipe:
@@ -64,3 +64,22 @@ async def test_no_helper_on_the_machine_leaves_the_letters_as_text():
                     {"keys": {"socket": "/run/x", "chars": ""}}, None):
         assert await vmkeys.attach("e1", types.SimpleNamespace(remote=None), context, started) is None
     assert context not in human.X_KEYBOARDS
+
+
+async def test_the_hand_glides_and_presses_on_the_machine_in_one_line_each():
+    proc = _proc([b"ok\n", b"ok\n", b"no\n"])
+    kb = vmkeys.VmKeys("", proc)  # an English browser: no letters to type, a hand all the same
+    assert not kb.has("a")
+    assert await kb.glide((100.4, 200.6), (831, 584), 412.7) is True
+    assert await kb.press_button(96.2) is True
+    assert proc.stdin.sent == [b"glide 100 201 831 584 413\n", b"press 96\n"]
+    assert await kb.glide((831, 584), (835, 580), 120) is False  # the machine could not: the caller falls back
+
+
+async def test_every_environment_browser_on_its_machine_may_click_a_check():
+    from openajar.node.interaction import checks
+
+    context = object.__new__(type("Ctx", (), {}))
+    assert not checks.allowed(types.SimpleNamespace(context=context))
+    assert await vmkeys.attach("e1", types.SimpleNamespace(remote=None), context, {}) is None
+    assert checks.allowed(types.SimpleNamespace(context=context))  # with or without the helper

@@ -80,3 +80,32 @@ def test_an_older_pin_takes_the_quota_once_and_keeps_its_gpu(tmp_path):
 def test_a_hardened_pin_is_left_as_it_is():
     pin = Pin({"navigator.userAgent": "x"}, {"version": PIN_VERSION, "hardening": HARDENING, "prefs": {}})
     assert vmharden.upgrade(pin.meta) is None
+
+
+def test_a_linux_identity_claims_the_whole_screen_as_its_work_area():
+    # an untouched Firefox on Linux reports the work area as the whole screen (its fingerprinting protection),
+    # also on the machine's desktop with its top bar and dock: a pin that drew 1032 shows what none shows
+    options = {"screen": [1920, 1080], "config": {"screen.availHeight": 1032, "timezone": "Europe/Vilnius"}}
+    vmharden.work_area(options, "linux")
+    assert options["config"] == {"screen.availWidth": 1920, "screen.availHeight": 1080, "screen.availLeft": 0,
+                                 "screen.availTop": 0, "timezone": "Europe/Vilnius"}
+    windows = {"screen": [1920, 1080], "config": {"screen.availHeight": 1032}}
+    vmharden.work_area(windows, "windows")
+    assert windows["config"] == {"screen.availHeight": 1032}  # its taskbar is its own
+
+
+def test_a_pinned_launch_takes_the_work_area_of_its_screen(tmp_path):
+    svc = types.SimpleNamespace(home=tmp_path)
+    path = vmpin.pin_path(tmp_path, "e1")
+    path.parent.mkdir(parents=True)
+    config = {"navigator.platform": "Linux x86_64", "screen.width": 1920, "screen.height": 1080,
+              "screen.availWidth": 1920, "screen.availHeight": 1050}
+    meta = {"version": PIN_VERSION, "hardening": HARDENING, "prefs": {}, "screen": [1920, 1080],
+            "window": [1776, 890]}
+    write_private_json(path, {**config, PIN_META: meta})
+    env = types.SimpleNamespace(id="e1")
+    options = {"screen": [1920, 1080], "window": [1776, 890], "config": {}, "firefox_user_prefs": {}}
+    prepared = vmpin.prepare(svc, env, LANE, options, build=None)
+    sent = prepared.request["pin"]["config"]
+    assert (sent["screen.availWidth"], sent["screen.availHeight"], sent["screen.availTop"]) == (1920, 1080, 0)
+    assert sent is options["config"]

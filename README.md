@@ -196,8 +196,8 @@ agent's computer, on a real screen, and adds what a browser alone does not have:
   and the rest) through every restart, save and resume, so a site sees the same device come back
   with the same sign-ins.
 - **Your own address.** A cloud machine goes out from a datacenter address, and many sites refuse
-  those whatever the browser is. Give the browser a static residential proxy and it goes out from an
-  internet provider's address instead.
+  those whatever the browser is. Give the browser a static residential proxy, or your own computer's
+  connection, and it goes out from an internet provider's address instead.
 
 ### Add a proxy
 
@@ -226,10 +226,37 @@ The details are in [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md#the-browsers-prox
 - **Only the browser uses it.** apt, npm, git and the shell go out as before, so your proxy carries
   pages and not package downloads.
 
+### Or use this computer's own connection
+
+```sh
+openajar proxy this-computer          # prints the address this computer goes out from now, and its country
+openajar proxy this-computer --off    # stop
+```
+
+The browser on the agent's computer then goes out through the computer openajar runs on: your laptop,
+at home. Sites see your home address, which has the reputation of a real household, and it costs
+nothing. The browser's timezone and language are matched to it as for a proxy, and it never reaches
+your home network or this computer's own services: only public sites.
+
+What it costs you instead:
+
+- **Your connection, twice.** Every page the agent loads comes down to this computer and goes up to
+  the machine. Your upload speed is the limit, and video is heavy.
+- **This computer has to be on.** It works only while this computer is on and online. openajar local
+  saves the environments when it sleeps.
+- **It is your household's address.** What an agent does on a site counts for your home, and a site
+  that bans the agent bans your home.
+- **One address for all.** Every environment shares it. For several agents, or accounts that must not
+  be linked to each other, a static residential proxy per environment is still the way.
+- **It moves with you.** When the laptop changes network or a VPN is on, the address changes, and the
+  browser's timezone and language follow it at the next launch.
+
 ### Which proxy, and what it costs
 
-Use a **static residential proxy** (also sold as an ISP proxy): one fixed address that belongs to an
-internet provider. It is the right kind for an agent's computer for two reasons.
+For one person's light use, this computer's own connection is free and good. For many agents, accounts
+that live a long time, or a laptop that sleeps, use a **static residential proxy** (also sold as an ISP
+proxy): one fixed address that belongs to an internet provider. It is the right kind for an agent's
+computer for two reasons.
 
 - **It is a real provider's address that stays.** Sign-ins, the fingerprint and the address all stay
   together, as they do for a person at home. A rotating pool changes the address between requests,
@@ -270,6 +297,16 @@ static residential proxy in Lithuania, with openajar's defaults:
 | Amazon: home, search, a product, a second search | works, four sessions out of four, arriving through the home page (and its "Continue shopping" button when it shows one) and its search box |
 | Leaks: a packet capture on the machine while the browser worked | none: no DNS, WebRTC or QUIC from the machine's own address |
 | The same address after 140 page loads, a browser restart, and a save and resume | yes |
+
+**Cloudflare's check** ("Just a moment...", "Verify you are human") follows the address more than the
+browser. Through one of the residential proxies it let the browser through by itself on Glassdoor and on a
+Crunchbase company page. From the datacenter's address it showed its checkbox on Glassdoor and Indeed, and
+an untouched Firefox on the same machine got the same checkbox on the same pages, as did stock Camoufox. The
+browser waits on that page as a person does (up to 20 seconds) before it reports anything. When the check
+still asks for its "Verify you are human" checkbox, the agent sees it in its snapshot and clicks it once, with
+real input on the machine's screen: from the datacenter's address that one click let the browser through on
+Glassdoor, Indeed and a Cloudflare test site, and through the residential proxy on Indeed. An image puzzle (hCaptcha's, reCAPTCHA's) is never solved: the
+agent hands the browser to you. On an account's browser any challenge still goes to you.
 
 What it does not get through, from the same runs:
 

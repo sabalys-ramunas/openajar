@@ -409,6 +409,28 @@ What this does not stop: the proxy provider sees every host the browser visits a
 machine's own way, as before. On the node, any local process can use the forwarder's loopback port, as it can
 the allowlist proxy's.
 
+#### This computer as the exit (`this-computer`)
+
+`openajar proxy this-computer` puts the reserved label `this-computer` in `browser_proxies`. It is off by
+default and only the owner turns it on, at the node. An environment that takes it has a forwarder with no
+upstream: it connects to the sites itself, from the node. With openajar local the node is the owner's own
+computer, so the address sites see is the owner's home address.
+
+| Question | Answer |
+|---|---|
+| Who can reach the internet from the owner's address | while such an environment is open, anything on its machine, not only the browser: any process there can use `127.0.0.1:3132`, and root on the machine is the agent. It reaches public hosts from the owner's home address, as the owner's own browser would. On a closed network it keeps to the network's list |
+| What it never reaches | the owner's home network and router, and this computer's own loopback services. The forwarder looks names up on the node once per connection and connects to the address it checked; it refuses local names (`localhost`, `.local`, `.internal`, `.home.arpa`, `.lan`) before any lookup, every address that is not global (private, loopback, link-local, CGNAT `100.64/10`, `0.0.0.0`, multicast, reserved and documentation ranges, the same inside an IPv4-mapped or NAT64 IPv6), this computer's own public addresses and the household's IPv6 `/56` around them (IPv6 has no NAT: the printer has a global address too), and the exit address itself (the router, from inside). A closed network's list cannot open any of these: an entry naming a private address stays refused |
+| Mail | port 25 is never opened, so the machine cannot send mail from the owner's address |
+| Which address | the exit check (ipinfo.io, before each launch) asks over IPv4 first, and the forwarder connects over the family that check answered over, so sites see the address the browser's WebRTC and its place claim. It takes the other family only for a name with no address in this one |
+| When it fails | this computer offline or asleep: the check fails and the browser does not start. It never falls back to the machine's own address |
+
+What this does not stop: what an agent does on a site is done from the owner's home address, so it counts for
+the household (a ban, a rate limit or a CAPTCHA reaches the owner's own browsing too), and every environment
+that takes `this-computer` shares that one address. The owner's internet provider sees the hosts the browser
+visits. The household's IPv6 prefix is taken as a `/56`: a delegation wider than that, with home devices in
+another `/56` of it, is not covered. On a server node the "home" address is the server's own, which gains
+nothing over the machine's.
+
 ## Logins in an environment's browser
 
 [ENVIRONMENTS.md, Signing in](ENVIRONMENTS.md#signing-in) is how it works. The owner binds a vault login to environments (`openajar environments login add <site> --title/--repo/--all`),
@@ -452,6 +474,27 @@ An environment saves when idle unless the agent asks for single use (`keep="none
 
 A sign-in kept in a save is a session on that site: anyone who can read the owner's provider account can
 read the snapshot. Single use keeps nothing once the work is pushed (a rescue save only for unpushed work).
+
+## The VM firewall follows this computer (local mode)
+
+In local mode (docs/LOCAL.md) the node is the owner's laptop, and the provider's firewall (Hetzner) lets SSH and
+ping into each machine from this computer's public address only. That address moves, also while the laptop is
+awake, so openajar learns it again: at the service's start, after a sleep, when a tunnel to a machine drops, and
+once a minute while machines run (openajar.vms.following). Learning it means asking a "what is my IP" service, so
+a third party's answer opens a firewall.
+
+| Question | Answer |
+|---|---|
+| What the rule names | this computer's address now: one IPv4 `/32`, and one IPv6 `/128` when it has one, for SSH (port 22) and ping. Never a range |
+| When the old address goes | in the same call that adds the new one (Hetzner's `set_rules` replaces the list), never after the new link is up. The old address is no longer this computer's (the next customer of that network may hold it), and the tunnels that used it are dead already. So the firewall never names two IPv4 addresses, and between the move and the change it names only the old one, which nobody here uses: the link waits, and nothing else is open |
+| Which services | ipify (`api.ipify.org`, `api6.ipify.org`), with ipinfo (`ipinfo.io/ip`) when it does not answer, over HTTPS, from this computer's own connection |
+| What a wrong answer cannot do | name a private, loopback, link-local, CGNAT, multicast or reserved address, or IPv4 written as IPv6: such an answer is dropped, and with no address left the firewall stays as it was |
+| What one service alone cannot do | move the firewall while the laptop is awake: a change asks a second service (ipinfo first), and when the two give different addresses nothing changes and the log says so. A second service that does not answer does not stop it (the same trust as at a start or a wake) |
+| What an attacker gains with a lie | SSH reachable from one address they chose, which still needs the node's key for that machine (key only, no password) and gets the machine's pinned host key. The owner's own tunnels then fail until the next look, a minute later at most |
+| How to opt out | `ssh_from` in `~/.openajar/vms.toml` names fixed addresses, and then nothing is looked up |
+
+While the link is down a call that needs the machine runs nothing and says so (`environment_not_ready`, with
+`retry_after`), and `environment()` waits up to a minute for the link to come back.
 
 ## The agent's own ssh to its environment (local mode)
 

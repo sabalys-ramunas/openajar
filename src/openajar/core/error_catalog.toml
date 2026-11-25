@@ -345,7 +345,7 @@ agent = "Ask for fewer hours or a smaller size, as the message says, or tell the
 fix = "Raise the limit the message names with `openajar environments allow --max-hours H`, `--max-size S` or `--monthly-eur E` (vms.toml holds the VM limits too), or close environments with `openajar environments close ID`."
 
 [environment_not_ready]
-meaning = "This chat has an environment, but the call cannot reach it right now: its machine is still starting, it is closing, or its tunnel is down because the node restarted or the connection dropped. Nothing ran on the node in its place."
+meaning = "This chat has an environment, but the call cannot reach it right now: it is starting or closing, or its link is down (a restart, a dropped connection, a new address) and the node is bringing it back. Nothing ran."
 agent = "Call environment(on=\"<your on>\") with the on your environment_open gave: it waits up to a minute for ready (the node starts a tunnel again within a minute), then call again. Do not open another environment for this."
 fix = "If it does not come back, `openajar environments show ID` shows its state, and `openajar logs --level warn --since 10m` why the tunnel does not start."
 retryable = true
@@ -935,7 +935,7 @@ retryable = true
 
 [target_covered]
 meaning = "Another element (a banner, a dialog, a sticky header) sits on top of the target."
-agent = "Close or scroll past what covers it (snapshot to find it), then act again."
+agent = "The message names what covers it: its ref, or the buttons in it with theirs. Close it with one of them (or scroll past it), then act again; with no ref named, snapshot first."
 fix = "Close the banner or dialog in the browser's live view."
 
 [target_not_visible]

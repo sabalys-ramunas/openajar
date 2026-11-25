@@ -12,6 +12,11 @@ trip, not a command. Everything else stays on Playwright, whose keys do not read
 A machine where the helper cannot start (no libXtst, no setxkbmap, a language with no layout here) answers
 with an error or no characters, and those letters go in as text, as before. A helper that stops answering is
 not asked again on that launch (human.type_text then types the rest as text).
+
+The same helper is the hand on the screen (human.X_POINTERS): a glide of the pointer along a hand's curve and a
+press of its button, as real X input, for the one click Playwright's input cannot make: a check's checkbox in a
+frame Playwright does not reach (openajar.node.interaction.checks). So it starts with every launch, an English
+one too (with the US layout).
 """
 
 from __future__ import annotations
@@ -54,9 +59,8 @@ def layout_for(locale: Any) -> str | None:
 
 def request(options: dict[str, Any], lane_locale: str | None) -> dict[str, Any]:
     """What the control script's browser action gets for the helper: the layout of the launch's language
-    (options["locale"] from the exit, else the lane's own), or nothing."""
-    layout = layout_for(options.get("locale") or lane_locale)
-    return {"keys": {"layout": layout}} if layout else {}
+    (options["locale"] from the exit, else the lane's own), or none (the US layout); the hand comes either way."""
+    return {"keys": {"layout": layout_for(options.get("locale") or lane_locale)}}
 
 
 class VmKeys:
@@ -90,6 +94,28 @@ class VmKeys:
                 return False
             return True
 
+    async def _hand(self, line: str, timeout_s: float) -> bool:
+        async with self._lock:
+            if self.broken:
+                return False
+            try:
+                self.proc.stdin.write(line.encode())
+                await self.proc.stdin.drain()
+                answer = await asyncio.wait_for(self.proc.stdout.readline(), timeout_s)
+            except (OSError, TimeoutError, ValueError, AttributeError):
+                answer = b""
+            return answer.strip() == b"ok"
+
+    async def glide(self, start: tuple[float, float], end: tuple[float, float], ms: float) -> bool:
+        """The pointer from `start` (where the page last saw it) to `end` along a hand's curve in about `ms`,
+        screen pixels. False when the machine did not do it."""
+        (x0, y0), (x1, y1) = start, end
+        return await self._hand(f"glide {x0:.0f} {y0:.0f} {x1:.0f} {y1:.0f} {ms:.0f}\n", PRESS_TIMEOUT_S + ms / 1000)
+
+    async def press_button(self, hold_ms: float) -> bool:
+        """The left button down and up again after `hold_ms`, where the pointer is."""
+        return await self._hand(f"press {hold_ms:.0f}\n", PRESS_TIMEOUT_S + hold_ms / 1000)
+
     async def close(self) -> None:
         with contextlib.suppress(ProcessLookupError, OSError):
             self.proc.terminate()
@@ -99,17 +125,23 @@ class VmKeys:
 
 async def attach(env_id: str, tunnel: Any, context: Any, started: Any) -> VmKeys | None:
     """After the browser started: when the helper runs (`started["keys"]`, the control script's answer), open
-    the relay to it and make it the lane's X keyboard. Never raises: without it letters go in as text."""
+    the relay to it and make it the lane's X keyboard and hand. Never raises: without it letters go in as text.
+    Whatever the helper does, this is an environment's browser on its machine, so its agent may click a check
+    (openajar.node.interaction.checks): an account's browser never comes here."""
     from openajar.node import human
+    from openajar.node.interaction import checks
     from openajar.vms.ssh import ssh_base
+
+    checks.allow(context)
 
     await detach(env_id)
     keys = started.get("keys") if isinstance(started, dict) else None
     if not isinstance(keys, dict):
         return None
-    if keys.get("error") or not keys.get("chars") or not keys.get("socket"):
+    if keys.get("error") or not keys.get("socket"):
         log.info("environment %s: the machine's keyboard helper is not running (%s); letters the US layout lacks "
-                 "go in as text", env_id, str(keys.get("error") or "the layout types no such letter")[-300:])
+                 "go in as text, and a check's checkbox is clicked with Playwright's input", env_id,
+                 str(keys.get("error") or "no socket")[-300:])
         return None
     try:
         command = shlex.join(["/usr/bin/python3", "-I", "-c", RELAY, str(keys["socket"])])
@@ -118,9 +150,11 @@ async def attach(env_id: str, tunnel: Any, context: Any, started: Any) -> VmKeys
     except (OSError, AttributeError) as e:
         log.warning("environment %s: no relay to the machine's keyboard helper (%s); letters go in as text", env_id, e)
         return None
-    kb = VmKeys(str(keys["chars"]), proc)
+    kb = VmKeys(str(keys.get("chars") or ""), proc)
     _BY_ENV[env_id] = kb
-    human.X_KEYBOARDS[context] = kb
+    if kb.chars:
+        human.X_KEYBOARDS[context] = kb
+    human.X_POINTERS[context] = kb
     return kb
 
 

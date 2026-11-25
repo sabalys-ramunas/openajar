@@ -36,7 +36,7 @@ from openajar.core.aio import maybe_await
 from openajar.core.errors import InvalidRequest, LaneExists, NotFound, OpenajarError
 from openajar.core.models import LaneState, parse_lane_id, utcnow
 from openajar.env.models import RemoteHost
-from openajar.vms import capacity, netwall, providers, repos, ssh
+from openajar.vms import capacity, following, netwall, providers, repos, ssh
 from openajar.vms import keys as vmkeys
 from openajar.vms.models import Size, VmError, VmFull, VmLimit, VmRecord, VmSettings, load_settings
 from openajar.vms.pausing import Pausing
@@ -101,9 +101,6 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
 
 
-
-
-
 async def lookup_public_ips() -> list[str]:
     """This computer's public IPv4 address and, when it has one, its IPv6 address, as the internet
     sees them: each asked over its own address family. [] when nothing answered."""
@@ -161,6 +158,7 @@ class VmManager(Pausing):
         # every new VM and on refresh_firewall (openajar local: a laptop moves between networks)
         self.follow_ip = follow_ip
         self._ip_lookup = ip_lookup or lookup_public_ips
+        self.addresses = following.AddressFollower(self, second=None if ip_lookup else following.second_ipv4)
 
     # ================================================================ wiring
     @property
@@ -295,7 +293,7 @@ class VmManager(Pausing):
         if self.settings.ssh_from:
             return [str(ipaddress.ip_network(c, strict=False)) for c in self.settings.ssh_from]
         if self.follow_ip:
-            return await self._current_ips()
+            return self.addresses.noted(await self._current_ips())
         if self._public_ip is None:
             for url in EXIT_IP_URLS:
                 try:
@@ -315,8 +313,8 @@ class VmManager(Pausing):
         reached at its IPv4 address, so it is needed) and the IPv6 one when there is one."""
         found: list[Any] = []
         for wait in (*self.preflight_waits, None):  # a laptop's network drops for a few seconds: ~15 s of tries
-            try:
-                found = [ipaddress.ip_address(a) for a in await self._ip_lookup()]
+            try:  # never a private or reserved one: a wrong answer must not open the firewall to a range
+                found = [ip for ip in map(ipaddress.ip_address, await self._ip_lookup()) if following.public(ip)]
             except (ValueError, httpx.HTTPError, OSError):
                 found = []
             if any(ip.version == 4 for ip in found) or wait is None:
@@ -336,14 +334,12 @@ class VmManager(Pausing):
         """With follow_ip: set the node's VM firewall to this computer's address now, so the tunnels
         of the VMs already running reach them again after the laptop moved to another network. None
         when there is nothing to set (no provider yet, no firewall, or a fixed ssh_from)."""
-        if not (self.follow_ip and self.configured and self.settings.firewall and not self.settings.ssh_from):
-            return None
-        prov = self.provider()
-        if not getattr(prov, "firewall", True):
-            return None
-        nets = await self._current_ips()
-        await netwall.refresh(prov, f"agentos-{self.node}-{self.home_id}", self._labels(), nets)
-        return nets
+        out = await self.addresses.follow("a start or a wake", force=True)
+        return out["nets"] if out is not None else None
+
+    async def follow_address(self, why: str, *, fresh: bool = False) -> dict | None:
+        """While awake: the firewall follows this computer's address when it moved (openajar.vms.following)."""
+        return await self.addresses.follow(why, fresh=fresh)
 
     async def _types_or_none(self) -> list[dict] | None:
         """Every server type with its prices and locations (the offers' cache), None when unknown."""

@@ -67,6 +67,7 @@ class NetNode:
     browser_forwarder: Any = None             # the browser's own forwarder to the owner's proxy (browserproxy)
     browser_proxy_port: int | None = None
     browser_upstream: Any = None              # that proxy (a ProxyConfig: it stays on the node)
+    browser_direct: bool = False              # no proxy: it exits through this computer (thiscomputer)
     browser_exit: dict | None = None          # where the last launch's check found the exit (ip, country, ...)
     values: dict[str, tuple[float, Any]] = field(default_factory=dict)
     save_at: float = 0.0

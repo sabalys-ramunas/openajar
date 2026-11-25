@@ -5,6 +5,7 @@ the plan drew, not the plan plus two round trips."""
 from __future__ import annotations
 
 import asyncio
+import functools
 import itertools
 import statistics
 import time
@@ -12,6 +13,20 @@ import time
 from openajar.node import human, human_pace
 
 RTT_S = 0.03  # a round trip to the machine's browser
+
+
+def on_the_real_clock(test):
+    """These tests measure real milliseconds, so a computer that is busy for a moment (a loaded CI runner)
+    can push one hold out of its window. A test here gets three tries: a real fault fails all three."""
+    @functools.wraps(test)
+    async def tried(*args, **kwargs):
+        for last in (False, False, True):
+            try:
+                return await test(*args, **kwargs)
+            except AssertionError:
+                if last:
+                    raise
+    return tried
 
 
 WORK_S = 0.04  # what a press or a wheel does on the page before its event fires (it waits for a frame)
@@ -73,6 +88,7 @@ def holds(seen: list[tuple]) -> list[float]:
     return out
 
 
+@on_the_real_clock
 async def test_keys_reach_a_far_page_held_as_long_as_planned(monkeypatch):
     monkeypatch.setattr(human, "_hold_ms", lambda offset=0.0: 90.0)
     monkeypatch.setattr(human, "ROLLOVER_RATE", 0.0)
@@ -85,6 +101,7 @@ async def test_keys_reach_a_far_page_held_as_long_as_planned(monkeypatch):
     assert 80 <= statistics.median(held) <= 105, held
 
 
+@on_the_real_clock
 async def test_a_hold_shorter_than_a_wait_costs_is_kept_too(monkeypatch):
     """A 50 ms hold over 30 ms round trips: a wait on the page would cost more than what is left after
     the keydown's answer, so the rest is waited here; the page sees about 50 ms, not one round trip."""
@@ -96,6 +113,7 @@ async def test_a_hold_shorter_than_a_wait_costs_is_kept_too(monkeypatch):
     assert 42 <= statistics.median(held) <= 62, held
 
 
+@on_the_real_clock
 async def test_a_press_reaches_a_far_page_held_as_long_as_planned(monkeypatch):
     monkeypatch.setattr(human, "_draw_ms", lambda lo, hi: 120)
     page = FarPage()
@@ -103,10 +121,12 @@ async def test_a_press_reaches_a_far_page_held_as_long_as_planned(monkeypatch):
         await human._press_release(page)
     held = holds(page.seen)
     assert len(held) == 3
-    # unpaced, 120 ms plus two round trips; paced from the send alone, 120 ms less the press's own work
-    assert all(105 <= h <= 140 for h in held[1:]), held
+    # unpaced, 120 ms plus two round trips (180); paced from the send alone, 120 ms less the press's own work.
+    # The window leaves room for a runner whose sleeps are coarse (macOS in CI gave 93 to 157), and none for 180
+    assert all(90 <= h <= 160 for h in held[1:]), held
 
 
+@on_the_real_clock
 async def test_wheel_notches_reach_a_far_page_at_the_planned_gaps(monkeypatch):
     monkeypatch.setattr(human, "_notch_gap_ms", lambda page, pace="read": 70)
     monkeypatch.setattr(human, "lane_offset", lambda page: 0.0)
@@ -119,6 +139,7 @@ async def test_wheel_notches_reach_a_far_page_at_the_planned_gaps(monkeypatch):
     assert 60 <= statistics.median(gaps) <= 85, gaps
 
 
+@on_the_real_clock
 async def test_a_call_that_hangs_moves_the_rest_instead_of_squeezing_it():
     """A call that took far longer than its round trip (a busy page, an X key sent over ssh) moves the
     rest of the run later: the next gap is still about what the plan says, not made up by bunching."""
@@ -169,6 +190,7 @@ class SlowHandlerPage(FarPage):
         await asyncio.sleep(0.1 + RTT_S / 2)
 
 
+@on_the_real_clock
 async def test_a_slow_handler_after_the_release_never_shortens_the_next_holds():
     """What a release takes past its round trip is the page's handler, after the event: the next release
     is not sent early by it (it was, and a page with a 100 ms click handler saw 20 ms holds)."""
@@ -181,9 +203,10 @@ async def test_a_slow_handler_after_the_release_never_shortens_the_next_holds():
         await clock.until(120, "release")
         await clock.call(page.up(), "release")
         holds.append((page.events[-1][1] - page.events[-2][1]) * 1000)
-    assert all(100 <= h <= 160 for h in holds), holds
+    assert all(90 <= h <= 160 for h in holds), holds  # the fault gave 20 ms; a coarse runner gives 96 for 120
 
 
+@on_the_real_clock
 async def test_a_browser_beside_us_keeps_the_plans_own_waits():
     """Under the round trip floor (a lane on the node) nothing is paced: each wait is the plan's gap, whatever
     the calls between took, as before there was a clock."""

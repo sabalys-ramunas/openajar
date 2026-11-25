@@ -203,7 +203,8 @@ async def test_open_never_asks_then_rents_clones_and_is_ready(node):
     # the node's own live view, never a page of the web app (the public repository has none)
     assert set(out["links"]) == {"browser"} and "/environments/" not in str(out["links"]["browser"])
     # the agent finds its terminal without guessing: the tools it needs are named, and where the rest are
-    assert "npm" not in out["next"]  # a Python repository's agent is not told to run npm
+    # a Python repository's agent is not told to run npm (the id is random and may spell it)
+    assert "npm" not in out["next"].replace(out["id"], "")
     for words in ("calls without `on` go here", 'terminal_exec(cmd="git status") runs a command, in /work/shop too',
                   "file_read", "file_edit", "proof=", "environment_pull_request(title)",
                   "terminal_job_start(", "terminal_job_read", "in your list", 'tools_more("terminals")',

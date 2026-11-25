@@ -150,7 +150,14 @@ async def test_the_browser_runs_on_the_machine(node):
     assert marker in snap.text and "Next" in snap.text  # rendered and read on the machine
     wide = await interaction.screenshot(page)
     on_desktop = mgr._vm_browsers.desktops.get(lane, False)  # an image with desktop.sh: a window on a desktop
-    assert png_size(wide)[0] == (vmbrowser.DESKTOP_WINDOW[0] if on_desktop else 1920)
+    width = png_size(wide)[0]
+    assert width == await page.evaluate("innerWidth")  # the picture is the page's own viewport
+    if on_desktop:
+        # the window's own edge (GTK draws 5 px each side) counts inside the window with some draws of the
+        # fingerprint and outside it with others, so the page is the window's width or 10 px less
+        assert width in (vmbrowser.DESKTOP_WINDOW[0], vmbrowser.DESKTOP_WINDOW[0] - 10)
+    else:
+        assert width == 1920
     if on_desktop:  # a command's GUI goes to that screen
         shown = await mgr.envs().exec(env.terminal_lane, 'echo "$DISPLAY"', timeout_s=30)
         assert (shown.stdout or "").strip() == ":99"
@@ -276,3 +283,50 @@ async def test_letters_the_us_layout_lacks_are_real_keys_on_the_machine(node, mo
     letters = {k: (c, t) for k, c, t in seen if k in "ĄžėŠš"}
     assert letters["Ą"] == ("Digit1", True) and letters["ž"] == ("Equal", True), seen
     assert not kb.broken
+
+
+async def _link_back(mgr, env) -> None:
+    """What the node does after a tunnel dropped: the drop itself starts it again (openajar.environments.relink),
+    with no reaper pass."""
+    for _ in range(300):
+        tunnel = mgr.tunnel_of(env.id)
+        if tunnel is not None and tunnel.alive and mgr.link_down(env.id) is None:
+            return
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"the link did not come back: {mgr.link_down(env.id)}")
+
+
+async def test_a_tunnel_whose_ssh_was_killed_comes_back_with_its_browser_and_live_view(node):
+    """The link to the machine dropped (its ssh killed on this computer). The node starts the tunnel again at once on
+    the same ports (the dead one stopped first: before, "port is taken" on every try), and the browser that ran
+    starts again with it: the next browser call finds it working, with its live view, the machine's localhost and
+    the terminal as before."""
+    from openajar.node.interaction import create_interaction
+
+    mgr, envs, lanes = node["mgr"], node["envs"], node["lanes"]
+    env = await _open(node, "Link")
+    await envs.job_start(env.terminal_lane, "mkdir -p /srv/l && echo '<title>L</title><h1>still here</h1>' > "
+                         "/srv/l/index.html && cd /srv/l && exec python3 -m http.server 3003 --bind 127.0.0.1")
+    await asyncio.sleep(1.0)
+    await lanes.open(env.browser_lane)
+    page = await lanes.live_session(env.browser_lane).page()
+    await create_interaction().navigate(page, "http://localhost:3003/")
+    before = mgr.tunnel_of(env.id)
+    ports = (before.socks_port, before.browser_port)
+    before.proc.kill()  # the link dropped
+    await before.proc.wait()
+    assert not before.alive
+
+    await _link_back(mgr, env)
+    assert mgr.link_view(mgr.get(env.id))["state"] == "back"
+    after = mgr.tunnel_of(env.id)
+    assert after.alive and (after.socks_port, after.browser_port) == ports
+    info = await lanes.open(env.browser_lane)  # the browser call after the drop: its dead browser starts again
+    assert info.viewer.vnc_socket == after.vnc_path
+    assert (await _rfb_banner(info.viewer.vnc_socket)).startswith(b"RFB 003.")  # the live view is back
+    interaction = create_interaction()
+    page = await lanes.live_session(env.browser_lane).page()
+    await interaction.navigate(page, "http://localhost:3003/")
+    assert "still here" in (await interaction.snapshot(page)).text
+    ran = await envs.exec(env.terminal_lane, "echo ok", timeout_s=30)
+    assert ran.stdout.strip() == "ok"

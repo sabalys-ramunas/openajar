@@ -60,7 +60,7 @@ carries one of these codes:
 | [`environment_full`](#environment_full) | The node already runs as many machines as it allows at once (environments.toml max_live, 3 by default; one still being deleted counts). vms.toml max_live is never below it: one count. Nothing was opened. | yes, after 60 s |
 | [`environment_in_use`](#environment_in_use) | The chat that opened the live machine with this title holds it (with no session id, it may be this chat). Nothing was opened. take_over=true moves it once that chat made no call for take_over_minutes (10). | no |
 | [`environment_limit`](#environment_limit) | Opening or extending it would pass a node limit (it never asks a person): the longest life (8 hours), the biggest size, or the month's budget (EUR 50). The message says which. Machines at once is environment_full. | no |
-| [`environment_not_ready`](#environment_not_ready) | This chat has an environment, but the call cannot reach it right now: its machine is still starting, it is closing, or its tunnel is down because the node restarted or the connection dropped. Nothing ran on the node in its place. | yes, after 30 s |
+| [`environment_not_ready`](#environment_not_ready) | This chat has an environment, but the call cannot reach it right now: it is starting or closing, or its link is down (a restart, a dropped connection, a new address) and the node is bringing it back. Nothing ran. | yes, after 30 s |
 | [`error`](#error) | Something failed that has no more specific code. | no |
 | [`export_failed`](#export_failed) | A workspace export could not be written. | yes, once the cause is fixed |
 | [`export_refused`](#export_refused) | The workspace export or import cannot go ahead as asked. Nothing was changed. | no |
@@ -700,7 +700,7 @@ Opening or extending it would pass a node limit (it never asks a person): the lo
 
 ## environment_not_ready
 
-This chat has an environment, but the call cannot reach it right now: its machine is still starting, it is closing, or its tunnel is down because the node restarted or the connection dropped. Nothing ran on the node in its place.
+This chat has an environment, but the call cannot reach it right now: it is starting or closing, or its link is down (a restart, a dropped connection, a new address) and the node is bringing it back. Nothing ran.
 
 - **Agent:** Call environment(on="<your on>") with the on your environment_open gave: it waits up to a minute for ready (the node starts a tunnel again within a minute), then call again. Do not open another environment for this.
 - **You:** If it does not come back, `openajar environments show ID` shows its state, and `openajar logs --level warn --since 10m` why the tunnel does not start.
@@ -1817,7 +1817,7 @@ The review page was not ready within the call's time limit (waiting for a free p
 
 Another element (a banner, a dialog, a sticky header) sits on top of the target.
 
-- **Agent:** Close or scroll past what covers it (snapshot to find it), then act again.
+- **Agent:** The message names what covers it: its ref, or the buttons in it with theirs. Close it with one of them (or scroll past it), then act again; with no ref named, snapshot first.
 - **You:** Close the banner or dialog in the browser's live view.
 - **Retry:** no
 - **Raised by:** `openajar.node.human.TargetCovered`

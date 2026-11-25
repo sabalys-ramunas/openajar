@@ -273,10 +273,14 @@ with a token for that one repository, which ends when the environment closes.
 ## The VM firewall
 
 A VM lets SSH in only from your laptop. Your laptop's public address changes when you move to
-another network, so openajar reads it again (IPv4, and IPv6 when you have it) every time an
-environment opens, and after every wake. If it cannot find it (you are offline), the environment
-does not open and says so. Set `ssh_from` in `~/.openajar/vms.toml` to fixed addresses if you would
-rather.
+another network, and sometimes while you sit still (a hotspot, a VPN, your provider), so openajar
+reads it again (IPv4, and IPv6 when you have it) every time an environment opens, after every wake,
+when a tunnel to a VM drops, and once a minute while VMs run. When it moved, the firewall lets in the
+new address and drops the old one in the same step, and the environments' links come back by
+themselves, their browsers too. A move needs two lookup services to agree. If it cannot find the
+address (you are offline), the environment does not open and says so. Set `ssh_from` in
+`~/.openajar/vms.toml` to fixed addresses if you would rather. docs/THREAT-MODEL.md says how the
+lookup is bounded.
 
 ## Sleep
 

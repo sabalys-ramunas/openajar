@@ -1037,3 +1037,49 @@ async def test_a_quarantine_that_could_not_be_saved_still_closes_and_refuses_eve
     async with t.mgr.using("a/one"):
         pass
     await t.mgr.shutdown()
+
+
+class CheckReads(ChallengeReads):
+    """A page whose signal names the rule that matched, as the real interaction's results do."""
+
+    detail = "Cloudflare challenge page"
+
+    async def navigate(self, page, url, **kw):
+        result = await super().navigate(page, url, **kw)
+        return result.model_copy(update={"signal_detail": self.detail})
+
+    async def report(self, page):
+        from openajar.node.sites import SignalReport
+
+        return SignalReport(self.signal_value, self.detail, page.url)
+
+
+class BrowserContext:
+    pass
+
+
+async def test_a_checkbox_check_holds_an_account_browser_but_not_an_environments(tmp_path):
+    """The boundary of the agent's click on a check (openajar.node.interaction.checks): an environment's browser on
+    its machine is allowed, an account's never is, and an image puzzle holds both."""
+    from openajar.node.interaction import checks
+
+    t = build(tmp_path, policy=policy)
+    await t.mgr.create(LaneSpec(id="biz/glassdoor"))
+    await t.mgr.create(LaneSpec(id="env/e1-browser"))
+    interaction = CheckReads()
+    watched = t.mgr.watch(interaction)
+    interaction.signal_value = Signal.CAPTCHA
+    async with t.mgr.using("biz/glassdoor") as page:
+        page.context = BrowserContext()  # an account's browser: never allowed
+        await watched.navigate(page, "https://www.glassdoor.com/")
+    assert t.mgr.get("biz/glassdoor").hold == "needs_human:captcha on www.glassdoor.com"
+    async with t.mgr.using("env/e1-browser") as page:
+        page.context = BrowserContext()
+        checks.allow(page.context)  # what openajar.environments.vmkeys.attach does for its browser
+        await watched.navigate(page, "https://www.glassdoor.com/")
+        await watched.screenshot(page)
+        assert t.mgr.get("env/e1-browser").hold is None  # the agent has the check's ref
+        interaction.detail = "hCaptcha frame"  # an image puzzle: the human's, here too
+        await watched.navigate(page, "https://www.glassdoor.com/")
+    assert t.mgr.get("env/e1-browser").hold == "needs_human:captcha on www.glassdoor.com"
+    await t.mgr.shutdown()

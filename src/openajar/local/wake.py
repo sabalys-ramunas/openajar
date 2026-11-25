@@ -15,6 +15,11 @@ closed to local-catch-up.json in the home, which `openajar local status` reads. 
 reaper saves before it deletes (openajar.environments.saving): a keep "save" environment is saved, and
 one with unsaved work gets a rescue save. One whose save failed stays (it is in `kept`, with its last
 save), and the owner was told.
+
+While it is awake and VMs run, the same loop looks at this computer's address once a minute
+(FOLLOW_EVERY_S, openajar.vms.following): an address that moved without a tunnel noticing yet moves the
+firewall, and the environments whose tunnels are down come back at once (openajar.environments.relink).
+A dropped tunnel asks on its own, so this is the backstop.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from typing import Any
 
 from openajar.core import fs
 from openajar.local.paths import catch_up_path
+from openajar.vms.following import FOLLOW_EVERY_S
 
 log = logging.getLogger("openajar.local")
 
@@ -42,10 +48,10 @@ WAKE_JUMP_S = 30.0
 class CatchUp:
     def __init__(self, runtime: Any, home: Path, *, tick_s: float = TICK_S, jump_s: float = WAKE_JUMP_S,
                  wall: Callable[[], float] = time.time, awake: Callable[[], float] = time.monotonic,
-                 sleep: Callable[[float], Awaitable[None]] = asyncio.sleep):
+                 sleep: Callable[[float], Awaitable[None]] = asyncio.sleep, follow_s: float = FOLLOW_EVERY_S):
         self.runtime = runtime
         self.home = Path(home)
-        self.tick_s, self.jump_s = tick_s, jump_s
+        self.tick_s, self.jump_s, self.follow_s = tick_s, jump_s, follow_s
         self._wall, self._awake, self._sleep = wall, awake, sleep
         self._task: asyncio.Task | None = None
         self.last: dict | None = None
@@ -64,6 +70,7 @@ class CatchUp:
     async def _loop(self) -> None:
         await self.run("started")
         wall, awake = self._wall(), self._awake()
+        looked = awake
         while True:
             await self._sleep(self.tick_s)
             now_wall, now_awake = self._wall(), self._awake()
@@ -71,6 +78,28 @@ class CatchUp:
             wall, awake = now_wall, now_awake
             if slept >= self.jump_s:
                 await self.run("woke", slept_s=slept)
+                looked = now_awake
+            elif now_awake - looked >= self.follow_s:
+                looked = now_awake
+                await self.follow()
+
+    async def follow(self) -> bool:
+        """The minute's look at this computer's address while VMs run: when the firewall moved, the environments
+        whose tunnels are down come back now. True when it moved. Never raises."""
+        vms = self.runtime.get("vms")
+        if vms is None or not callable(getattr(vms, "follow_address", None)) or not vms.store.live():
+            return False
+        try:
+            out = await vms.follow_address("the minute's check while awake")
+        except Exception as e:  # noqa: BLE001 - the network is down: the next minute looks again
+            log.info("could not look at this computer's address: %s", getattr(e, "message", e))
+            return False
+        if not (out and out.get("changed")):
+            return False
+        envs = self.runtime.get("environments")
+        if envs is not None and callable(getattr(envs, "address_moved", None)):
+            envs.address_moved()
+        return True
 
     async def run(self, reason: str, *, slept_s: float | None = None) -> dict:
         """One catch-up: the firewall, then both reapers. Never raises: what failed is recorded."""
@@ -83,7 +112,7 @@ class CatchUp:
         vms = self.runtime.get("vms")
         if vms is not None and vms.store.live():
             try:
-                await vms.refresh_firewall()
+                await vms.refresh_firewall()  # a move here: the reaper's pass below brings the tunnels back
             except Exception as e:  # noqa: BLE001 - the reapers still run; the tunnels retry on their own
                 record["errors"].append(f"firewall: {getattr(e, 'message', e)}")
         envs = self.runtime.get("environments")
