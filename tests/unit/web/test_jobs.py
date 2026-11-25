@@ -86,10 +86,22 @@ def test_runs_are_listed_newest_first_with_how_they_ended(client: TestClient, en
     assert [j["id"] for j in only] == [passed]
 
 
+def wait_output(client: TestClient, job: str, stdout: str, stderr: str, timeout: float = 15.0) -> dict[str, Any]:
+    """The run once it ended and its output reads in full. Its end can be seen before its output is on disk (a slow
+    macOS runner read '' once), so this waits for the output, with a time limit only as the failure."""
+    end = time.monotonic() + timeout
+    while True:
+        body = client.get(f"{JOBS}/{job}").json()
+        out = body["output"]
+        if body["state"] != "running" and (out["stdout"], out["stderr"]) == (stdout, stderr):
+            return body
+        assert time.monotonic() < end, f"the run's output never read in full: {body}"
+        time.sleep(0.1)
+
+
 def test_a_run_is_read_from_an_offset_until_its_end(client: TestClient, envs: EnvManager) -> None:
     job = start(client, envs, "printf 'hello '; printf 'world'; printf 'oops' >&2")
-    body = wait_ended(client, job)
-    assert body["output"]["stdout"] == "hello world" and body["output"]["stderr"] == "oops"
+    body = wait_output(client, job, "hello world", "oops")
     assert body["output"]["next_stdout_offset"] == 11 and body["output"]["more"] is False
     later = client.get(f"{JOBS}/{job}", params={"stdout_offset": 6, "stderr_offset": 4}).json()
     assert later["output"]["stdout"] == "world" and later["output"]["stderr"] == ""

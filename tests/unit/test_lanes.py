@@ -539,6 +539,9 @@ async def test_shutdown_closes_every_lane(tmp_path):
 # ---- import ------------------------------------------------------------------------
 
 
+DEAD_PID = 2**22 + 7
+
+
 def _fake_profile(root: Path) -> Path:
     profile = root / "src-profile"
     (profile / "storage" / "default").mkdir(parents=True)
@@ -546,7 +549,9 @@ def _fake_profile(root: Path) -> Path:
     (profile / "cookies.sqlite").write_bytes(b"SQLite format 3\0")
     (profile / "storage" / "default" / "data.bin").write_bytes(b"\1\2")
     (profile / ".parentlock").write_text("")
-    os.symlink("127.0.0.1:+4242", profile / "lock")  # Firefox's lock is a dangling symlink
+    # Firefox's lock is a dangling symlink. Its pid can be no process: above Linux's highest pid_max (2**22) and
+    # macOS's (99998). 4242 was once a live process on a CI runner.
+    os.symlink(f"127.0.0.1:+{DEAD_PID}", profile / "lock")
     for p in profile.rglob("*"):
         if not p.is_symlink():
             p.chmod(0o755 if p.is_dir() else 0o644)
