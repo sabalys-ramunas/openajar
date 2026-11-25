@@ -508,7 +508,7 @@ Act on an element by its ref from your latest snapshot, with human input. Action
 
 Toolset: `browser`. Effect: `draft`. Needs the `interaction` service.
 
-Get your environment's browser past a site's "are you human" check, in this order: wait for it to pass by itself, click its checkbox once, ask the owner's solving service (only when the owner set one up for this site), else hand the browser to your human. `ended_by` says which step ended it (nothing, wait, click, solver or human) and `steps` what each did. Call it once per check, never in a loop.
+Get your environment's browser past a site's "are you human" check, in this order: wait for it to pass by itself, click its checkbox once, ask the owner's solving service (only when the owner set one up for this site), else hand the browser to your human. `ended_by` says which step ended it (nothing, wait, click, solver or human) and `steps` what each did. Call it once per check, never in a loop. Effect: draft.
 
 | Argument | Type | Required | Description |
 |---|---|---|---|

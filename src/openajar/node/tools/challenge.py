@@ -17,8 +17,6 @@ from urllib.parse import urlsplit
 from openajar.core.errors import CheckForHuman
 from openajar.core.models import Effect, Signal
 from openajar.core.tools import ToolContext
-from openajar.node.interaction import checks
-from openajar.node.solver import steps
 from openajar.node.tools.guarding import guarded, with_blocks
 from openajar.node.tools.inputs import lane_id
 from openajar.node.tools.session import driven_session, label_page_text
@@ -27,13 +25,13 @@ log = logging.getLogger(__name__)
 
 NOT_HERE = ("this browser's checks are for its human: browser_challenge works only on an environment's own browser "
             "on its machine")
-NEXT = {
-    steps.NOTHING: "Go on with your task.",
-    steps.WAITED: "Go on with your task.",
-    steps.CLICK: "Go on with your task.",
-    steps.SOLVER: ("Go on with your task. The token is in the page's form: the site checks it when the form is sent, "
+NEXT = {  # by openajar.node.solver.steps' names for the step that ended it
+    "nothing": "Go on with your task.",
+    "wait": "Go on with your task.",
+    "click": "Go on with your task.",
+    "solver": ("Go on with your task. The token is in the page's form: the site checks it when the form is sent, "
                    "so read the page after you send it."),
-    steps.HUMAN: ("Tell your human the browser needs them for a site's check, give them its live view (links.browser), "
+    "human": ("Tell your human the browser needs them for a site's check, give them its live view (links.browser), "
                   "and wait with browser_wait_handback. Do not call browser_challenge again for this check."),
 }
 
@@ -42,8 +40,11 @@ async def browser_challenge(ctx: ToolContext, *, on: str) -> dict[str, Any]:
     """Get your environment's browser past a site's "are you human" check, in this order: wait for it to pass by
     itself, click its checkbox once, ask the owner's solving service (only when the owner set one up for this
     site), else hand the browser to your human. `ended_by` says which step ended it (nothing, wait, click,
-    solver or human) and `steps` what each did. Call it once per check, never in a loop.
+    solver or human) and `steps` what each did. Call it once per check, never in a loop. Effect: draft.
     """
+    from openajar.node.interaction import checks  # the browser stack, only when it runs
+    from openajar.node.solver import steps
+
     on = lane_id(on)
     if not on.startswith("env/"):
         raise CheckForHuman(NOT_HERE)

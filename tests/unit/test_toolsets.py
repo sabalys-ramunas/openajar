@@ -402,7 +402,8 @@ async def test_a_real_session_loads_a_toolset_and_hears_list_changed(tmp_path):
             loaded = await client.call_tool("tools_more", {"toolset": "browser"})
             assert not loaded.is_error and "list_changed" in loaded.structured_content["next"]
             after = {t.name for t in (await client.list_tools()).tools}
-            assert after - before == {"browser_file_get", "browser_files", "browser_file_delete", "browser_scroll"}
+            assert after - before == {"browser_file_get", "browser_files", "browser_file_delete", "browser_scroll",
+                                      "browser_challenge"}
             routed = await client.call_tool("tools_call", {"name": "browsers_list", "arguments": {}})
             assert not routed.is_error
         assert "notifications/tools/list_changed" in heard

@@ -11,7 +11,7 @@ import typer
 
 from openajar.commands.base import fail, initialized_config
 from openajar.core.config import NodeConfig
-from openajar.node.solver import ledger, services, settings
+from openajar.node.solver import ledger, settings
 from openajar.node.solver.settings import BUILT_IN, NAME_RE, PROVIDERS, SolverEntry
 
 solver_app = typer.Typer(no_args_is_help=True, help="Your own captcha-solving service for environments' browsers "
@@ -67,6 +67,8 @@ def solver_add(
     An agent uses it only through browser_challenge, after the check did not pass by itself or with one click.
     Built in: capsolver, 2captcha and anticaptcha (Turnstile and reCAPTCHA v2; none of them takes hCaptcha now).
     command and webhook plug in any other service or your own script (docs/ENVIRONMENTS.md has the format)."""
+    from openajar.node.solver import services
+
     if not NAME_RE.fullmatch(name):
         raise typer.BadParameter("lowercase letters, digits, dot, dash or underscore", param_hint="NAME")
     provider = provider.lower().replace("-", "")
@@ -115,6 +117,8 @@ def solver_add(
 @solver_app.command("list")
 def solver_list() -> None:
     """Your solving services, with this month's spend and solves (keys are never shown)."""
+    from openajar.node.solver import services
+
     cfg = initialized_config()
     entries = _entries(cfg)
     if not entries:
@@ -174,6 +178,8 @@ def solver_test(
 
 
 async def _test_one(home: Path, e: SolverEntry, solve: bool) -> bool:
+    from openajar.node.solver import services
+
     if e.provider in BUILT_IN:
         try:
             money = await services.balance(e)
@@ -211,6 +217,8 @@ def solver_log(
 ) -> None:
     """The record of every solve and every refused try: when, which environment's browser, the site, the widget,
     the service, the result and the cost. Never a key or a token."""
+    from openajar.node.solver import services
+
     cfg = initialized_config()
     month = month or ledger.this_month()
     record = ledger.read(cfg.home, month=month)

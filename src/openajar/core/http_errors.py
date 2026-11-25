@@ -63,7 +63,7 @@ STATUS_BY_CODE: dict[str, int] = {
     # 403: a rule refuses it, and asking again the same way will not change that. A run's grant that no
     # longer counts is 403 too, never 401: the request's own sign-in is fine, and a 401 signs the panel out
     "grant_expired": 403, "grant_not_yet_valid": 403, "grant_revoked": 403, "grant_unknown": 403,
-    "bundle_rejected": 403, "connector_broken": 403, "egress_refused": 403, "lane_paced": 403,
+    "bundle_rejected": 403, "check_for_human": 403, "connector_broken": 403, "egress_refused": 403, "lane_paced": 403,
     "mail_daily_limit": 403, "mail_suppressed": 403, "memory_refused": 403, "method_unavailable": 403,
     "not_a_read": 403, "out_of_scope": 403, "owner_only": 403, "owner_trust_required": 403,
     "passkey_invalid": 403, "pilot_lane_uncovered": 403, "pilot_refused": 403,
