@@ -121,8 +121,9 @@ async def test_a_press_reaches_a_far_page_held_as_long_as_planned(monkeypatch):
         await human._press_release(page)
     held = holds(page.seen)
     assert len(held) == 3
-    # unpaced, 120 ms plus two round trips; paced from the send alone, 120 ms less the press's own work
-    assert all(105 <= h <= 140 for h in held[1:]), held
+    # unpaced, 120 ms plus two round trips (180); paced from the send alone, 120 ms less the press's own work.
+    # The window leaves room for a runner whose sleeps are coarse (macOS in CI gave 93 to 157), and none for 180
+    assert all(90 <= h <= 160 for h in held[1:]), held
 
 
 @on_the_real_clock
@@ -202,7 +203,7 @@ async def test_a_slow_handler_after_the_release_never_shortens_the_next_holds():
         await clock.until(120, "release")
         await clock.call(page.up(), "release")
         holds.append((page.events[-1][1] - page.events[-2][1]) * 1000)
-    assert all(100 <= h <= 160 for h in holds), holds
+    assert all(90 <= h <= 160 for h in holds), holds  # the fault gave 20 ms; a coarse runner gives 96 for 120
 
 
 @on_the_real_clock
