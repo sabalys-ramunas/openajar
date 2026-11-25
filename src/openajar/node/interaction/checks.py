@@ -26,12 +26,14 @@ challenge holds it for the human as it always has (openajar.node.lanes.watch).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import logging
 import random
 import weakref
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 from openajar.core.errors import InvalidRequest, RefNotFound
 from openajar.core.models import ActionKind, ActionResult, Signal
@@ -40,6 +42,7 @@ from openajar.node.human import quietly
 from openajar.node.sites import (
     CHECKBOX_DETAILS,
     HCAPTCHA_CHECKBOX,
+    PUZZLE_DETAILS,
     RECAPTCHA_CHECKBOX,
     SignalReport,
     vendor_rule,
@@ -52,6 +55,7 @@ NAMES = {"Cloudflare": "Verify you are human (Cloudflare check)",
          "hCaptcha": "I am human (hCaptcha check)",
          "reCAPTCHA": "I'm not a robot (reCAPTCHA check)"}
 VENDOR_OF = {HCAPTCHA_CHECKBOX: "hCaptcha", RECAPTCHA_CHECKBOX: "reCAPTCHA"}
+CHALLENGE_TOOL = "browser_challenge"  # openajar.node.tools.challenge: wait, click, the owner's solver, the human
 OUTCOME_S = 15.0       # how long the vendor gets to answer a click
 OUTCOME_POLL_S = 1.0
 CORRECT_PX = 3         # the page saw the pointer this far off where it was sent (a moved window): corrected
@@ -59,6 +63,9 @@ DEFAULT_OFFSET = (21.0, 0.5)  # in a widget frame's own box: the checkbox's cent
 
 # Contexts whose agent may click a check (an environment's browser on its machine).
 _ALLOWED: weakref.WeakSet[Any] = weakref.WeakSet()
+# When a check's checkbox on each tab was last clicked (loop time) and on which address: browser_challenge does not
+# click the same page's check twice.
+_CLICKED: weakref.WeakKeyDictionary[Any, tuple[float, str]] = weakref.WeakKeyDictionary()
 # The checks each page's latest snapshot showed, by ref.
 _SHOWN: weakref.WeakKeyDictionary[Any, dict[str, Check]] = weakref.WeakKeyDictionary()
 
@@ -140,27 +147,52 @@ async def find_checks(page: Page) -> list[Check]:
 async def check_lines(page: Page, report: SignalReport | Any) -> list[str]:
     """The snapshot's lines for the checks on the page, when this browser's agent may click them: a check that
     shows its checkbox gets a ref (c1, c2...), remembered for act; one still at work by itself ("Verifying...", a
-    spinner and no checkbox yet) gets a line that says to wait. Empty otherwise."""
-    if not allowed(page) or not wants_a_click(report):
+    spinner and no checkbox yet) gets a line that says to wait. When the owner set up a solving service for the
+    site (openajar.node.solver), the lines name browser_challenge, and an image puzzle gets a line of its own.
+    Empty otherwise."""
+    if not allowed(page):
         _forget(page)
+        return []
+    solver_on = solver_for(page)
+    if not wants_a_click(report):
+        _forget(page)
+        if solver_on and getattr(report, "signal", None) is Signal.CAPTCHA and \
+                getattr(report, "detail", None) in PUZZLE_DETAILS:
+            return [(f"- text: an image puzzle ({report.detail}) on this browser. Call {CHALLENGE_TOOL} once (toolset "
+                     "browser): it asks the owner's solving service, and hands the browser to your human if that fails")]
         return []
     shown: dict[str, Check] = {}
     lines: list[str] = []
     for check in await find_checks(page):
         if await checkbox_point(page, check) is None:
             lines.append(f"- text: a {check.vendor} check is at work on this browser by itself (no checkbox yet): "
-                         "wait a few seconds, then snapshot again")
+                         "wait a few seconds, then snapshot again" +
+                         (f"; if it stays, call {CHALLENGE_TOOL} once (toolset browser)" if solver_on else ""))
             continue
         ref = f"c{len(shown) + 1}"
         shown[ref] = check
         lines.append(f'- checkbox "{check.name}" [ref={ref}] [cursor=pointer]')
-        lines.append(f"- text: a site's check on this browser. Click {ref} once (browser_act); an image puzzle after "
-                     "it is for your human")
+        if solver_on:
+            lines.append(f"- text: a site's check on this browser. Call {CHALLENGE_TOOL} once (toolset browser): it "
+                         f"waits, clicks {ref} once, then asks the owner's solving service, then your human")
+        else:
+            lines.append(f"- text: a site's check on this browser. Click {ref} once (browser_act); an image puzzle "
+                         "after it is for your human")
     try:
         _SHOWN[page] = shown
     except TypeError:
         return []
     return lines
+
+
+def solver_for(page: Page) -> bool:
+    """The owner set up a solving service whose site list covers this page's host (openajar.node.solver)."""
+    from openajar.node.solver.settings import on_for
+
+    try:
+        return on_for(urlsplit(getattr(page, "url", "") or "").hostname or "")
+    except ValueError:
+        return False
 
 
 def _forget(page: Page) -> None:
@@ -254,33 +286,78 @@ async def click_check(ix: Any, page: Page, ref: str, kind: ActionKind) -> Action
         check = None
     if check is None:
         raise RefNotFound(f"ref {ref} is not a check on the page now. Take a new snapshot.")
+    url_before = page.url
+    click = await click_once(ix, page, check)
+    if click is None:
+        raise InvalidRequest(f"the {check.vendor} check shows no checkbox now (it may be at work by itself, or it "
+                             "passed): wait a few seconds, then snapshot again")
+    if click.how is None:
+        raise InvalidRequest(f"the {check.vendor} check is out of view: scroll to it, snapshot again, then click")
+    detail = f"clicked the {check.vendor} check's checkbox {click.how}; {OUTCOME_WORDS[click.outcome]}"
+    return ActionResult(ok=click.ok, action=ActionKind.CLICK, ref=ref, url=page.url,
+                        changed=click.ok or page.url != url_before, detail=detail, **click.report.public())
+
+
+@dataclass(frozen=True, slots=True)
+class Click:
+    report: SignalReport
+    outcome: str            # PASSED, PUZZLE or NOT_PASSED ("" when no click was made)
+    ok: bool
+    how: str | None         # "on the machine's screen", "with the browser's pointer"; None: out of view, no click
+
+
+PASSED, PUZZLE, NOT_PASSED = "passed", "puzzle", "not_passed"
+OUTCOME_WORDS = {
+    PASSED: "the check passed",
+    PUZZLE: ("an image puzzle appeared, which openajar does not solve: tell your human, hand them the browser "
+             "(links.browser) and wait with browser_wait_handback"),
+    NOT_PASSED: ("the check did not pass: it still asks for a person. Do not click it again in a loop: tell your "
+                 "human and wait with browser_wait_handback"),
+}
+
+
+async def click_once(ix: Any, page: Page, check: Check) -> Click | None:
+    """One click on `check`'s checkbox (where it is now), then the vendor's answer. None when the check shows no
+    checkbox now; a Click with `how` None when it is out of view (nothing was clicked). Only where `allowed`."""
+    if not allowed(page):
+        raise InvalidRequest("a check on this browser is for its human: hand it over (browser_wait_handback)")
     await human.still(page)
     now = [c for c in await find_checks(page) if c.vendor == check.vendor]
     if now:
         check = min(now, key=lambda c: abs(c.box["x"] - check.box["x"]) + abs(c.box["y"] - check.box["y"]))
     point = await checkbox_point(page, check)
     if point is None:
-        raise InvalidRequest(f"the {check.vendor} check shows no checkbox now (it may be at work by itself, or it "
-                             "passed): wait a few seconds, then snapshot again")
+        return None
     vw, vh = await human._inner_size(page)
     if not (0 <= point[0] < vw and 0 <= point[1] < vh):
-        raise InvalidRequest(f"the {check.vendor} check is out of view: scroll to it, snapshot again, then click")
-    url_before = page.url
+        return Click(await ix.report(page), "", False, None)
     await asyncio.sleep(human._draw_ms(500, 1400) / 1000)  # a look before the hand moves
     hand = human.x_pointer(page)
     how = "on the machine's screen"
     if hand is None or not await _x_click(page, hand, check, point):
         how = "with the browser's pointer"
         await _page_click(page, point)
-    report, outcome, ok = await _outcome(ix, page, check)
+    with contextlib.suppress(TypeError):
+        _CLICKED[page] = (asyncio.get_running_loop().time(), str(getattr(page, "url", "") or ""))
+    report, outcome = await _outcome(ix, page)
     human.begin_idle(page)
-    detail = f"clicked the {check.vendor} check's checkbox {how}; {outcome}"
-    return ActionResult(ok=ok, action=ActionKind.CLICK, ref=ref, url=page.url, changed=ok or page.url != url_before,
-                        detail=detail, **report.public())
+    return Click(report, outcome, outcome == PASSED, how)
 
 
-async def _outcome(ix: Any, page: Page, check: Check) -> tuple[SignalReport, str, bool]:
-    """Wait for the vendor's answer: (the page's report, what happened, passed)."""
+def clicked_within(page: Page, seconds: float) -> bool:
+    """A check's checkbox on this page (this tab, at this address) was clicked within the last `seconds`
+    (browser_act or browser_challenge)."""
+    try:
+        last = _CLICKED.get(page)
+    except TypeError:
+        return False
+    if last is None or last[1] != str(getattr(page, "url", "") or ""):
+        return False
+    return asyncio.get_running_loop().time() - last[0] < seconds
+
+
+async def _outcome(ix: Any, page: Page) -> tuple[SignalReport, str]:
+    """Wait for the vendor's answer: (the page's report, PASSED, PUZZLE or NOT_PASSED)."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + OUTCOME_S
     report = await ix.report(page)
@@ -288,10 +365,8 @@ async def _outcome(ix: Any, page: Page, check: Check) -> tuple[SignalReport, str
         await asyncio.sleep(OUTCOME_POLL_S)
         report = await ix.report(page)
         if report.signal is Signal.CAPTCHA and report.detail not in CHECKBOX_DETAILS:
-            return report, ("an image puzzle appeared, which openajar does not solve: tell your human, hand them "
-                            "the browser (links.browser) and wait with browser_wait_handback"), False
+            return report, PUZZLE
         if not wants_a_click(report):
             await quietly(page.wait_for_load_state("domcontentloaded", timeout=10_000))
-            return await ix.report(page), "the check passed", True
-    return report, ("the check did not pass: it still asks for a person. Do not click it again in a loop: tell "
-                    "your human and wait with browser_wait_handback"), False
+            return await ix.report(page), PASSED
+    return report, NOT_PASSED

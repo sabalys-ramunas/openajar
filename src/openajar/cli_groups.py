@@ -37,7 +37,7 @@ HOME: dict[str, str] = {
     "disconnect": "connect", "nodes": "connect", "mcp-bridge": "connect",
     "health": "node", "doctor": "status",
     "dash": "open", "forward": "lane",
-    "device": "lane", "proxy": "lane", "env": "lane", "identity": "lane",
+    "device": "lane", "proxy": "lane", "solver": "lane", "env": "lane", "identity": "lane",
     "memory": "workspace", "members": "workspace", "profile": "workspace",
     "mail": "vault", "git": "vault",
     "grants": "access", "approvals": "access", "confirmation": "access", "policy": "access",
@@ -358,7 +358,8 @@ def _built_groups(m: _Mounted) -> dict[str, typer.Typer]:
         built["lane"] = _clone(m.group_typer("lane"),
                                commands=[*m.as_cmd("lane", "freeze", freeze), *m.as_cmd("lane", "unfreeze", unfreeze),
                                          *m.as_cmd("forward")],
-                               groups=[*m.as_group("device"), *m.as_group("proxy"), *m.as_group("env"),
+                               groups=[*m.as_group("device"), *m.as_group("proxy"), *m.as_group("solver"),
+                                       *m.as_group("env"),
                                        *m.as_group("identity"), *m.as_group("vm")])
     if "workspace" in m.groups:
         built["workspace"] = _clone(m.group_typer("workspace"), groups=[*m.as_group("memory"), *m.as_group("members"),

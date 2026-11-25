@@ -27,6 +27,8 @@ The table, in seconds (what each tool legitimately needs, with room to spare):
   browser_upload          600   large files go through the file chooser
   vault_fill              120   + TYPE_S_PER_CHAR for the secret it types
   login                  1080   a code card waits up to 900 s for the owner's code (vault relay limit)
+  browser_challenge       240   a wait (20) + a click and its answer (20) + the owner's solver (120) + settling;
+                                under the 300 s an MCP client waits
   any other tool          120   (DEFAULT_S)
 
 Not on the table, so no overall deadline: flow and connector runs (mode "run", they hold the lane
@@ -60,6 +62,7 @@ TOOL_DEADLINES_S: dict[str, float] = {
     "browser_upload": 600.0,
     "vault_fill": 120.0,
     "login": 1080.0,
+    "browser_challenge": 240.0,
 }
 
 

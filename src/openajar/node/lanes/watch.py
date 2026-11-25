@@ -6,8 +6,10 @@ instead of passing its result on: it never goes on as if the page had shown noth
 
 One exception, and only where an agent may click a check (interaction.checks.allowed: an environment's
 browser on its machine, never an account's): a check that asks for one click on a checkbox (sites.CHECKBOX_DETAILS)
-is not held, because the snapshot gives the agent its ref. An image puzzle, and every other signal, holds as
-everywhere."""
+is not held, because the snapshot gives the agent its ref. And when the owner set up a solving service whose site
+list covers the page (openajar.node.solver), an image puzzle of hCaptcha or reCAPTCHA (sites.PUZZLE_DETAILS) is not
+held either, so the agent can call browser_challenge, which holds the browser for the human itself when the
+service does not get it past. Every other signal, Cloudflare's full-page check included, holds as everywhere."""
 
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ from openajar.core.signals import QUIET
 from openajar.node.interaction import checks
 from openajar.node.interfaces import Page
 from openajar.node.lanes.base import _host
-from openajar.node.sites import CHECKBOX_DETAILS
+from openajar.node.sites import CHECKBOX_DETAILS, PUZZLE_DETAILS
 
 if TYPE_CHECKING:
     from openajar.node.lanes.manager import LaneManagerImpl
@@ -107,6 +109,8 @@ class SignalWatch:
             return
         if detail in CHECKBOX_DETAILS and checks.allowed(page):
             return  # an environment's browser: the agent has the check's ref (interaction.checks)
+        if detail in PUZZLE_DETAILS and checks.allowed(page) and checks.solver_for(page):
+            return  # an environment's browser with the owner's solver for this site: browser_challenge, then a hold
         lane_id = self._lanes.lane_for_page(page)
         if lane_id is None:
             return
