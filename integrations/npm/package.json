@@ -1,6 +1,6 @@
 {
   "name": "openajar",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "A computer for your agent: a VM with a terminal and a real browser, as an MCP server. Runs the openajar CLI.",
   "mcpName": "com.openajar/openajar",
   "license": "Apache-2.0",

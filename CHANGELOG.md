@@ -6,6 +6,12 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-26
+
+This version adds your own captcha-solving service (`openajar solver`, off until you add one) and the tool
+`browser_challenge`, and it changes what happens at a site's "are you human" check in an account's browser:
+it now gets the checkbox's ref, the one click and `browser_challenge`, where 0.6.1 held it for you.
+
 ### Added
 
 - Your own captcha-solving service for every browser, off until you add one: `openajar solver add
