@@ -1,6 +1,6 @@
 """browser_challenge's order (openajar.node.solver.steps): wait, the browser's own click, the owner's solver, the
-human, each said plainly; the solver's guards (no solver, Cloudflare's full-page check, a site off the list, a
-sign-up, login or payment page, the month's cap); and an account's browser, which never reaches any of it."""
+human, each said plainly; what the solver step does not send (no solver, Cloudflare's full-page check, a widget no
+service of the owner's takes); and an account's browser, which never reaches any of it."""
 
 from __future__ import annotations
 
@@ -76,10 +76,7 @@ def quick(monkeypatch):
     async def found(page):
         return WIDGET, ""
 
-    async def plain(page, widget):
-        return []
     monkeypatch.setattr(widgets, "find", found)
-    monkeypatch.setattr(widgets, "sensitive", plain)
 
     async def no_checks(page):
         return []
@@ -92,9 +89,8 @@ def env_page(**kw) -> Page:
     return page
 
 
-def solver(home, url, *, provider="2captcha", cap=5.0, sites=("example.com",)):
-    settings.save(home, [SolverEntry(name="main", provider=provider, key=KEY, endpoint=url, monthly_cap=cap,
-                                     sites=list(sites))])
+def solver(home, url, *, provider="2captcha"):
+    settings.save(home, [SolverEntry(name="main", provider=provider, key=KEY, endpoint=url)])
 
 
 # ---- the order ------------------------------------------------------------------------------------------------
@@ -164,27 +160,27 @@ async def test_the_owners_solver_answers_a_puzzle_the_click_left(tmp_path):
         out = await steps.get_past(Ix(page, PUZZLE), page, browser="env/e1-browser", home=tmp_path)
     assert (out.ended_by, out.passed) == (steps.SOLVER, True)
     assert out.steps[1] == "click: no checkbox to click (an image puzzle shows)"
-    assert out.steps[2].startswith("solver: main (2Captcha) answered the Cloudflare Turnstile widget for 0.00145 USD "
-                                   "(reported): the check passed; token in 1 field(s); the page's callback: called")
+    assert out.steps[2].startswith("solver: main (2Captcha) answered the Cloudflare Turnstile widget for 0.00145 USD: "
+                                   "the check passed; token in 1 field(s); the page's callback: called")
     assert page.handed == [["turnstile", DUMMY_TOKEN, "onPass", "https://shop.example.com/contact?order=42"]]
     task = svc.requests[0][1]["task"]
     assert task["websiteURL"] == "https://shop.example.com/contact"  # never the query
     said = json.dumps(out.steps)
     assert KEY not in said and DUMMY_TOKEN not in said
     [line] = ledger.read(tmp_path)
-    assert (line.site, line.kind, line.service, line.provider, line.result, line.cost, line.cost_from) == \
-        ("shop.example.com", "turnstile", "main", "2captcha", ledger.PASSED, 0.00145, "reported")
+    assert (line.site, line.kind, line.service, line.provider, line.result, line.cost) == \
+        ("shop.example.com", "turnstile", "main", "2captcha", ledger.PASSED, 0.00145)
     assert line.browser == "env/e1-browser" and KEY not in ledger.record_path(tmp_path).read_text()
     assert DUMMY_TOKEN not in ledger.record_path(tmp_path).read_text()
 
 
-async def test_a_service_that_reports_no_cost_counts_the_assumed_cost(tmp_path):
+async def test_a_service_that_reports_no_cost_is_logged_with_none(tmp_path):
     page = env_page()
     with FakeService("capsolver", key=KEY) as svc:
         solver(tmp_path, svc.url, provider="capsolver")
         out = await steps.get_past(Ix(page, PUZZLE), page, browser="env/e1-browser", home=tmp_path)
-    assert out.ended_by == steps.SOLVER and "0.003 USD (assumed)" in out.steps[2]
-    assert ledger.spent(tmp_path, "main") == 0.003
+    assert out.ended_by == steps.SOLVER and "for a cost it did not report" in out.steps[2]
+    assert ledger.read(tmp_path)[0].cost is None
 
 
 async def test_a_token_that_does_not_take_goes_to_the_human(tmp_path):
@@ -196,17 +192,16 @@ async def test_a_token_that_does_not_take_goes_to_the_human(tmp_path):
     assert ledger.read(tmp_path)[0].result == ledger.NOT_PASSED
 
 
-async def test_a_service_that_gives_no_token_goes_to_the_human_and_costs_nothing(tmp_path):
+async def test_a_service_that_gives_no_token_goes_to_the_human(tmp_path):
     page = env_page()
     with FakeService("anticaptcha", key=KEY, unsolvable=True) as svc:
         solver(tmp_path, svc.url, provider="anticaptcha")
         out = await steps.get_past(Ix(page, PUZZLE), page, browser="env/e1-browser", home=tmp_path)
     assert out.ended_by == steps.HUMAN and "gave no token: ERROR_CAPTCHA_UNSOLVABLE" in out.steps[2]
     assert page.handed == [] and ledger.read(tmp_path)[0].result == ledger.FAILED
-    assert ledger.spent(tmp_path, "main") == 0
 
 
-# ---- the guards ---------------------------------------------------------------------------------------------
+# ---- what no token answers ---------------------------------------------------------------------------------------------
 
 async def test_cloudflares_full_page_check_is_never_sent(tmp_path):
     page = env_page()
@@ -215,45 +210,6 @@ async def test_cloudflares_full_page_check_is_never_sent(tmp_path):
         out = await steps.get_past(Ix(page, CF_PAGE), page, browser="env/e1-browser", home=tmp_path)
     assert out.ended_by == steps.HUMAN and "not for Cloudflare's full-page check" in out.steps[2]
     assert "proxy's credentials" in out.steps[2] and svc.requests == []
-
-
-async def test_a_site_off_the_list_is_refused_and_recorded(tmp_path):
-    page = env_page(url="https://other.example.org/form")
-    with FakeService("2captcha", key=KEY) as svc:
-        solver(tmp_path, svc.url)
-        out = await steps.get_past(Ix(page, PUZZLE), page, browser="env/e1-browser", home=tmp_path)
-    assert out.ended_by == steps.HUMAN and "not on the site list" in out.steps[2] and svc.requests == []
-    [line] = ledger.read(tmp_path)
-    assert line.result == ledger.REFUSED and line.cost == 0 and line.site == "other.example.org"
-
-
-async def test_a_sign_up_login_or_payment_page_is_never_solved(tmp_path, monkeypatch):
-    page = env_page()
-
-    async def login(p, w):
-        return ["a password field"]
-    monkeypatch.setattr(widgets, "sensitive", login)
-    with FakeService("2captcha", key=KEY) as svc:
-        solver(tmp_path, svc.url)
-        out = await steps.get_past(Ix(page, PUZZLE), page, browser="env/e1-browser", home=tmp_path)
-    assert out.ended_by == steps.HUMAN and svc.requests == []
-    assert out.steps[2] == "solver: never on a sign-up, login or payment page (a password field)"
-    assert ledger.read(tmp_path)[0].result == ledger.REFUSED
-
-
-async def test_the_months_cap_stops_a_looping_agent(tmp_path):
-    page = env_page()
-    with FakeService("2captcha", key=KEY, cost="0.004") as svc:
-        solver(tmp_path, svc.url, cap=0.01)
-        ended = []
-        for _ in range(4):
-            page.handed.clear()
-            out = await steps.get_past(Ix(page, PUZZLE), page, browser="env/e1-browser", home=tmp_path)
-            ended.append(out.ended_by)
-    assert ended == [steps.SOLVER, steps.SOLVER, steps.HUMAN, steps.HUMAN]
-    assert len([p for p, _, _ in svc.requests if p == "/createTask"]) == 2
-    assert "the month's cap is reached (main: 0.008 of 0.01 USD)" in out.steps[2]
-    assert ledger.spent(tmp_path, "main") == 0.008
 
 
 async def test_a_widget_the_service_does_not_take_is_refused(tmp_path, monkeypatch):
@@ -293,7 +249,7 @@ async def test_a_puzzle_holds_an_accounts_browser_always_and_an_environments_onl
         lanes.held.clear()
         solver(tmp_path, "https://api.2captcha.com")
         await watch._seen(env, Signal.CAPTCHA, URL, "reCAPTCHA frame")
-        assert lanes.held == []  # the owner's solver covers the site: browser_challenge first
+        assert lanes.held == []  # the owner's solver could take it: browser_challenge first
         await watch._seen(env, Signal.CAPTCHA, URL, "Cloudflare challenge page")
         assert lanes.held == []  # a check that asks for a click, as in 0.6.1
         await watch._seen(account, Signal.CAPTCHA, URL, "reCAPTCHA frame")
@@ -302,7 +258,7 @@ async def test_a_puzzle_holds_an_accounts_browser_always_and_an_environments_onl
         lanes.held.clear()
         other = env_page(url="https://other.example.org/")
         await watch._seen(other, Signal.CAPTCHA, other.url, "hCaptcha frame")
-        assert lanes.held == [("env/e1-browser", Signal.CAPTCHA, "other.example.org")]  # off the solver's list
+        assert lanes.held == []  # any site: there is no site list
     finally:
         settings.bind_home(None)
 

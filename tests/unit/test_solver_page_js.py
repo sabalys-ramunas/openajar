@@ -1,6 +1,6 @@
 """The solver's page scripts in a real Camoufox on this computer (openajar.node.solver.widgets): the widget and its
-site key read from the page, the sign-up, login and payment page guard, and the token handed to the widget's field
-and the page's own callback from Camoufox's isolated world. Local pages only (set_content): nothing is fetched.
+site key read from the page, Cloudflare's full-page markers, and the token handed to the widget's field and the
+page's own callback from Camoufox's isolated world. Local pages only (set_content): nothing is fetched.
 
 Skipped where Camoufox's browser is not installed."""
 
@@ -63,36 +63,6 @@ async def test_the_widget_and_its_site_key_are_read_from_the_page(page):
     assert widget is None and "no Turnstile, reCAPTCHA v2 or hCaptcha widget" in why
 
 
-async def test_a_contact_form_is_not_a_sign_up_login_or_payment_page(page):
-    await page.set_content(CONTACT)
-    assert await widgets.sensitive(page, widgets.Widget("turnstile", "k")) == []
-    # a login form elsewhere on the page, hidden (a menu's), and not the widget's: not a reason
-    await page.set_content(CONTACT + '<form style="display:none"><input type="password" name="p"></form>')
-    assert await widgets.sensitive(page, widgets.Widget("turnstile", "k")) == []
-
-
-@pytest.mark.parametrize(("extra", "why"), [
-    ('<input type="password" name="pw">', "a password field"),
-    ('<input name="code" autocomplete="one-time-code">', "a field for one-time-code"),
-    ('<input name="cardnumber">', "a card field"),
-    ('<input name="n" autocomplete="cc-number">', "a field for cc-number"),
-])
-async def test_a_login_or_card_field_makes_it_one(page, extra, why):
-    await page.set_content(CONTACT.replace("<button>", extra + "<button>"))
-    assert why in await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
-
-
-async def test_a_hidden_password_in_the_widgets_own_form_still_counts(page):
-    await page.set_content(CONTACT.replace("<button>", '<input type="password" name="p" style="display:none">'
-                                                       "<button>"))
-    assert "a password field" in await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
-
-
-async def test_a_form_that_goes_to_a_sign_up_counts(page):
-    await page.set_content(CONTACT.replace('action="/contact"', 'action="/users/register"'))
-    assert "its form goes to 'register'" in await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
-
-
 async def test_the_token_goes_into_the_field_and_the_pages_callback(page):
     await page.set_content(CONTACT)
     widget, _ = await widgets.find(page)
@@ -114,27 +84,7 @@ async def test_recaptchas_own_client_table_gives_the_callback_when_the_page_pass
     assert await page.title() == "cfg:03AF-token"
 
 
-# ---- the review of 2026-11-25 (test_solver_review has the rest) ----
-
-async def test_review_2_a_login_form_in_an_open_shadow_root_counts(page):
-    await page.set_content('<login-box></login-box>' + CONTACT + '''<script>
-      customElements.define('login-box', class extends HTMLElement { constructor() { super();
-        this.attachShadow({mode: 'open'}).innerHTML = '<form action="/x"><input name=user>' +
-          '<input type=password name=pw autocomplete=current-password></form>'; }});
-    </script>''')
-    assert "a password field" in await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
-
-
-async def test_review_2_a_disabled_password_field_counts(page):
-    await page.set_content(CONTACT.replace("<button>", '<input type="password" name="pw" disabled><button>'))
-    assert "a password field" in await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
-
-
-async def test_review_2_a_passwordless_login_counts(page):
-    await page.set_content(CONTACT.replace('<input type="email" name="email">',
-                                           '<input type="email" name="email" autocomplete="username">'))
-    assert "a field for username" in await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
-
+# ---- the reviews of 2026-11-25 (test_solver_review has the rest) ----
 
 async def test_review_6_a_page_that_loads_recaptcha_enterprise_is_refused(page):
     await page.route("**/*", lambda route: route.abort())  # nothing is fetched
@@ -150,31 +100,6 @@ async def test_review_9_the_full_page_markers_are_read(page):
     assert await widgets.full_page(page)
     await page.set_content(CONTACT)
     assert not await widgets.full_page(page)
-
-
-# ---- the second review of 2026-11-25 (test_solver_review2 has the rest) ----
-
-async def test_review2_a_login_form_far_down_a_big_page_counts(page):
-    await page.set_content(CONTACT + '<div>' + '<span>x</span>' * 6000 + '''</div><login-box></login-box><script>
-      customElements.define('login-box', class extends HTMLElement { constructor() { super();
-        this.attachShadow({mode: 'open'}).innerHTML = '<form action="/x"><input name=user>' +
-          '<input type=password name=pw></form>'; }});
-    </script>''')
-    assert "a password field" in await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
-
-
-async def test_review2_a_page_too_large_to_read_in_full_is_refused(page):
-    await page.set_content(CONTACT + '<div id=big></div>')
-    await page.evaluate("""() => { const big = document.getElementById('big'); const frag = document.createDocumentFragment();
-      for (let i = 0; i < 200100; i++) frag.appendChild(document.createElement('i')); big.appendChild(frag); }""")
-    why = await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
-    assert any("could not be read in full" in w for w in why), why
-
-
-async def test_review2_a_card_field_named_only_by_its_placeholder_counts(page):
-    await page.set_content(CONTACT.replace("<button>", '<input name="f1" autocomplete="off" '
-                                                       'placeholder="Card number"><button>'))
-    assert "a card field" in await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
 
 
 async def test_review2_the_token_goes_only_into_the_page_it_was_asked_for(page):

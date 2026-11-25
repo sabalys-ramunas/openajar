@@ -6,12 +6,11 @@ instead of passing its result on: it never goes on as if the page had shown noth
 
 One exception, and only where an agent may click a check (interaction.checks.allowed: an environment's
 browser on its machine, never an account's): a check that asks for one click on a checkbox (sites.CHECKBOX_DETAILS)
-is not held, because the snapshot gives the agent its ref. And when the owner set up a solving service whose site
-list covers the page (openajar.node.solver), an image puzzle of hCaptcha or reCAPTCHA (sites.PUZZLE_DETAILS) is not
-held either, so the agent can call browser_challenge, which holds the browser for the human itself when the
-service does not get it past. Only when a service of the owner's could take it now (its site list, the widget's
-kind, the sign-up, login and payment guard, the cap: solver.steps.could_take); otherwise it holds as before. Every
-other signal, Cloudflare's full-page check included, holds as everywhere."""
+is not held, because the snapshot gives the agent its ref. And when a solving service the owner set up
+(openajar.node.solver) could take the page's widget (solver.steps.could_take: a widget in the page's own document,
+a service that takes its kind), an image puzzle of hCaptcha or reCAPTCHA (sites.PUZZLE_DETAILS) is not held either,
+so the agent can call browser_challenge, which holds the browser for the human itself when the service does not get
+it past. Every other signal, Cloudflare's full-page check included, holds as everywhere."""
 
 from __future__ import annotations
 

@@ -9,29 +9,25 @@ All notable changes to openajar are recorded here. The format follows
 ### Added
 
 - Your own captcha-solving service for environments' browsers, off until you add one: `openajar solver add
-  <name> <provider> [key] --cap <USD a month> --sites <hosts>`, with `solver list`, `solver test`,
-  `solver remove` and `solver log`. Built in: CapSolver, 2Captcha and Anti-Captcha by their documented task
-  APIs (Turnstile and reCAPTCHA v2, proxyless task types only); a `command` or `webhook` hook plugs in any
-  other service or your own script, hCaptcha included. The key stays in `secrets/solvers.json` (600) on this
-  computer and is in no tool result, log, trace or record. openajar ships no key and shares none. A solving
-  service may be against a site's terms; the choice and the cost are yours.
+  <name> <provider> [key] [--url] [--command]`, with `solver list`, `solver test`, `solver remove` and
+  `solver log`. Built in: CapSolver, 2Captcha and Anti-Captcha by their documented task APIs (Turnstile and
+  reCAPTCHA v2, proxyless task types only); a `command` or `webhook` hook plugs in any other service or your own
+  script, hCaptcha included. The key stays in `secrets/solvers.json` (600) on this computer and is in no tool
+  result, log or trace. openajar ships no key and shares none. The service and its cost are your choice.
 - `browser_challenge` (toolset `browser`): one explicit call that gets an environment's browser past a site's
   check in this order: wait for it to pass by itself, the browser's own click, your solver, then you. When
   nothing got it past, or the call ends early on a page with a check (its deadline, a cancel, an error), the
   browser is held for you and the agent waits with `browser_wait_handback`. `ended_by` says which step ended
-  it and `steps` what each did. It refuses an account's browser (`check_for_human`). Its solver step never runs
-  for Cloudflare's full-page check, for reCAPTCHA Enterprise, for a widget inside another site's frame, for a
-  site off your list or past your month's cap, and it refuses a page it recognises as a sign-up, login or
-  payment page (checked again before the token goes in). The cap holds through a reservation written to the
-  record before anything is sent, and the record fails closed: one that cannot be read or written sends
-  nothing. Every try, refused ones too, is in the record with its cost.
+  it and `steps` what each did. It refuses an account's browser (`check_for_human`). Its solver step does not
+  send Cloudflare's full-page check, reCAPTCHA Enterprise or a widget inside another site's frame (no token from
+  a service works there), and the token goes in only while the page is at the address it was asked for. Every
+  request is a line in `solver/solves.jsonl` with the cost the service reported.
 
 ### Changed
 
-- In an environment's browser, when a service of yours could take the check now (it covers the site, takes the
-  widget, the page passes the guards and the cap has room), the snapshot's line for it names
-  `browser_challenge`, and an hCaptcha or reCAPTCHA image puzzle is not held at once, so the agent can call it.
-  Otherwise nothing changes.
+- In an environment's browser, when a service of yours could take the check (a widget is found in the page's
+  own document and a service takes its kind), the snapshot's line for it names `browser_challenge`, and an
+  hCaptcha or reCAPTCHA image puzzle is not held at once, so the agent can call it. Otherwise nothing changes.
 
 ## [0.6.1] - 2026-11-25
 

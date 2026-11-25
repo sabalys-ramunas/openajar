@@ -312,13 +312,10 @@ browser any challenge still goes to you.
 **Your own solving service**, if you want one. For a widget a click does not pass (Cloudflare Turnstile,
 reCAPTCHA v2, hCaptcha), `openajar solver add` plugs in a captcha-solving service you pay for: CapSolver,
 2Captcha or Anti-Captcha built in, or any other through a command or a webhook. It is off until you add one,
-with your key (kept on this computer), the most it may spend in a month and the sites it may answer for. A
-solving service may be against a site's terms; the choice and the cost are yours. The agent reaches it only
+with your key (kept on this computer). The service and what it costs are your choice. The agent reaches it only
 through `browser_challenge`, which waits, clicks once, asks your service, then hands the browser to you, and
-says which step ended it. It never runs on an account's browser or for Cloudflare's full-page check, and it
-refuses a page it recognises as a sign-up, login or payment page (a password, username, one-time-code or card
-field, a payment provider's frame, a word for it in the address). It errs toward refusing and can still miss
-some, such as a sign-up that asks only for an email. Every try is in `openajar solver log`.
+says which step ended it. It never runs on an account's browser or for Cloudflare's full-page check, and every
+request is in `openajar solver log` with the cost the service reported.
 [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md#the-owners-solving-service) has the details.
 
 What it does not get through, from the same runs:

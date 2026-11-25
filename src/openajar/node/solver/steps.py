@@ -3,17 +3,17 @@
 1. wait: the check passes by itself (Cloudflare's often does within seconds), up to WAIT_S;
 2. click: one click on its checkbox, as a person does (openajar.node.interaction.checks), unless one was made on
    this page in the last minute;
-3. the owner's solver: when the owner set one up for this site, the widget's token from their service, put where
-   the widget would put it (openajar.node.solver.widgets). Never for Cloudflare's full-page check, never on a
-   sign-up, login or payment page (checked before the request and again, with the page's address, before the
-   token goes in), never past the month's cap (a reservation on disk before anything is sent: ledger);
+3. the owner's solver: when the owner set one up, the widget's token from their service, put where the widget
+   would put it (openajar.node.solver.widgets), only while the page is at the address it was asked for. Never
+   for Cloudflare's full-page check, reCAPTCHA Enterprise or a widget inside another site's frame: no token from
+   a service works there;
 4. the human: nothing got it past, so the browser is handed to the person (the tool holds it for them).
 
-The result says which step ended it. Every solver try is in the record (openajar.node.solver.ledger), refused ones
-too. Only where `checks.allowed`: an environment's browser on its machine. An account's browser never gets here.
+The result says which step ended it. Every request to a service is a line in the log (openajar.node.solver.ledger).
+Only where `checks.allowed`: an environment's browser on its machine. An account's browser never gets here.
 
 `could_take` answers, for the signal watch (openajar.node.lanes.watch), whether a service of the owner's could take
-the check on this page now; only then is an image puzzle left unheld for browser_challenge.
+the check on this page; only then is an image puzzle left unheld for browser_challenge.
 """
 
 from __future__ import annotations
@@ -128,158 +128,83 @@ async def _click(ix: Any, page: Page, report: SignalReport) -> tuple[SignalRepor
 
 # ---- the owner's solver -----------------------------------------------------------------------------------------
 
-@dataclass(frozen=True)
-class _Fit:
-    """What the guards say for this page now: the widget and the entries that could take it, or why none."""
-    widget: widgets.Widget | None
-    entries: list[settings.SolverEntry]
-    why: str
-    refused_by: settings.SolverEntry | None = None   # the entry the refusal is recorded under
-    record: bool = True                              # a refusal worth a line in the record
-
-
 def _host(page: Page) -> str:
     return (urlsplit(getattr(page, "url", "") or "").hostname or "").lower()
 
 
-async def _fit(page: Page, report: SignalReport, home: Path | None) -> _Fit:
-    """The guards, in order, before anything is reserved or sent."""
+async def _pick(page: Page, report: SignalReport,
+                home: Path | None) -> tuple[settings.SolverEntry | None, widgets.Widget | None, str]:
+    """The owner's service that takes this page's widget, and the widget; or why none can be sent (only what keeps a
+    token from working: no service, a kind of check no token answers, no widget in the page's own document, no
+    service that takes its kind)."""
     entries = settings.current(home)
     if not entries:
-        return _Fit(None, [], "the owner has none set up", record=False)
+        return None, None, "the owner has none set up"
     detail = getattr(report, "detail", None)
     if detail in FULL_PAGE_DETAILS or await widgets.full_page(page):
-        return _Fit(None, [], FULL_PAGE, record=False)
+        return None, None, FULL_PAGE
     if detail not in CHECKBOX_DETAILS | PUZZLE_DETAILS:
-        return _Fit(None, [], f"not for this kind of check ({detail})", record=False)
+        return None, None, f"not for this kind of check ({detail})"
     widget, why = await widgets.find(page)
     if widget is None:
-        return _Fit(None, [], f"nothing to send ({why})")
-    host = _host(page)
-    covering = [e for e in entries if e.covers(host)]
-    if not covering:
-        return _Fit(widget, [], f"{host} is not on the site list of any of the owner's solvers")
-    taking = [e for e in covering if services.supports(e, widget.kind)]
-    if not taking:
-        names = ", ".join(e.name for e in covering)
-        return _Fit(widget, [], f"no solver of the owner's for this site takes {services.KIND_WORDS[widget.kind]} "
-                                f"({names})", covering[0])
-    stop = await widgets.sensitive(page, widget)
-    if stop:
-        return _Fit(widget, [], f"never on a sign-up, login or payment page ({'; '.join(stop[:3])})", taking[0])
-    return _Fit(widget, taking, "")
+        return None, None, f"nothing to send ({why})"
+    entry = next((e for e in entries if services.supports(e, widget.kind)), None)
+    if entry is None:
+        names = ", ".join(e.name for e in entries)
+        return None, widget, f"no solver of the owner's takes {services.KIND_WORDS[widget.kind]} ({names})"
+    return entry, widget, ""
 
 
 async def could_take(page: Page, report: SignalReport, home: Path | None = None) -> bool:
-    """A service of the owner's could take this page's check now: it covers the site, takes the widget's kind, the
-    page passes the guards, and its month's cap has room (a record that cannot be read: no). Reads only."""
-    fit = await _fit(page, report, home)
-    where = home if home is not None else settings.home()
-    if not fit.entries or where is None:
-        return False
-    try:
-        return any(ledger.spent(where, e.name) + e.assumed_cost <= e.monthly_cap + 1e-9 for e in fit.entries)
-    except ledger.LedgerError:
-        return False
+    """A service of the owner's could take this page's check: one is set up, a widget is found in the page's own
+    document, and the service takes its kind. Reads only."""
+    entry, _, _ = await _pick(page, report, home)
+    return entry is not None
 
 
 async def _solver(ix: Any, page: Page, report: SignalReport, *, browser: str,
                   home: Path | None) -> tuple[SignalReport, bool, str]:
-    """The owner's solving service, behind its guards. (report, passed, what happened)."""
-    home_dir = home if home is not None else settings.home()
-    host = _host(page)
-    fit = await _fit(page, report, home)
-    widget = fit.widget
-    if not fit.entries or widget is None:
-        if fit.record and home_dir is not None:
-            by = fit.refused_by
-            ledger.write(home_dir, ledger.Solve(settings.now_iso(), browser, host, widget.kind if widget else "unknown",
-                                                by.name if by else "", by.provider if by else "", ledger.REFUSED,
-                                                note=fit.why))
-        return report, False, f"solver: {fit.why}"
-    if home_dir is None:
-        return report, False, "solver: the node has no home to keep the record in, so it does not solve"
-    base = ledger.Solve(settings.now_iso(), browser, host, widget.kind, "", "", ledger.PENDING)
-    entry, pending, why = await _reserve(home_dir, fit.entries, base)
-    if pending is None:
-        ledger.write(home_dir, replace(base, service=entry.name, provider=entry.provider, result=ledger.REFUSED,
-                                       note=why))
+    """The owner's solving service. (report, passed, what happened)."""
+    entry, widget, why = await _pick(page, report, home)
+    if entry is None or widget is None:
         return report, False, f"solver: {why}"
+    home_dir = home if home is not None else settings.home()
     url = getattr(page, "url", "") or ""
+    line = ledger.Solve(settings.now_iso(), browser, _host(page), widget.kind, entry.name, entry.provider,
+                        ledger.FAILED)
     job = services.Job(widget.kind, widget.site_key, services.page_address(url), widget.action, widget.cdata,
                        widget.invisible)
     name = f"{entry.name} ({services.NAMES[entry.provider]})"
     try:
         answer = await services.solve(entry, job)
     except services.SolveError as e:
-        cost, cost_from = (entry.assumed_cost, "assumed") if e.may_have_cost else (0.0, "")
-        ledger.settle(pending, home_dir, result=ledger.FAILED, cost=cost, cost_from=cost_from, note=str(e))
+        ledger.write(home_dir, replace(line, note=str(e)))
         return report, False, f"solver: {name} gave no token: {e}"
-    except BaseException:  # cut off (a deadline, a cancel) after the request went out: it may have been charged
-        ledger.settle(pending, home_dir, result=ledger.CANCELLED, cost=entry.assumed_cost, cost_from="assumed",
-                      note="cut off while the service worked")
+    except BaseException:  # cut off (a deadline, a cancel) after the request went out
+        ledger.write(home_dir, replace(line, result=ledger.CANCELLED, note="cut off while the service worked"))
         raise
-    cost, cost_from = (answer.cost, "reported") if answer.cost is not None else (entry.assumed_cost, "assumed")
+    line = replace(line, cost=answer.cost)
+    cost = f"{ledger.usd(answer.cost)} USD" if answer.cost is not None else "a cost it did not report"
+    moved = "the page moved on before the token came"
     try:
-        moved = await _moved(page, url, widget)
-        if moved:
-            ledger.settle(pending, home_dir, result=ledger.NOT_PASSED, cost=cost, cost_from=cost_from,
-                          note=f"not used: {moved}")
-            return await ix.report(page), False, f"solver: the token was not used: {moved}"
-        handed = await widgets.hand(page, widget, answer.token, url)
+        if page.is_closed() or (getattr(page, "url", "") or "").split("#")[0] != url.split("#")[0]:
+            handed: dict[str, Any] = {"moved": True}
+        else:  # the address is read again in the step that writes the token
+            handed = await widgets.hand(page, widget, answer.token, url)
         del answer
-        if handed.get("moved"):  # between the guards and the write: the document is no longer the one asked for
-            moved = "the page moved on before the token came"
-            ledger.settle(pending, home_dir, result=ledger.NOT_PASSED, cost=cost, cost_from=cost_from,
-                          note=f"not used: {moved}")
+        if handed.get("moved"):
+            ledger.write(home_dir, replace(line, result=ledger.NOT_PASSED, note=f"not used: {moved}"))
             return await ix.report(page), False, f"solver: the token was not used: {moved}"
         report = await _settle(ix, page)
     except BaseException:
-        ledger.settle(pending, home_dir, result=ledger.CANCELLED, cost=cost, cost_from=cost_from,
-                      note="cut off while the token was handed over")
+        ledger.write(home_dir, replace(line, result=ledger.CANCELLED, note="cut off while the token was handed over"))
         raise
     passed = not is_check(report)
     note = f"token in {handed.get('filled', 0)} field(s); the page's callback: {handed.get('called', 'none')}"
-    ledger.settle(pending, home_dir, result=ledger.PASSED if passed else ledger.NOT_PASSED, cost=cost,
-                  cost_from=cost_from, note=note)
+    ledger.write(home_dir, replace(line, result=ledger.PASSED if passed else ledger.NOT_PASSED, note=note))
     words = "the check passed" if passed else "the check still shows"
-    return report, passed, (f"solver: {name} answered the {services.KIND_WORDS[widget.kind]} widget for "
-                            f"{ledger.usd(cost)} USD ({cost_from}): {words}; {note}")
-
-
-async def _reserve(home: Path, entries: list[settings.SolverEntry],
-                   base: ledger.Solve) -> tuple[settings.SolverEntry, ledger.Solve | None, str]:
-    """The first entry whose cap has room, with its pending line on disk; or the first entry and why none."""
-    first = entries[0]
-    for entry in entries:
-        solve = replace(base, service=entry.name, provider=entry.provider)
-        try:
-            pending = await asyncio.to_thread(ledger.reserve, home, solve, assumed=entry.assumed_cost,
-                                              cap=entry.monthly_cap)
-        except ledger.CapReached:
-            continue
-        except ledger.LedgerError as e:
-            return entry, None, f"{e}, so nothing is sent"
-        return entry, pending, ""
-    try:
-        now = ledger.usd(ledger.spent(home, first.name))
-    except ledger.LedgerError:
-        now = "?"
-    return first, None, f"the month's cap is reached ({first.name}: {now} of {first.monthly_cap:.2f} USD)"
-
-
-async def _moved(page: Page, url: str, widget: widgets.Widget) -> str:
-    """Why the token must not go into the page as it is now ("" when it may): the page left the address it was
-    asked for, or the guards now see a sign-up, login or payment page."""
-    if page.is_closed():
-        return "the page closed"
-    now = getattr(page, "url", "") or ""
-    if now.split("#")[0] != url.split("#")[0]:
-        return "the page moved on before the token came"
-    stop = await widgets.sensitive(page, widget)
-    if stop:
-        return f"the page is now a sign-up, login or payment page ({'; '.join(stop[:3])})"
-    return ""
+    return report, passed, (f"solver: {name} answered the {services.KIND_WORDS[widget.kind]} widget for {cost}: "
+                            f"{words}; {note}")
 
 
 async def _settle(ix: Any, page: Page) -> SignalReport:

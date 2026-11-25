@@ -33,7 +33,6 @@ import random
 import weakref
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
 
 from openajar.core.errors import InvalidRequest, RefNotFound
 from openajar.core.models import ActionKind, ActionResult, Signal
@@ -148,7 +147,7 @@ async def check_lines(page: Page, report: SignalReport | Any) -> list[str]:
     """The snapshot's lines for the checks on the page, when this browser's agent may click them: a check that
     shows its checkbox gets a ref (c1, c2...), remembered for act; one still at work by itself ("Verifying...", a
     spinner and no checkbox yet) gets a line that says to wait. When the owner set up a solving service for the
-    site (openajar.node.solver), the lines name browser_challenge, and an image puzzle gets a line of its own.
+    check (openajar.node.solver), the lines name browser_challenge, and an image puzzle gets a line of its own.
     Empty otherwise."""
     if not allowed(page):
         _forget(page)
@@ -187,8 +186,8 @@ async def check_lines(page: Page, report: SignalReport | Any) -> list[str]:
 
 
 async def solver_could_take(page: Page, signal: Any, detail: str | None) -> bool:
-    """A service of the owner's could take this page's check now (openajar.node.solver.steps.could_take): its site
-    list, the widget's kind, the sign-up, login and payment guard and its cap. False on any failure to read."""
+    """A service of the owner's could take this page's check (openajar.node.solver.steps.could_take): a widget is
+    found in the page's own document and a service takes its kind. False on any failure to read."""
     if not solver_for(page):
         return False
     from openajar.node.solver.steps import could_take
@@ -202,13 +201,10 @@ async def solver_could_take(page: Page, signal: Any, detail: str | None) -> bool
 
 
 def solver_for(page: Page) -> bool:
-    """The owner set up a solving service whose site list covers this page's host (openajar.node.solver)."""
-    from openajar.node.solver.settings import on_for
+    """The owner set up a solving service (openajar.node.solver): a cheap look before anything reads the page."""
+    from openajar.node.solver.settings import current
 
-    try:
-        return on_for(urlsplit(getattr(page, "url", "") or "").hostname or "")
-    except ValueError:
-        return False
+    return bool(current())
 
 
 def _forget(page: Page) -> None:

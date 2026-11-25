@@ -469,34 +469,28 @@ off until the owner runs `openajar solver add`; openajar ships no key and shares
 
 | Question | Answer |
 |---|---|
-| Who turns it on | the owner, at the node: the CLI writes `secrets/solvers.json` (600, in the 700 secrets folder, as `proxies.json`). No tool, page or agent adds, widens or reads an entry; an agent only calls `browser_challenge` |
-| Where the key goes | only to the owner's own service: in the request body to a built-in (`clientKey`, over https), the `Authorization` header to a webhook (https, or http to this computer itself, no redirects followed), or the environment of the owner's own command (never its command line). Never to an environment's machine, a page, a tool result, a log, a trace or the solve record. Every message from a service or a hook (an error answer, a hook's error or stderr) is redacted with the key as a whole message, and only then cut to its first 300 characters (a stderr tail to its last 300), so no part of the key is left at a cut |
+| Who turns it on | the owner, at the node: the CLI writes `secrets/solvers.json` (600, in the 700 secrets folder, as `proxies.json`). No tool, page or agent adds, changes or reads an entry; an agent only calls `browser_challenge` |
+| Where the key goes | only to the owner's own service: in the request body to a built-in (`clientKey`, over https), the `Authorization` header to a webhook (https, or http to this computer itself, no redirects followed), or the environment of the owner's own command (never its command line). Never to an environment's machine, a page, a tool result, a log, a trace or the solve log. Every message from a service or a hook (an error answer, a hook's error or stderr) is redacted with the key as a whole message, and only then cut to its first 300 characters (a stderr tail to its last 300), so no part of the key is left at a cut |
 | Who calls the service | the node (with openajar local, this computer), never the machine. The machine and its root agent never see the key or the request |
 | What the service learns | a new third party in the owner's work: the page's scheme, host and path (never its query or fragment), the widget's site key and kind, Turnstile's action and cData, the time, and the node's address. Never a proxy, its address or its credentials (only proxyless task types are used), and never the page's cookies |
 | Which browsers | an environment's browser on its machine only: the tool refuses a lane that is not an environment's (`check_for_human`), and the steps refuse a page whose context the environment's launch did not allow (`checks.allowed`, the same boundary as the 0.6.1 click). An account's browser is held for any check, solver or not |
-| Which pages | the owner's site list; never Cloudflare's full-page check (by its signal and by its own markers: `#challenge-form`, `#challenge-stage`, the orchestrate script); never a widget inside another site's frame (only one in the page's own document, so the key sent is the page's own); never reCAPTCHA Enterprise (its script or frame on the page); and never a page with a sign-up, login or payment sign: a password (a disabled one too), one-time-code, username or card field, also in an open shadow root or a frame (a page it cannot read in full, by its size, its number of frames or a frame that does not answer, is refused); a payment provider's frame; a word for such a step in the address, its query or the form's action. The guard runs before the request, and again just before the token goes in, together with a check that the page is still at the address the token was asked for, which the script that writes the token makes again in the same step |
-| How much | the owner's cap per calendar month, through a reservation: under an exclusive file lock (`solver/.lock`, which the node and `openajar solver test --solve` share), the record is read and a `pending` line at the entry's assumed cost is written and synced, only when the month's spend plus that cost fits the cap. The lock is let go for the request. A second line settles it with the reported cost, the assumed cost when the service may have charged and did not say (a timeout, a cut-off call), or 0 for an error answer. A pending line nobody settled counts at its assumed cost. So agents at once, and a call cut off mid-solve, cannot pass the cap with the assumed cost (never below 0.0005 USD, so no solve counts nothing). A line whose write never finished was never sent and spends nothing; a lock nobody lets go refuses after 10 seconds |
-| When the record fails | it fails closed: a record that cannot be read (permissions, a symlink, bytes that are not UTF-8) or holds a line that is not one openajar wrote (a cost that is not a number from 0 to 1000, a bad time) refuses every reservation until the owner fixes it, and so does one that cannot be written. `solver list` and `solver log` say which line |
-| What is kept | `solver/solves.jsonl` in the node's home (600): when, which browser, the host, the widget's kind, the service, the result, the cost and where it came from. Refused tries too. Never the key, the token, the path or the query |
+| Which pages | any site. Not sent, because no token from a service works there: Cloudflare's full-page check (by its signal and by its own markers: `#challenge-form`, `#challenge-stage`, the orchestrate script), a widget inside another site's frame (only one in the page's own document, so the key sent is the page's own), and reCAPTCHA Enterprise (its script or frame on the page). The token goes in only while the page is at the address it was asked for, which the script that writes it checks in the same step |
+| What is kept | `solver/solves.jsonl` in the node's home (600): one line per request with when, which browser, the host, the widget's kind, the service, the result and the cost the service reported. Never the key, the token, the path or the query. It is a log only: when it cannot be written or read, the node logs a warning and the solve goes on |
 
-What this does not stop:
+What is not bounded, and what this does not stop:
 
+- **Spend.** openajar sets no limit on what a service may cost. An agent that calls `browser_challenge` again and
+  again spends the owner's balance at the service, one solve per call, until the balance or the service's own
+  limits stop it. `solver log` and `solver list` show what was asked and what the services reported.
+- **Which sites.** Any page an environment's browser opens can have a widget answered, and the page chooses the
+  site key it shows: a hostile page can have the owner's service answer another site's widget and read the token
+  through its own callback. Sign-up, login and payment pages are not told apart.
 - **The token in the page.** It has to be there: the page sends it to the site with its form. Anything on the
   machine can read it while it is valid (minutes), as it can read the rest of the browser.
 - **A service that keeps what it learns.** It knows which sites the owner's agents work on and when. Pick one
   you would tell that to.
-- **A guess the page guard misses.** It reads structure, not words, and errs on the side of refusing; a sign-up
-  made only of an email field (with no `autocomplete="username"`) on a page whose address says nothing gets
-  through, and so does a closed shadow root.
-- **A hostile page on an allowed site.** The page chooses the site key it shows, so it can have the owner's
-  service answer another site's widget and read the token through its own callback. The cap bounds what that
-  costs. With `--sites '*'` any page an agent opens can do it, which `solver add` says.
 - **The site's own view.** A site may see a solved token as against its terms, and may ban the address or the
   account that sent it.
-- **A wrong cost.** The cap reserves the assumed cost. A solve the service charges more for (or reports more
-  for) is recorded at what it reported, so the worst overspend is, for the solves in flight at that moment, the
-  difference between their real price and the assumed cost; the next reservation then sees it and refuses. A
-  service that charges and reports no cost is held to the cap only by `--assumed-cost`.
 - **This computer's own user.** `secrets/solvers.json` is 0600 for the user openajar runs as, as `proxies.json`
   is: any program running as that user reads the key, an agent with a shell on the owner's own computer (openajar
   local with Claude Code or Codex) included. The key is kept from the machine and from the agent's tools, not

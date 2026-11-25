@@ -4,7 +4,7 @@ key (2x00000000000000000000AB), which no click passes. The order runs: the wait,
 checkbox to click), then the owner's solver: a fake service on this computer with the documented 2Captcha shape
 (no real service is called), whose answer is Cloudflare's dummy token. The token lands in the form's
 cf-turnstile-response field, the page's data-callback enables the form, and the form carries the token to the
-site. The key never reaches the machine. A login page with the same widget is never sent to the service.
+site. The key never reaches the machine. A widget one click passes never reaches the service.
 
 The machine's browser loads Turnstile from challenges.cloudflare.com, so this needs the internet (marked network);
 it is skipped when the machine cannot reach it, and unless docker answers and the image has the browser (see
@@ -53,8 +53,7 @@ async def test_the_owners_solver_answers_a_widget_a_click_does_not_pass(tmp_path
     monkeypatch.setattr(services, "POLL_S", 0.5)
     with FakeService("2captcha", key=KEY, processing=2) as svc:
         def owner(home):
-            settings.save(home, [SolverEntry(name="main", provider="2captcha", key=KEY, endpoint=svc.url,
-                                             monthly_cap=1.0, sites=["example.test"])])
+            settings.save(home, [SolverEntry(name="main", provider="2captcha", key=KEY, endpoint=svc.url)])
 
         async with docker_node(tmp_path, home_setup=owner) as node:
             mgr, envs, lanes, grant, home = node["mgr"], node["envs"], node["lanes"], node["grant"], node["home"]
@@ -74,11 +73,8 @@ async def test_the_owners_solver_answers_a_widget_a_click_does_not_pass(tmp_path
                                         "| { tee -a /etc/hosts || sudo -n tee -a /etc/hosts; } >/dev/null && echo mapped", timeout_s=30)
                 assert "mapped" in hosts.stdout, hosts
                 page_html = FORM % {"key": SITE_KEY, "extra": ""}
-                login_html = FORM % {"key": SITE_KEY,
-                                     "extra": '<label>Password <input type="password" name="pw"></label><br><br>'}
                 await envs.exec(env.terminal_lane, "mkdir -p /srv/a /srv/b && cat > /srv/a/contact.html && echo "
                                 "'<title>Sent</title><h1>Sent</h1>' > /srv/a/done.html", stdin=page_html, timeout_s=30)
-                await envs.exec(env.terminal_lane, "cat > /srv/a/login.html", stdin=login_html, timeout_s=30)
                 await envs.exec(env.terminal_lane, "cat > /srv/a/ask.html", timeout_s=30,
                                 stdin=FORM % {"key": ASK_KEY, "extra": ""})
                 await envs.job_start(env.terminal_lane, "cd /srv/a && exec python3 -m http.server 3000 --bind 127.0.0.1")
@@ -94,23 +90,10 @@ async def _run(envs, env, lanes, svc, home, create_interaction, steps, ledger):
     interaction = lanes.watch(create_interaction())  # as the node composes it: with its holds
     page = await lanes.live_session(lane).page()
 
-    # a login page with the same widget: waited for and clicked as before, never sent to the service
-    await interaction.navigate(page, "http://shop.example.test:3000/login.html")
-    report = await _widget_shows(interaction, page)
-    assert (report.signal.value, report.detail) == ("captcha", "Cloudflare Turnstile frame"), report
-    snap = await interaction.snapshot(page)
-    assert "browser_challenge" not in snap.text, snap.text[:600]  # no service may take a login page's check
-    out = await steps.get_past(interaction, page, browser=lane, home=home)
-    print(f"the login page: {out.ended_by}: {out.steps}")
-    assert out.ended_by == steps.HUMAN and not out.passed
-    assert out.steps[1].startswith("click: ")  # the always-fail widget: no checkbox to click, or a click that fails
-    assert out.steps[2] == ("solver: never on a sign-up, login or payment page (its address says 'login'; a password "
-                            "field)")
-    assert svc.requests == []
-
     # a widget a click passes: the browser's own click ends it, and the service is never asked
     await interaction.navigate(page, "http://shop.example.test:3000/ask.html")
-    await _widget_shows(interaction, page)
+    report = await _widget_shows(interaction, page)
+    assert (report.signal.value, report.detail) == ("captcha", "Cloudflare Turnstile frame"), report
     out = await steps.get_past(interaction, page, browser=lane, home=home)
     print(f"the interactive widget: {out.ended_by}: {out.steps}")
     assert (out.ended_by, out.passed) == (steps.CLICK, True), out.steps
@@ -124,8 +107,8 @@ async def _run(envs, env, lanes, svc, home, create_interaction, steps, ledger):
     out = await steps.get_past(interaction, page, browser=lane, home=home)
     print(f"the contact form: {out.ended_by}: {out.steps}")
     assert (out.ended_by, out.passed) == (steps.SOLVER, True), out.steps
-    assert out.steps[2].startswith("solver: main (2Captcha) answered the Cloudflare Turnstile widget for 0.00145 USD "
-                                   "(reported): the check passed; token in 1 field(s); the page's callback: called")
+    assert out.steps[2].startswith("solver: main (2Captcha) answered the Cloudflare Turnstile widget for 0.00145 USD: "
+                                   "the check passed; token in 1 field(s); the page's callback: called")
     assert out.report.signal.value == "ok" and lanes.get(lane).control.state is not ControlState.PAUSED
     task = next(body["task"] for path, body, _ in svc.requests if path == "/createTask")
     assert task == {"type": "TurnstileTaskProxyless", "websiteURL": "http://shop.example.test:3000/contact.html",
@@ -141,9 +124,8 @@ async def _run(envs, env, lanes, svc, home, create_interaction, steps, ledger):
     assert sent["cf-turnstile-response"] == [DUMMY_TOKEN] and sent["email"] == ["someone@example.test"]
 
     record = ledger.read(home)
-    assert [(s.result, s.site, s.kind) for s in record] == [  # the reservation settled into one line
-        (ledger.REFUSED, "shop.example.test", "turnstile"), (ledger.PASSED, "shop.example.test", "turnstile")]
-    # the key stayed on this computer: not on the machine, not in the record
+    assert [(s.result, s.site, s.kind, s.cost) for s in record] == [("passed", "shop.example.test", "turnstile", 0.00145)]
+    # the key stayed on this computer: not on the machine, not in the log
     # the key never on this command line either: the machine gets it reversed and turns it round itself
     found = await envs.exec(env.terminal_lane, f"k=$(echo {KEY[::-1]} | rev); grep -rIl \"$k\" /home /tmp /srv "
                             "/root /var/log /etc /opt 2>/dev/null; echo end", timeout_s=120)

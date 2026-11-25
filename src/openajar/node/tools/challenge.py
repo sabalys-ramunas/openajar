@@ -40,8 +40,8 @@ NEXT = {  # by openajar.node.solver.steps' names for the step that ended it
 
 async def browser_challenge(ctx: ToolContext, *, on: str) -> dict[str, Any]:
     """Get your environment's browser past a site's "are you human" check, in this order: wait for it to pass by
-    itself, click its checkbox once, ask the owner's solving service (only when the owner set one up for this
-    site), else hand the browser to your human. `ended_by` says which step ended it (nothing, wait, click,
+    itself, click its checkbox once, ask the owner's solving service (only when the owner set one up), else hand
+    the browser to your human. `ended_by` says which step ended it (nothing, wait, click,
     solver or human) and `steps` what each did. Call it once per check, never in a loop. Effect: draft.
     """
     from openajar.node.interaction import checks  # the browser stack, only when it runs

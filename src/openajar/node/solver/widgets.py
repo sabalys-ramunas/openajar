@@ -9,25 +9,15 @@ Reads (Camoufox's isolated world; nothing on the page changes):
   key in the path). A widget inside another site's frame is refused, and so is reCAPTCHA on a page that loads
   reCAPTCHA Enterprise (its script or its frame).
 - Cloudflare's full-page check by its own markers (`full_page`).
-- the page's kind: a sign-up, login or payment page is never solved (`sensitive`). The reasons are structural,
-  never the page's words, read in the document, its open shadow roots and every frame: a password field (a
-  disabled one too), a one-time-code, username (a passwordless login) or card field that shows, or any such field
-  in the widget's own form; an autocomplete token for one; a payment provider's frame (Stripe, PayPal, Braintree,
-  Adyen, Shopify and others); a word for it in the page's address, its query or the form's action (login,
-  sign_in, wp-login, register, session, checkout, my-account, payment...). It errs on the side of refusing: a
-  contact form next to a visible login box is refused too. It misses a sign-up made only of an email field with
-  no autocomplete="username" on a page whose address says nothing, a form in a closed shadow root, and a sign-up
-  whose check comes before any of its fields show: docs/ENVIRONMENTS.md says so.
 
-The write: the token goes into the widget's response field (and reCAPTCHA's, which hCaptcha also fills), then the
-page's own callback for it is called when the page named one (data-callback, or reCAPTCHA's own client table),
+The write: when the document is still at the address the token was asked for, the token goes into the widget's
+response field (and reCAPTCHA's, which hCaptcha also fills), then the page's own callback for it is called when the page named one (data-callback, or reCAPTCHA's own client table),
 the way the widget does when a person passes it. The page then sends the token with its form, and the site checks
 it with the vendor: openajar cannot know the answer before that.
 """
 
 from __future__ import annotations
 
-import itertools
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -41,25 +31,6 @@ Page = Any
 FIELDS = {"turnstile": "cf-turnstile-response", "recaptcha_v2": "g-recaptcha-response",
           "hcaptcha": "h-captcha-response"}
 _TURNSTILE_KEY = re.compile(r"/(0x[0-9A-Za-z_-]{16,}|[123]x0{20}[A-F]{2})(?:/|$)")
-PAYMENT_HOSTS = ("js.stripe.com", "checkout.stripe.com", "hooks.stripe.com", "paypal.com", "paypalobjects.com",
-                 "braintreegateway.com", "braintree-api.com", "adyen.com", "checkout.com", "pay.google.com",
-                 "squareup.com", "squarecdn.com", "klarna.com", "recurly.com", "chargebee.com", "paddle.com",
-                 "authorize.net", "worldpay.com", "mollie.com", "razorpay.com", "2checkout.com", "affirm.com",
-                 "shopifycs.com", "checkout.shopify.com", "shop.app", "afterpay.com", "clearpay.co.uk")
-# A word for a sign-up, login or payment step: a whole part of the address's path or of a query value
-# ("/users/sign_in", "/wp-login.php", "?route=account/register"), or the first or last word of such a part
-# ("/user-login", "/signin-oidc"), or the host's first label.
-PAGE_WORDS = re.compile(
-    r"^(?:log-?in|log-?on|sign-?in|sign-?on|sign-?up|register|registration|join|enrol+|create-?account|"
-    r"new-?account|account-?create|my-?account|auth|authenticate|authorize|oauth2?|oidc|sso|saml|session|sessions|"
-    r"password|reset-?password|forgot(?:-?password)?|verify-?email|checkout|checkouts|payment|payments|pay|billing|"
-    r"purchase|donate)$", re.IGNORECASE)
-_EXTENSION = re.compile(r"\.(?:php|html?|aspx?|jspx?|cgi|do|action|cfm|pl)$", re.IGNORECASE)
-_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")  # userLogin -> user-Login
-MAX_FRAMES = 200  # frames read for fields; a page with more is refused, not read in part
-HOST_WORDS = frozenset({"login", "signin", "signup", "auth", "accounts", "account", "sso", "id", "checkout", "pay",
-                        "payment", "payments", "billing", "secure"})
-
 # The widgets in the page's own document, from their elements (light DOM), with whether each holds its token already,
 # and whether the page loads reCAPTCHA Enterprise (its script, or its frame).
 _WIDGETS_JS = """
@@ -93,50 +64,6 @@ _WIDGETS_JS = """
 _FULL_PAGE_JS = """() => !!(document.getElementById('challenge-form') || document.getElementById('challenge-stage') ||
   Array.from(document.scripts).slice(0, 200).some((s) =>
     /\\/cdn-cgi\\/challenge-platform\\/h\\/[^/]+\\/orchestrate\\//.test(s.getAttribute('src') || '')))"""
-
-# Why this page is a sign-up, login or payment page (structural reads only), for the document it runs in.
-_SENSITIVE_JS = """
-(fields) => {
-  const why = [];
-  const shown = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
-    return r.width > 2 && r.height > 2 && s.visibility !== 'hidden' && s.display !== 'none'; };
-  let form = null;
-  for (const name of fields) { const f = document.getElementsByName(name)[0]; if (f && f.form) { form = f.form; break; } }
-  const near = (el) => shown(el) || (form && el.form === form);
-  // the inputs of the document and of its open shadow roots (a login form in a web component is one too)
-  // What is past a limit was not read, and a page not read in full is refused (`cut`), never taken as clean
-  let cut = '';
-  let budget = 200000;
-  const inputsIn = (root, depth) => {
-    let out = Array.from(root.querySelectorAll('input'));
-    const all = root.querySelectorAll('*');
-    if (all.length > budget) { cut = 'more elements than openajar reads'; return out; }
-    budget -= all.length;
-    for (const el of all) {
-      if (!el.shadowRoot) continue;
-      if (depth >= 8) { cut = 'shadow roots nested deeper than openajar reads'; break; }
-      out = out.concat(inputsIn(el.shadowRoot, depth + 1));
-    }
-    return out;
-  };
-  let inputs = inputsIn(document, 0);
-  if (inputs.length > 5000) { cut = 'more input fields than openajar reads'; inputs = inputs.slice(0, 5000); }
-  const ac = /(^|\\s)(current-password|new-password|one-time-code|username|webauthn|cc-number|cc-csc|cc-exp|cc-exp-month|cc-exp-year)(\\s|$)/i;
-  const card = /(card.?num|cardnumber|cc-?num|\\bcvv|\\bcvc|security.?code|card.?exp|expiry)/i;
-  for (const el of inputs) {  // a disabled one too: a multi-step login shows its password field disabled first
-    if (!near(el)) continue;
-    if (el.type === 'password') { why.push('a password field'); break; }
-  }
-  for (const el of inputs) {
-    if (!near(el)) continue;
-    const auto = el.getAttribute('autocomplete') || '';
-    if (ac.test(auto)) { why.push('a field for ' + auto.trim().split(/\\s+/).pop()); break; }
-    if (card.test((el.name || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('placeholder') || '') + ' ' +
-                  (el.getAttribute('aria-label') || ''))) { why.push('a card field'); break; }
-  }
-  return {why, cut, action: form ? (form.getAttribute('action') || '') : ''};
-}
-"""
 
 # The token into the widget's field(s), then the page's callback when it named one. Runs in the isolated world:
 # the fields are the page's own DOM, and the callback is reached through the page's window (wrappedJSObject).
@@ -233,7 +160,7 @@ async def find(page: Page) -> tuple[Widget | None, str]:
     widgets = [Widget(w["kind"], str(w.get("key") or ""), w.get("action") or None, w.get("cdata") or None,
                       (w.get("size") or "") == "invisible", w.get("callback") or None, bool(w.get("passed")))
                for w in read.get("widgets") or [] if isinstance(w, dict) and w.get("kind") in FIELDS]
-    frames = list(getattr(page, "frames", []))[1:MAX_FRAMES]
+    frames = list(getattr(page, "frames", []))[1:]
     vendor = [(f, from_frame_url(getattr(f, "url", "") or "")) for f in frames]
     framed = [w for f, w in vendor if w is not None and _direct(page, f)]
     nested = [f for f, w in vendor if w is not None and not _direct(page, f)]
@@ -270,90 +197,6 @@ async def find(page: Page) -> tuple[Widget | None, str]:
 async def full_page(page: Page) -> bool:
     """Cloudflare's full-page check shows its own markers (its form, its stage, its orchestrate script)."""
     return bool(await quietly(page.evaluate(_FULL_PAGE_JS), False, timeout=5.0))
-
-
-def _word(part: str) -> str | None:
-    """`part` (one piece of a path or a query value) when it or its first or last word names such a step."""
-    part = _CAMEL.sub("-", part.strip().split(";")[0])  # ";jsessionid=..." is not part of the name
-    part = _EXTENSION.sub("", part.lower()).replace("_", "-")
-    if not part:
-        return None
-    words = [w for w in part.split("-") if w]
-    if PAGE_WORDS.match(part) or (words and (PAGE_WORDS.match(words[0]) or PAGE_WORDS.match(words[-1]))):
-        return part
-    return None
-
-
-def _path_words(url: str) -> list[str]:
-    try:
-        parts = urlsplit(url or "")
-        query = parse_qs(parts.query, keep_blank_values=True)
-    except ValueError:
-        return []
-    pieces = (parts.path or "").split("/")
-    route = parts.fragment.lstrip("!")
-    if route.startswith("/"):  # a single-page app's route: "/#/login", "/app#!/signup?x=1"
-        pieces += route.split("?")[0].split("/")
-    for key, values in query.items():
-        pieces += [p for v in values for p in v.split("/")] + ([key] if values == [""] else [])
-    words = [w for w in (_word(p) for p in pieces) if w]
-    named = [p.strip().lower().replace("_", "-") for p in (parts.path or "").split("/") if p.strip()]
-    # two parts that name the step together: "/customer/account/create/"
-    words += [f"{a}/{b}" for a, b in itertools.pairwise(named) if PAGE_WORDS.match(f"{a}-{b}")]
-    host = (parts.hostname or "")
-    first = host.split(".")[0]
-    if first in HOST_WORDS and host.count(".") >= 2:
-        words.append(f"{first}.")
-    return words
-
-
-async def sensitive(page: Page, widget: Widget | None) -> list[str]:
-    """Why this is a sign-up, login or payment page (empty: none of the signs). Errs on the side of refusing."""
-    why: list[str] = []
-    url = getattr(page, "url", "") or ""
-    words = _path_words(url)
-    if words:
-        why.append(f"its address says {words[0]!r}")
-    fields = [FIELDS[widget.kind]] if widget is not None else list(FIELDS.values())
-    main = await quietly(page.evaluate(_SENSITIVE_JS, fields), None, timeout=5.0)
-    if isinstance(main, dict):
-        why += [str(w) for w in main.get("why") or []]
-        if main.get("cut"):
-            why.append(f"the page could not be read in full ({main['cut']})")
-        action = str(main.get("action") or "")
-        if action and _path_words(action):
-            why.append(f"its form goes to {_path_words(action)[0]!r}")
-    elif main is None:
-        why.append("the page could not be read to check it is not a sign-up, login or payment page")
-    frames = list(getattr(page, "frames", []))[1:]
-    for frame in frames:  # every frame: an address costs nothing to read
-        host = urlsplit(getattr(frame, "url", "") or "").hostname or ""
-        if any(host_is(host, h) for h in PAYMENT_HOSTS):
-            why.append(f"a payment frame ({host})")
-            break
-    if len(frames) > MAX_FRAMES:
-        why.append(f"the page has more frames ({len(frames)}) than openajar reads to check it")
-    for frame in frames[:MAX_FRAMES]:
-        host = urlsplit(getattr(frame, "url", "") or "").hostname or ""
-        if not host or from_frame_url(frame.url) is not None or any(host_is(host, h) for h in
-                                                                     ("google.com", "recaptcha.net", "hcaptcha.com",
-                                                                      "challenges.cloudflare.com")):
-            continue
-        inner = await quietly(frame.evaluate(_SENSITIVE_JS, []), None, timeout=3.0)
-        if isinstance(inner, dict) and (inner.get("why") or inner.get("cut")):
-            why.append(f"{(inner.get('why') or ['a part that could not be read in full'])[0]} in a frame ({host})")
-            break
-        if inner is None and not _gone(frame):  # a frame that left the page has nothing to read; one that stays
-            why.append(f"a frame ({host}) could not be read to check it")  # and does not answer is not clean
-            break
-    return list(dict.fromkeys(why))
-
-
-def _gone(frame: Any) -> bool:
-    try:
-        return bool(frame.is_detached())
-    except Exception:  # noqa: BLE001 - a stand-in frame, or one already torn down
-        return False
 
 
 async def hand(page: Page, widget: Widget, token: str, expected_url: str = "") -> dict[str, Any]:

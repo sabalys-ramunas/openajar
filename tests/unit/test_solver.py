@@ -1,6 +1,6 @@
 """The owner's solving service (openajar.node.solver): what `openajar solver` stores and shows, what each built-in
 service is sent and what it answers (a local fake with their documented shapes; no real service is called), the
-command and webhook hooks end to end, the record and the month's cap. The key never shows anywhere."""
+command and webhook hooks end to end, and the log. The key never shows anywhere."""
 
 from __future__ import annotations
 
@@ -26,10 +26,8 @@ def quick(monkeypatch):
     monkeypatch.setattr(services, "POLL_S", 0.01)
 
 
-def entry(provider="2captcha", *, url=None, key=KEY, cap=5.0, sites=("example.com",), command=None, name="main",
-          assumed=0.003):
-    return SolverEntry(name=name, provider=provider, key=key, endpoint=url, command=command, monthly_cap=cap,
-                       sites=list(sites), assumed_cost=assumed)
+def entry(provider="2captcha", *, url=None, key=KEY, command=None, name="main"):
+    return SolverEntry(name=name, provider=provider, key=key, endpoint=url, command=command)
 
 
 TURNSTILE = services.Job("turnstile", "0x4AAAAAAAexample00000", "https://shop.example.com/contact",
@@ -53,31 +51,11 @@ def test_entries_are_stored_private_and_shown_without_their_key(tmp_path):
 
 def test_a_broken_file_names_the_entry_and_the_field_never_the_value(tmp_path):
     (tmp_path / "secrets").mkdir()
-    settings.path(tmp_path).write_text(json.dumps([{"name": "main", "provider": "nope", "key": KEY,
-                                                    "monthly_cap": 5, "sites": ["example.com"]}]))
+    settings.path(tmp_path).write_text(json.dumps([{"name": "main", "provider": "nope", "key": KEY}]))
     with pytest.raises(ValueError, match="solver 'main'") as e:
         settings.load(tmp_path)
     assert KEY not in str(e.value) and "provider" in str(e.value)
     assert settings.current(tmp_path) == []  # a file that does not load: no solver, nothing is sent
-
-
-def test_the_site_list_covers_a_host_and_its_subdomains_only():
-    e = entry(sites=["https://Example.com/x", "shop.example.org"])
-    assert e.sites == ["example.com", "shop.example.org"]
-    assert e.covers("example.com") and e.covers("www.example.com") and e.covers("shop.example.org")
-    assert not e.covers("evilexample.com") and not e.covers("example.org") and not e.covers("")
-    assert entry(sites=["*"]).covers("anything.example")
-    with pytest.raises(ValueError):
-        entry(sites=["not a site"])
-    with pytest.raises(ValueError):
-        entry(sites=[])
-
-
-def test_a_cap_is_required_and_bounded():
-    with pytest.raises(ValueError):
-        entry(cap=0)
-    with pytest.raises(ValueError):
-        entry(cap=5000)
 
 
 def test_current_reads_the_file_again_when_it_changes(tmp_path):
@@ -175,15 +153,6 @@ def test_the_page_address_keeps_its_query_and_fragment_here():
         "https://shop.example.com:8443/a/b"
 
 
-def test_the_address_words():
-    assert widgets._path_words("https://shop.example.com/account/sign-up?x=1") == ["sign-up"]
-    assert widgets._path_words("https://example.com/checkout") == ["checkout"]
-    assert widgets._path_words("https://login.example.com/") == ["login."]
-    assert widgets._path_words("https://example.com/contact") == []
-    assert widgets._path_words("https://example.com/blog/how-to-login-faster") == []  # a whole part only
-    assert widgets._path_words("https://payments.example.com/x") == ["payments."]
-
-
 # ---- the hooks ------------------------------------------------------------------------------------------------
 
 HOOK = """
@@ -200,7 +169,7 @@ print(json.dumps({"token": "tok-" + job["kind"] + "-" + job["site_key"], "cost":
 async def test_the_command_hook_gets_the_job_on_stdin_and_the_key_in_its_environment(tmp_path):
     script = tmp_path / "hook.py"
     script.write_text(HOOK)
-    e = entry("command", command=f"{sys.executable} {script} {KEY[::-1]}", sites=["*"])
+    e = entry("command", command=f"{sys.executable} {script} {KEY[::-1]}")
     answer = await services.solve(e, HCAPTCHA)  # a hook takes hCaptcha
     assert (answer.token, answer.cost) == ("tok-hcaptcha-10000000-ffff-ffff-ffff-000000000001", 0.002)
     with pytest.raises(services.SolveError, match="exited 3") as err:
@@ -220,21 +189,25 @@ async def test_the_webhook_gets_the_job_and_the_key_as_a_bearer_token():
             await services.solve(entry("webhook", url=svc.url, key=OTHER), TURNSTILE)
 
 
-# ---- the record -----------------------------------------------------------------------------------------------
+# ---- the log --------------------------------------------------------------------------------------------------
 
-def test_the_record_sums_a_months_spend_per_service(tmp_path):
-    for at, service, cost in (("2026-10-30T10:00:00Z", "main", 1.0), ("2026-11-01T10:00:00Z", "main", 0.002),
-                              ("2026-11-02T10:00:00Z", "main", 0.003), ("2026-11-02T11:00:00Z", "other", 0.5)):
-        ledger.write(tmp_path, ledger.Solve(at, "env/e1-browser", "example.com", "turnstile", service, "2captcha",
-                                            ledger.PASSED, cost, "reported"))
-    assert ledger.spent(tmp_path, "main", month="2026-11") == 0.005
-    assert ledger.spent(tmp_path, "other", month="2026-11") == 0.5
-    assert len(ledger.read(tmp_path, month="2026-10")) == 1
+def test_the_log_is_a_log_that_never_stands_in_the_way(tmp_path, caplog):
+    line = ledger.Solve("2026-11-02T10:00:00Z", "env/e1-browser", "example.com", "turnstile", "main", "2captcha",
+                        ledger.PASSED, 0.00145)
+    ledger.write(tmp_path, line)
+    ledger.write(tmp_path, ledger.Solve("2026-10-30T10:00:00Z", "b", "s", "turnstile", "main", "capsolver",
+                                        ledger.PASSED))  # CapSolver reports no cost
     p = ledger.record_path(tmp_path)
     assert stat.S_IMODE(p.stat().st_mode) == 0o600
-    p.write_text(p.read_text() + "not json\n")
-    with pytest.raises(ledger.LedgerError, match="line 5"):  # a broken line is never skipped: it could lower the spend
-        ledger.read(tmp_path)
+    p.write_bytes(p.read_bytes() + b"not json\n\xff\xfe\n" + json.dumps({"at": 5, "cost": "1"}).encode() + b"\n")
+    assert ledger.read(tmp_path, month="2026-11") == [line]  # lines that do not read are skipped, with a warning
+    assert ledger.spent(ledger.read(tmp_path)) == 0.00145
+    assert "does not read" in caplog.text
+    p.unlink()
+    p.symlink_to(tmp_path / "elsewhere")
+    ledger.write(tmp_path, line)  # a log that cannot be written: a warning, and nothing raises
+    assert ledger.read(tmp_path) == [] and "could not write the solve log" in caplog.text
+    ledger.write(None, line)  # no home: nothing to write
 
 
 # ---- the command line -----------------------------------------------------------------------------------------
@@ -255,48 +228,48 @@ def _cli(*args: str, input: str | None = None):
     return CliRunner().invoke(app, list(args), input=input)
 
 
-def test_solver_add_needs_a_cap_and_sites_and_never_prints_the_key(home):
+def test_solver_add_stores_the_key_and_never_prints_it(home):
     assert "No solver" in _cli("solver", "list").output
-    out = _cli("solver", "add", "main", "2captcha", KEY, "--sites", "example.com")
-    assert out.exit_code == 1 and "--cap" in out.output and not settings.path(home).exists()
-    out = _cli("solver", "add", "main", "2captcha", KEY, "--cap", "5")
-    assert out.exit_code == 1 and "--sites" in out.output
-    out = _cli("solver", "add", "main", "2captcha", "--cap", "5", "--sites", "example.com", input=f"{KEY}\n")
+    out = _cli("solver", "add", "main", "2captcha", input=f"{KEY}\n")
     assert out.exit_code == 0, out.output
-    assert "Added solver main: 2Captcha, for example.com, at most 5.00 USD a month" in out.output
-    assert "may be against a site's terms" in out.output and KEY not in out.output
+    assert "Added solver main: 2Captcha, with a key." in out.output
+    assert "your choice" in out.output and KEY not in out.output
     assert settings.load(home)[0].key == KEY
-    out = _cli("solver", "add", "main", "capsolver", KEY, "--cap", "2", "--sites", "*")
+    out = _cli("solver", "add", "main", "capsolver", KEY)
     assert out.exit_code == 1 and "--yes" in out.output
-    out = _cli("solver", "add", "main", "capsolver", KEY, "--cap", "2", "--sites", "*", "--yes")
-    assert out.exit_code == 0 and "Replaced solver main: CapSolver, for any site" in out.output
+    out = _cli("solver", "add", "main", "capsolver", KEY, "--yes")
+    assert out.exit_code == 0 and "Replaced solver main: CapSolver, with a key." in out.output
     listed = _cli("solver", "list").output
-    assert "main  CapSolver" in listed and "key stored" in listed and "0 of 2.00 USD" in listed
+    assert "main  CapSolver" in listed and "key stored" in listed and "0 solves (0 passed), 0 USD reported" in listed
     assert KEY not in listed
 
 
 def test_solver_add_checks_the_hooks(home):
-    assert "--command" in _cli("solver", "add", "s", "command", "--cap", "1", "--sites", "*").output
-    assert "--url" in _cli("solver", "add", "s", "webhook", "--cap", "1", "--sites", "*").output
-    out = _cli("solver", "add", "s", "webhook", "--cap", "1", "--sites", "*", "--url", "http://hook.example.net/")
+    assert "--command" in _cli("solver", "add", "s", "command").output
+    assert "--url" in _cli("solver", "add", "s", "webhook").output
+    out = _cli("solver", "add", "s", "webhook", "--url", "http://hook.example.net/")
     assert out.exit_code == 1 and "https" in out.output
-    out = _cli("solver", "add", "s", "webhook", "--cap", "1", "--sites", "*", "--url", "https://hook.example.net/x")
+    out = _cli("solver", "add", "s", "webhook", "--url", "https://hook.example.net/x")
     assert out.exit_code == 0, out.output
 
 
 def test_solver_test_asks_the_balance_and_a_hook_for_a_test_token(home, tmp_path):
     with FakeService("anticaptcha", key=KEY) as svc:
-        _cli("solver", "add", "anti", "anticaptcha", KEY, "--cap", "1", "--sites", "*", "--url", svc.url)
+        _cli("solver", "add", "anti", "anticaptcha", KEY, "--url", svc.url)
         out = _cli("solver", "test", "anti")
         assert out.exit_code == 0 and "Anti-Captcha answers: balance 3.5000 USD" in out.output
         assert [p for p, _, _ in svc.requests] == ["/getBalance"]  # the balance only: no token is bought
         out = _cli("solver", "test", "anti", "--solve")
         assert out.exit_code == 0 and "gave a token for Cloudflare's test widget" in out.output, out.output
-        assert svc.requests[2][1]["task"]["websiteKey"] == services.TEST_SITE_KEY  # after a second balance
-    assert ledger.spent(home, "anti") == 0.00145
+        task = svc.requests[2][1]["task"]  # after a second balance
+        # Cloudflare's key that forces the interactive check, on 2Captcha's demo page (it refuses the always-pass key)
+        assert (task["websiteKey"], task["websiteURL"]) == ("3x00000000000000000000FF",
+                                                            "https://2captcha.com/demo/cloudflare-turnstile")
+    assert ledger.spent(ledger.read(home)) == 0.00145
+    assert "1 solves (1 passed), 0.00145 USD reported" in _cli("solver", "list").output
     script = tmp_path / "hook.py"
     script.write_text(HOOK)
-    _cli("solver", "add", "mine", "command", "--cap", "1", "--sites", "*", "--command",
+    _cli("solver", "add", "mine", "command", "--command",
          f"{sys.executable} {script} {KEY[::-1]}", KEY)
     out = _cli("solver", "test", "mine")
     assert out.exit_code == 0 and "gave a token" in out.output, out.output
@@ -309,7 +282,7 @@ def test_solver_test_asks_the_balance_and_a_hook_for_a_test_token(home, tmp_path
 
 def test_solver_test_fails_plainly_with_a_wrong_key(home):
     with FakeService("2captcha", key=OTHER) as svc:
-        _cli("solver", "add", "main", "2captcha", KEY, "--cap", "1", "--sites", "*", "--url", svc.url)
+        _cli("solver", "add", "main", "2captcha", KEY, "--url", svc.url)
         out = _cli("solver", "test")
     assert out.exit_code == 1 and "ERROR_KEY_DOES_NOT_EXIST" in out.output and KEY not in out.output
 

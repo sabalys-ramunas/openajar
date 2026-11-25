@@ -4,9 +4,8 @@ machine, a page, an agent, a log or a trace: the key leaves this computer only i
 service (openajar.node.solver.services).
 
 No file, or an empty one, is the default: no solver, and openajar solves nothing. There is no bundled or shared key.
-
-Each entry is one service with the owner's own limits: the month's spend cap in US dollars, the sites it may
-answer for, and what one solve is assumed to cost when the service does not say (CapSolver does not).
+Each entry is one service: its provider, its key, and its address or command when it needs one. It answers for any
+site an environment's browser is on.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ValidationError
 
 from openajar.core.fs import write_private
 
@@ -28,10 +27,6 @@ NAME_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,40}")
 Provider = Literal["capsolver", "2captcha", "anticaptcha", "command", "webhook"]
 PROVIDERS: tuple[str, ...] = ("capsolver", "2captcha", "anticaptcha", "command", "webhook")
 BUILT_IN: frozenset[str] = frozenset({"capsolver", "2captcha", "anticaptcha"})
-ANY_SITE = "*"
-DEFAULT_ASSUMED_COST = 0.003   # US dollars: above the list price of one Turnstile or reCAPTCHA v2 token at all three
-MIN_ASSUMED_COST = 0.0005  # US dollars: below any service's price for a token
-MAX_CAP = 1000.0               # a month's cap above this is a typo, not a choice
 
 _HOME: Path | None = None
 _CACHE: dict[Path, tuple[float, list[SolverEntry]]] = {}
@@ -46,27 +41,7 @@ class SolverEntry(BaseModel):
     key: str | None = None
     endpoint: str | None = None      # a built-in's API address (its own by default), or the webhook's URL
     command: str | None = None       # the command hook's command line (no shell)
-    monthly_cap: float = Field(gt=0, le=MAX_CAP)   # US dollars a calendar month (UTC)
-    sites: list[str] = Field(min_length=1)          # hosts it may answer for (a host covers its subdomains); "*" any
-    # never 0: a solve that counts nothing would never reach the cap (a service that reports no cost counts this)
-    assumed_cost: float = Field(default=DEFAULT_ASSUMED_COST, ge=MIN_ASSUMED_COST, le=1)
     added: str = ""
-
-    @field_validator("sites")
-    @classmethod
-    def _sites(cls, value: list[str]) -> list[str]:
-        out = []
-        for raw in value:
-            site = clean_site(raw)
-            if site is None:
-                raise ValueError(f"not a site: {raw[:60]!r} (a host such as example.com, or *)")
-            out.append(site)
-        return list(dict.fromkeys(out))
-
-    def covers(self, host: str) -> bool:
-        """This service may answer for a page on `host`."""
-        host = (host or "").lower().rstrip(".")
-        return bool(host) and any(s == ANY_SITE or host == s or host.endswith("." + s) for s in self.sites)
 
     def public(self) -> dict[str, Any]:
         """Everything but the key (and the webhook's address, which may carry one in its query)."""
@@ -75,18 +50,6 @@ class SolverEntry(BaseModel):
             out["endpoint"] = safe_url(out["endpoint"])
         out["has_key"] = bool(self.key)
         return out
-
-
-def clean_site(raw: str) -> str | None:
-    """`raw` as a host for the allowlist ("https://www.Example.com/x" -> "www.example.com"), "*", or None."""
-    raw = (raw or "").strip().lower()
-    if raw == ANY_SITE:
-        return ANY_SITE
-    host = urlsplit(raw if "//" in raw else f"//{raw}").hostname or ""
-    host = host.rstrip(".").removeprefix("*.")
-    if not host or "." not in host or not re.fullmatch(r"[a-z0-9.-]+", host):
-        return None
-    return host
 
 
 def safe_url(url: str) -> str:
@@ -169,11 +132,6 @@ def current(home_dir: Path | None = None) -> list[SolverEntry]:
     with _LOCK:
         _CACHE[p] = (mtime, entries)
     return list(entries)
-
-
-def on_for(host: str, home_dir: Path | None = None) -> bool:
-    """Some service of the owner's may answer for a page on `host` (its allowlist covers it)."""
-    return any(e.covers(host) for e in current(home_dir))
 
 
 def now_iso() -> str:

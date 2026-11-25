@@ -3,7 +3,7 @@
 Built in, all three with the same documented shape (createTask, then getTaskResult until it is ready; getBalance):
 
 - CapSolver (api.capsolver.com): Turnstile (AntiTurnstileTaskProxyLess), reCAPTCHA v2 (ReCaptchaV2TaskProxyLess).
-  Its result reports no cost, so a solve counts the entry's assumed cost.
+  Its result reports no cost, so its solves are logged with none.
 - 2Captcha (api.2captcha.com, its API v2): Turnstile (TurnstileTaskProxyless), reCAPTCHA v2
   (RecaptchaV2TaskProxyless). Its result reports the cost.
 - Anti-Captcha (api.anti-captcha.com): Turnstile (TurnstileTaskProxyless), reCAPTCHA v2
@@ -56,9 +56,10 @@ TASK_TYPES: dict[str, dict[str, str]] = {
 }
 NAMES = {"capsolver": "CapSolver", "2captcha": "2Captcha", "anticaptcha": "Anti-Captcha", "command": "a command",
          "webhook": "a webhook"}
-# Cloudflare's always-pass Turnstile test key, for `openajar solver test --solve`
-TEST_SITE_KEY = "1x00000000000000000000AA"
-TEST_PAGE = "https://example.com/"
+# For `openajar solver test --solve`: Cloudflare's Turnstile test key that forces the interactive check, on
+# 2Captcha's own demo page (2Captcha refuses the always-pass key 1x00000000000000000000AA: ERROR_BAD_PARAMETERS).
+TEST_SITE_KEY = "3x00000000000000000000FF"
+TEST_PAGE = "https://2captcha.com/demo/cloudflare-turnstile"
 
 SOLVE_TIMEOUT_S = 120.0    # a token takes 1 to 20 s by the services' own words; a stuck one is given up
 FIRST_POLL_S = 5.0         # 2Captcha asks for at least 5 s before the first getTaskResult
@@ -89,12 +90,7 @@ SHOWN = 300                # characters of a service's message that are shown, c
 
 class SolveError(Exception):
     """The service gave no token. Once out of `solve` the message is safe to show: the key was redacted from the
-    whole message before it was cut. `may_have_cost`: the request went out and the service may have charged for it
-    (False: it was never sent, or the service answered with an error code, for which the three charge nothing)."""
-
-    def __init__(self, message: str, *, may_have_cost: bool = True):
-        super().__init__(message)
-        self.may_have_cost = may_have_cost
+    whole message before it was cut."""
 
 
 def _shown(text: str, key: str | None) -> str:
@@ -149,7 +145,7 @@ async def solve(entry: SolverEntry, job: Job) -> Answer:
         else:
             answer = await _webhook(entry, job)
     except SolveError as e:
-        raise SolveError(_shown(str(e), entry.key), may_have_cost=e.may_have_cost) from None
+        raise SolveError(_shown(str(e), entry.key)) from None
     except Exception as e:  # noqa: BLE001 - any other failure (a malformed answer included) is one with no token
         raise SolveError(_shown(f"{type(e).__name__}: {e}", entry.key)) from None
     token = answer.token
@@ -165,9 +161,9 @@ async def balance(entry: SolverEntry) -> float | None:
     try:
         data = await _post(entry, "getBalance", {})
     except SolveError as e:
-        raise SolveError(_shown(str(e), entry.key), may_have_cost=False) from None
+        raise SolveError(_shown(str(e), entry.key)) from None
     except Exception as e:  # noqa: BLE001 - shown as a failed check
-        raise SolveError(_shown(f"{type(e).__name__}: {e}", entry.key), may_have_cost=False) from None
+        raise SolveError(_shown(f"{type(e).__name__}: {e}", entry.key)) from None
     try:
         return float(data.get("balance"))
     except (TypeError, ValueError):
@@ -196,12 +192,11 @@ def task_body(provider: str, job: Job) -> dict[str, Any]:
 
 async def _task_api(entry: SolverEntry, job: Job) -> Answer:
     if not supports(entry, job.kind):
-        raise SolveError(f"{NAMES[entry.provider]} does not take {KIND_WORDS.get(job.kind, job.kind)}",
-                         may_have_cost=False)
+        raise SolveError(f"{NAMES[entry.provider]} does not take {KIND_WORDS.get(job.kind, job.kind)}")
     created = await _post(entry, "createTask", {"task": task_body(entry.provider, job)})
     task_id = created.get("taskId")
     if task_id in (None, ""):
-        raise SolveError("the service gave no task id", may_have_cost=False)
+        raise SolveError("the service gave no task id")
     deadline = time.monotonic() + SOLVE_TIMEOUT_S
     await asyncio.sleep(FIRST_POLL_S)
     while True:
@@ -214,7 +209,7 @@ async def _task_api(entry: SolverEntry, job: Job) -> Answer:
             token = token or solution.get("token") or solution.get("gRecaptchaResponse")
             return Answer(str(token or ""), _cost(result.get("cost")))
         if time.monotonic() + POLL_S > deadline:
-            raise SolveError(f"no token within {SOLVE_TIMEOUT_S:.0f} s (the service may still charge for it)")
+            raise SolveError(f"no token within {SOLVE_TIMEOUT_S:.0f} s")
         await asyncio.sleep(POLL_S)
 
 
@@ -222,7 +217,7 @@ async def _post(entry: SolverEntry, method: str, body: dict[str, Any]) -> dict[s
     base = (entry.endpoint or ENDPOINTS[entry.provider]).rstrip("/")
     why = check_address(base)
     if why is not None:
-        raise SolveError(f"the service's address is refused: {why}", may_have_cost=False)
+        raise SolveError(f"the service's address is refused: {why}")
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S, follow_redirects=False, trust_env=False) as client:
         response = await client.post(f"{base}/{method}", json={"clientKey": entry.key or "", **body})
     if response.status_code != 200:
@@ -230,10 +225,10 @@ async def _post(entry: SolverEntry, method: str, body: dict[str, Any]) -> dict[s
     data = response.json()
     if not isinstance(data, dict):
         raise SolveError(f"{method} answered with no JSON object")
-    if data.get("errorId") not in (0, None, "0"):  # an error answer: the services charge nothing for one
+    if data.get("errorId") not in (0, None, "0"):
         code = str(data.get("errorCode") or data.get("errorId"))
         text = str(data.get("errorDescription") or "")
-        raise SolveError(f"{code}: {text}" if text else code, may_have_cost=False)
+        raise SolveError(f"{code}: {text}" if text else code)
     return data
 
 
@@ -266,7 +261,7 @@ def _hook_answer(raw: bytes, who: str) -> Answer:
 async def _command(entry: SolverEntry, job: Job) -> Answer:
     argv = shlex.split(entry.command or "")
     if not argv:
-        raise SolveError("the command hook has no command", may_have_cost=False)
+        raise SolveError("the command hook has no command")
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER")}
     if entry.key:
         env["OPENAJAR_SOLVER_KEY"] = entry.key
@@ -289,7 +284,7 @@ async def _webhook(entry: SolverEntry, job: Job) -> Answer:
     url = entry.endpoint or ""
     why = check_address(url)
     if why is not None:
-        raise SolveError(f"the webhook's address is refused: {why}", may_have_cost=False)
+        raise SolveError(f"the webhook's address is refused: {why}")
     headers = {"Authorization": f"Bearer {entry.key}"} if entry.key else {}
     async with httpx.AsyncClient(timeout=SOLVE_TIMEOUT_S, follow_redirects=False, trust_env=False) as client:
         response = await client.post(url, json=job_json(job), headers=headers)
