@@ -459,6 +459,35 @@ What this does not stop:
   work, a test or staging account where one exists.
 - **A link holder.** A control link of that browser types into the signed-in session (above).
 
+## The owner's solving service
+
+[ENVIRONMENTS.md, The owner's solving service](ENVIRONMENTS.md#the-owners-solving-service) is how it works. It is
+off until the owner runs `openajar solver add`; openajar ships no key and shares none.
+
+| Question | Answer |
+|---|---|
+| Who turns it on | the owner, at the node: the CLI writes `secrets/solvers.json` (600, in the 700 secrets folder, as `proxies.json`). No tool, page or agent adds, widens or reads an entry; an agent only calls `browser_challenge` |
+| Where the key goes | only to the owner's own service: in the request body to a built-in (`clientKey`, over https), the `Authorization` header to a webhook (https, or http to this computer itself, no redirects followed), or the environment of the owner's own command (never its command line). Never to an environment's machine, a page, a tool result, a log, a trace or the solve record. Every message from a service or a hook is redacted with the key before anything shows it |
+| Who calls the service | the node (with openajar local, this computer), never the machine. The machine and its root agent never see the key or the request |
+| What the service learns | a new third party in the owner's work: the page's scheme, host and path (never its query or fragment), the widget's site key and kind, Turnstile's action and cData, the time, and the node's address. Never a proxy, its address or its credentials (only proxyless task types are used), and never the page's cookies |
+| Which browsers | an environment's browser on its machine only: the tool refuses a lane that is not an environment's (`check_for_human`), and the steps refuse a page whose context the environment's launch did not allow (`checks.allowed`, the same boundary as the 0.6.1 click). An account's browser is held for any check, solver or not |
+| Which pages | the owner's site list, never Cloudflare's full-page check, never a page with a sign-up, login or payment sign (a password, one-time-code or card field, a payment provider's frame, a word for it in the address or the form's action) |
+| How much | the owner's cap per calendar month, checked with the next solve's cost added before anything is sent, under one lock so two agents cannot both pass it. A service that reports no cost counts the entry's assumed cost |
+| What is kept | `solver/solves.jsonl` in the node's home (600): when, which browser, the host, the widget's kind, the service, the result, the cost and where it came from. Refused tries too. Never the key, the token, the path or the query |
+
+What this does not stop:
+
+- **The token in the page.** It has to be there: the page sends it to the site with its form. Anything on the
+  machine can read it while it is valid (minutes), as it can read the rest of the browser.
+- **A service that keeps what it learns.** It knows which sites the owner's agents work on and when. Pick one
+  you would tell that to.
+- **A guess the page guard misses.** It reads structure, not words, and errs on the side of refusing; a sign-up
+  made only of an email field on a page whose address says nothing gets through.
+- **The site's own view.** A site may see a solved token as against its terms, and may ban the address or the
+  account that sent it.
+- **A wrong cost.** When a service reports none, the cap counts the assumed cost. A service that charges more
+  than that is held to the cap only by the owner's `--assumed-cost`.
+
 ## Saves, the default way an environment stays (docs/ENVIRONMENTS.md "Keeping an environment")
 
 An environment saves when idle unless the agent asks for single use (`keep="none"`) or the owner sets

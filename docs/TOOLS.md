@@ -33,7 +33,7 @@ tools_more lists only tools the caller's grant can see. Connector operations (`<
 |---|---|---|
 | `core` | your own computer: open, save, close, its terminal, files and browser, proof, the pull request | `approval_wait`, `browser_act`, `browser_dialog`, `browser_navigate`, `browser_record`, `browser_screenshot`, `browser_snapshot`, `browser_tabs`, `browser_wait`, `browser_wait_handback`, `environment`, `environment_checkpoint`, `environment_close`, `environment_download`, `environment_open`, `environment_port`, `environment_pull_request`, `environment_rollback`, `environment_save`, `environment_upload`, `file_edit`, `file_read`, `file_write`, `login`, `terminal_exec`, `terminal_job_cancel`, `terminal_job_read`, `terminal_job_start` |
 | `accounts` | the owner's account browsers: list, open, claim and release one, its live view, files to upload, asking a person, workspace memory, a run's status | `approval_confirm`, `browser_claim`, `browser_close`, `browser_file_put`, `browser_open`, `browser_release`, `browser_upload`, `browser_view`, `browsers_list`, `howto`, `human_ask`, `memory_context`, `run_status`, `whoami` |
-| `browser` | more for a browser: its inbox and downloads, scrolling a feed | `browser_file_delete`, `browser_file_get`, `browser_files`, `browser_scroll` |
+| `browser` | more for a browser: its inbox and downloads, scrolling a feed, getting past a site's check | `browser_challenge`, `browser_file_delete`, `browser_file_get`, `browser_files`, `browser_scroll` |
 | `devtools` | why a page broke: its console messages and page errors, its requests and which failed, and one response's body | `browser_console`, `browser_network` |
 | `control` | sharing account browsers: who has one, asking a person for it, the queue, a safety check, a freeze | `browser_check`, `browser_control`, `browser_freeze`, `browser_queue`, `browser_request_control` |
 | `vault` | stored logins: what the vault holds, filling one login field, asking for a log in | `browser_login_request`, `vault_fill`, `vault_list` |
@@ -143,6 +143,7 @@ Argument names removed from tools that kept their name (`wait_s` is how long a c
 | [`brain_use`](#brain_use) | brains | brain | Make a brain the default for a workspace (or for the node when no workspace is given) |
 | [`brains_list`](#brains_list) | brains | read | Brains on this node: kind (subscription, local, metered), state (ready, cooling_down, needs_auth, down) with the reason, seats in use, and how full the usage window is |
 | [`browser_act`](#browser_act) | core | draft | Act on an element by its ref from your latest snapshot, with human input |
+| [`browser_challenge`](#browser_challenge) | browser | draft | Get your environment's browser past a site's "are you human" check, in this order: wait for it to pass by itself, click its checkbox once, ask the owner's solving service (only when the owner set one up for this site), else hand the browser to your human |
 | [`browser_check`](#browser_check) | control | read | Is this browser safe to use right now? A checklist: proxy alive, exit IP and its location against the browser's pinned timezone and locale, WebRTC and DNS leaks, profile and fingerprint pin, still signed in (from the session cookies already in the profile), the expected account, and any hold or quarantine with who can clear it |
 | [`browser_claim`](#browser_claim) | accounts | read | Claim an account browser for a job of several acting calls (a post, a login, a form), so no other agent, flow or brain acts on it in between |
 | [`browser_close`](#browser_close) | accounts | read | Send an account browser to cold: close it gracefully (cookies and logins stay on disk), to free a warm slot when you are done with it for a while |
@@ -502,6 +503,16 @@ Act on an element by its ref from your latest snapshot, with human input. Action
 | `action` | `click \| type \| fill \| select \| press \| hover \| scroll` | yes | What to do with the element. |
 | `text` | `str \| None` | no (default None) | What to type or fill, the option to select, or the key to press. |
 | `snapshot` | `'none' \| 'delta' \| 'full'` | no (default 'none') | "delta" (only the outline lines that changed since your last snapshot of this tab: the cheapest way to see what it did, also after a click opens another page) or "full". |
+
+## browser_challenge
+
+Toolset: `browser`. Effect: `draft`. Needs the `interaction` service.
+
+Get your environment's browser past a site's "are you human" check, in this order: wait for it to pass by itself, click its checkbox once, ask the owner's solving service (only when the owner set one up for this site), else hand the browser to your human. `ended_by` says which step ended it (nothing, wait, click, solver or human) and `steps` what each did. Call it once per check, never in a loop.
+
+| Argument | Type | Required | Description |
+|---|---|---|---|
+| `on` | `str \| None` | no (default None) | The on environment_open gave, or an account browser's workspace/name. |
 
 ## browser_check
 

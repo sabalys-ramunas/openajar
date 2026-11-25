@@ -6,6 +6,29 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Your own captcha-solving service for environments' browsers, off until you add one: `openajar solver add
+  <name> <provider> [key] --cap <USD a month> --sites <hosts>`, with `solver list`, `solver test`,
+  `solver remove` and `solver log`. Built in: CapSolver, 2Captcha and Anti-Captcha by their documented task
+  APIs (Turnstile and reCAPTCHA v2, proxyless task types only); a `command` or `webhook` hook plugs in any
+  other service or your own script, hCaptcha included. The key stays in `secrets/solvers.json` (600) on this
+  computer and is in no tool result, log, trace or record. openajar ships no key and shares none. A solving
+  service may be against a site's terms; the choice and the cost are yours.
+- `browser_challenge` (toolset `browser`): one explicit call that gets an environment's browser past a site's
+  check in this order: wait for it to pass by itself, the browser's own click, your solver, then you (the
+  browser is held for you, and the agent waits with `browser_wait_handback`). `ended_by` says which step ended
+  it and `steps` what each did. It refuses an account's browser (`check_for_human`), and its solver step never
+  runs for Cloudflare's full-page check, on a sign-up, login or payment page, for a site off your list, or
+  past your month's cap. Every try, refused ones too, is in the record with the cost the service reported or
+  your assumed cost.
+
+### Changed
+
+- In an environment's browser, when your solver covers the site, the snapshot's line for a check names
+  `browser_challenge`, and an hCaptcha or reCAPTCHA image puzzle is not held at once, so the agent can call
+  it. Without a solver nothing changes.
+
 ## [0.6.1] - 2026-11-25
 
 This version adds one reserved label for `browser_proxies` (`this-computer`) and changes what an agent

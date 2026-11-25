@@ -423,11 +423,17 @@ async def test_every_node_tool_goes_through_the_wrapper_and_authorizes(monkeypat
     await manager.create(LaneSpec(id="personal/reddit"))
     wrap = RecordingWrap()
     server = build_mcp(node_runtime(NodeConfig(), manager, FakeInteraction()), [node_tool_specs], wrap)
-    assert sorted(wrap.built) == sorted(name for name, _ in NODE_CALLS)
+    # browser_challenge is built too, and refuses an account's browser before it asks the policy for anything
+    assert sorted(wrap.built) == sorted([*(name for name, _ in NODE_CALLS), "browser_challenge"])
     async with Client(server) as client:
         for name, args in NODE_CALLS:
             result = await client.call_tool(name, args)
             assert not result.is_error, (name, text_of(result))
+        refused = await client.call_tool("browser_challenge", {"on": "personal/reddit"})
+        assert refused.is_error and "check_for_human" in text_of(refused)
+    wrap.calls = [c for c in wrap.calls if c[0] != "browser_challenge"]
+    assert [ctx.authorized for ctx in wrap.contexts if ctx.spec.name == "browser_challenge"] == [[]]
+    wrap.contexts = [ctx for ctx in wrap.contexts if ctx.spec.name != "browser_challenge"]
     assert [name for name, _, _ in wrap.calls] == [name for name, _ in NODE_CALLS]
     by_tool = {ctx.spec.name: ctx.authorized for ctx in wrap.contexts}
     for name, args in NODE_CALLS:

@@ -305,8 +305,19 @@ an untouched Firefox on the same machine got the same checkbox on the same pages
 browser waits on that page as a person does (up to 20 seconds) before it reports anything. When the check
 still asks for its "Verify you are human" checkbox, the agent sees it in its snapshot and clicks it once, with
 real input on the machine's screen: from the datacenter's address that one click let the browser through on
-Glassdoor, Indeed and a Cloudflare test site, and through the residential proxy on Indeed. An image puzzle (hCaptcha's, reCAPTCHA's) is never solved: the
-agent hands the browser to you. On an account's browser any challenge still goes to you.
+Glassdoor, Indeed and a Cloudflare test site, and through the residential proxy on Indeed. openajar never
+solves an image puzzle (hCaptcha's, reCAPTCHA's) itself: the agent hands the browser to you. On an account's
+browser any challenge still goes to you.
+
+**Your own solving service**, if you want one. For a widget a click does not pass (Cloudflare Turnstile,
+reCAPTCHA v2, hCaptcha), `openajar solver add` plugs in a captcha-solving service you pay for: CapSolver,
+2Captcha or Anti-Captcha built in, or any other through a command or a webhook. It is off until you add one,
+with your key (kept on this computer), the most it may spend in a month and the sites it may answer for. A
+solving service may be against a site's terms; the choice and the cost are yours. The agent reaches it only
+through `browser_challenge`, which waits, clicks once, asks your service, then hands the browser to you, and
+says which step ended it. It never runs on an account's browser, on a sign-up, login or payment page, or for
+Cloudflare's full-page check, and every try is in `openajar solver log`.
+[docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md#the-owners-solving-service) has the details.
 
 What it does not get through, from the same runs:
 

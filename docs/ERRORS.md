@@ -30,6 +30,7 @@ carries one of these codes:
 | [`bundle_rejected`](#bundle_rejected) | A connector bundle's signature or format did not check out, so nothing in it was installed. | no |
 | [`busy`](#busy) | The browser stayed taken for longer than the call could wait: another caller claims it or calls ahead in its queue, or every warm browser slot is in use. | yes, after 30 s |
 | [`cancelled`](#cancelled) | The request was cancelled before it finished. | no |
+| [`check_for_human`](#check_for_human) | browser_challenge works only on an environment's own browser on its machine. On an account's browser, or a browser on the node, a site's check is for the person: nothing was clicked and no solving service was asked. | no |
 | [`check_unknown`](#check_unknown) | A flow's branch condition could not be checked on the page, so the flow did not guess which way to go. | no |
 | [`checkpoint_failed`](#checkpoint_failed) | A checkpoint or a rollback could not be done on the environment's machine: there is no git repository under /work, git could not read one, or the machine did not answer. A checkpoint that failed leaves nothing half made. | no |
 | [`checkpoint_not_found`](#checkpoint_not_found) | No repository under /work has the checkpoint the rollback named: it was never made, it is older than the about 20 kept, or the environment came back from a files-only save, which keeps none. Nothing changed. | no |
@@ -403,6 +404,15 @@ The request was cancelled before it finished.
 - **Retry:** no
 - **Raised by:** `openajar.core.errors.Cancelled`
 - **Runs fail with it in:** `openajar.runner.approvals`, `openajar.runner.executor`, `openajar.runner.workflows.engine`, `openajar.runner.workflows.service`
+
+## check_for_human
+
+browser_challenge works only on an environment's own browser on its machine. On an account's browser, or a browser on the node, a site's check is for the person: nothing was clicked and no solving service was asked.
+
+- **Agent:** Do not retry. Tell your user the browser shows a check, give them its live view, and wait with browser_wait_handback.
+- **You:** Pass the check yourself in the browser's live view, then hand the browser back to the agent.
+- **Retry:** no
+- **Raised by:** `openajar.core.errors.CheckForHuman`
 
 ## check_unknown
 

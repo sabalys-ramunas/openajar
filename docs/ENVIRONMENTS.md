@@ -691,10 +691,83 @@ it. Then it waits for the vendor's answer and says it: the check passed, an imag
 never solves one: tell your human and wait with `browser_wait_handback`), or it did not pass (do not click
 again in a loop). A check still at work by itself ("Verifying...") shows a line that says to wait instead of
 a ref. An account's browser never gets a check ref, and a challenge there still holds it for its human.
+When the owner set up a solving service for the site (below), the line names `browser_challenge` instead.
 
 It covers `browser = "vm"` only. An environment whose browser runs on the node (`browser = "node"`)
 exits through its machine as before: that browser's traffic is the tunnel's SOCKS proxy, which does
 not chain to another proxy, so `proxy add` says so on such a node.
+
+#### The owner's solving service
+
+For a widget a click does not pass (Cloudflare Turnstile, reCAPTCHA v2, hCaptcha on an ordinary page), the
+owner can plug in a captcha-solving service of their own. It is off until they add one. openajar ships no key
+and shares none. A solving service may be against a site's terms; the choice and the cost are the owner's.
+
+```
+openajar solver add main 2captcha --cap 5 --sites example.com,shop.example.org   # prompts for the key
+openajar solver add mine webhook --cap 2 --sites '*' --url https://solve.example.net/token
+openajar solver add mine command --cap 2 --sites '*' --command "python3 /path/solve.py"
+openajar solver list             # each service, this month's spend against its cap, solves and refusals
+openajar solver test main        # the balance (free); --solve buys one token for Cloudflare's test widget
+openajar solver log              # every try: when, which browser, site, widget, service, result, cost
+openajar solver remove main      # the entry and its key; the record stays
+```
+
+- **Services.** Built in: `capsolver`, `2captcha` and `anticaptcha`, each by its documented task API (createTask,
+  then getTaskResult; getBalance for `test`), with the proxyless task types only. All three take Turnstile and
+  reCAPTCHA v2. None of them lists hCaptcha any more (their documentation, read 2026-11-25), so hCaptcha goes
+  only to a hook. `--url` points a built-in at another address with the same API.
+- **Hooks.** `command` runs a command line on this computer, with no shell. `webhook` POSTs to an https URL
+  (http only to this computer itself), and follows no redirect. Both get the job as JSON:
+  `{"kind": "turnstile" | "recaptcha_v2" | "hcaptcha", "site_key": "...", "page_url": "https://host/path",
+  "action": ..., "cdata": ..., "invisible": false}`, and answer `{"token": "...", "cost": 0.002}` (`cost` in US
+  dollars, optional) or `{"error": "why"}`. The key, when there is one, is the command's environment variable
+  `OPENAJAR_SOLVER_KEY` (never its command line), or the webhook's `Authorization: Bearer` header.
+- **The owner's limits.** `--cap`: the most it may spend in a calendar month (UTC), in US dollars. `--sites`:
+  the hosts it may answer for (a host covers its subdomains, `*` is any). Both are required. A solve counts the
+  cost the service reports (2Captcha and Anti-Captcha do), else `--assumed-cost` (0.003 by default, above the
+  list price of one token at all three; CapSolver reports none). The cap is checked, with the next solve's
+  cost added, before anything is sent, so a looping agent stops at it.
+
+The agent uses it through one tool, `browser_challenge(on)` in the `browser` toolset (`tools_more("browser")`,
+or `tools_call`). Its steps, in order, each only when the one before did not get past the check:
+
+1. **wait**: up to 20 s for Cloudflare's check, 5 s for the others, for it to pass by itself;
+2. **click**: one click on its checkbox, as above, unless one was made on that page in the last minute;
+3. **solver**: the widget's site key and kind are read from the page (its element's `data-sitekey`, else its
+   frame's address), the owner's service is asked for a token, and the token goes where the widget puts it
+   (`cf-turnstile-response`, `g-recaptcha-response`, `h-captcha-response`), then the page's own callback is
+   called when the page named one (`data-callback`, or reCAPTCHA's client table). The site checks the token
+   when the form is sent;
+4. **human**: nothing got it past, so the browser is held for the human, and the agent waits with
+   `browser_wait_handback`.
+
+The result's `ended_by` is `nothing`, `wait`, `click`, `solver` or `human`, and `steps` says what each step
+did, the service and its cost included. When a solver covers the site, an image puzzle in an environment's
+browser is not held at once, so the agent can call the tool, and the snapshot says so.
+
+What it never does:
+
+- **An account's browser.** The tool refuses one (`check_for_human`), and under it the same boundary as the
+  click (`checks.allowed`: an environment's browser on its machine). A browser that runs on the node
+  (`browser = "node"`) is refused too.
+- **Cloudflare's full-page check** ("Just a moment..."): its answer is a cookie tied to the browser and its
+  exit address, so a service would need the proxy's credentials, and openajar never sends a proxy or its
+  credentials anywhere. The step says it cannot solve that kind, and the browser goes to the human.
+- **A sign-up, login or payment page.** Before it asks the service it reads the page (structure, never its
+  words): a password, one-time-code or card field that shows, or any such field in the widget's own form;
+  an autocomplete token for one; a payment provider's frame (Stripe, PayPal, Braintree, Adyen, Klarna and
+  others); a word for such a step in the address or the form's action (login, signup, register, checkout,
+  payment...). Any of them refuses. It errs on the side of refusing (a contact form beside a visible login box
+  is refused too), and it can miss a sign-up made only of an email field on a page whose address says nothing,
+  and a sign-up whose check comes before its password step.
+- **reCAPTCHA Enterprise**, and any widget it finds no site key for.
+- **Past the cap, or off the site list.** Those tries are in the record too, with no cost.
+
+What the service learns: the page's scheme, host and path (never its query or fragment), the widget's site
+key, and for Turnstile its action and cData. The request goes from the node (with openajar local, this
+computer), not from the machine. The key is stored in `secrets/solvers.json` (600) and is in no tool result,
+log, trace or record. [THREAT-MODEL.md](THREAT-MODEL.md#the-owners-solving-service) has the rest.
 
 #### This computer's own connection
 
