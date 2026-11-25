@@ -21,6 +21,12 @@ working when it moves off their laptop. It is not a tool for getting around a ba
 a rate limit or a verification step. When a site challenges a lane (a captcha, a checkpoint,
 a rate limit), openajar stops that lane and hands it to you. Do not build around that.
 
+There is one exception, and it is narrow. In an environment's browser on its own machine, when
+a site shows an "are you human" checkbox, the agent may click it once, as a person at that
+browser would. openajar solves nothing there: an image puzzle, a checkpoint or a rate limit
+still stops the browser and goes to you, and an account's lane is held for any challenge, the
+checkbox included.
+
 ## No spam
 
 - Do not send messages, comments or connection requests that people did not ask for, at a
