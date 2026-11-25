@@ -9,6 +9,12 @@ Reads (Camoufox's isolated world; nothing on the page changes):
   key in the path). A widget inside another site's frame is refused, and so is reCAPTCHA on a page that loads
   reCAPTCHA Enterprise (its script or its frame).
 - Cloudflare's full-page check by its own markers (`full_page`).
+- an image puzzle left open after the token went in (`close_puzzle`): reCAPTCHA keeps its puzzle (the bframe, 400 by
+  580) over the page even once its field holds a token, and it then blocks the next click on the form. Its
+  container's first child is a transparent fixed overlay across the viewport, and one click on that overlay closes
+  the puzzle, as a person's click outside it does. Only a point where the document's own hit test answers that
+  overlay is clicked, so the click cannot land on anything of the page's. hCaptcha's challenge is not handled:
+  its markup was not seen with such an overlay.
 
 The write: when the document is still at the address the token was asked for, the token goes into the widget's
 response field (and reCAPTCHA's, which hCaptcha also fills), then the page's own callback for it is called when the page named one (data-callback, or reCAPTCHA's own client table),
@@ -64,6 +70,33 @@ _WIDGETS_JS = """
 _FULL_PAGE_JS = """() => !!(document.getElementById('challenge-form') || document.getElementById('challenge-stage') ||
   Array.from(document.scripts).slice(0, 200).some((s) =>
     /\\/cdn-cgi\\/challenge-platform\\/h\\/[^/]+\\/orchestrate\\//.test(s.getAttribute('src') || '')))"""
+
+# reCAPTCHA's image puzzle when it still shows: whether one is open, and a point in the viewport where the hit test
+# answers its container's fixed overlay (the click there closes it and reaches nothing of the page's).
+_PUZZLE_JS = """
+() => {
+  const frames = Array.from(document.querySelectorAll('iframe')).slice(0, 200)
+    .filter((f) => /\\/recaptcha\\/(api2|enterprise)\\/bframe/.test(f.getAttribute('src') || ''));
+  for (const f of frames) {
+    const box = f.parentElement && f.parentElement.parentElement;
+    if (!box || getComputedStyle(box).visibility === 'hidden') continue;
+    const r = f.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2 || r.bottom <= 0 || r.right <= 0 || r.top >= innerHeight || r.left >= innerWidth) {
+      continue;
+    }
+    const overlay = box.firstElementChild;
+    if (!overlay || overlay.contains(f) || getComputedStyle(overlay).position !== 'fixed') return {open: true, point: null};
+    const w = innerWidth, h = innerHeight;
+    for (const [x, y] of [[4, 4], [w - 5, 4], [4, h - 5], [w - 5, h - 5], [w / 2, 4], [w / 2, h - 5], [4, h / 2],
+                          [w - 5, h / 2]]) {
+      if (document.elementFromPoint(x, y) === overlay) return {open: true, point: [x, y]};
+    }
+    return {open: true, point: null};
+  }
+  return {open: false};
+}
+"""
+CLOSE_WAIT_S = 2.0
 
 # The token into the widget's field(s), then the page's callback when it named one. Runs in the isolated world:
 # the fields are the page's own DOM, and the callback is reached through the page's window (wrappedJSObject).
@@ -205,3 +238,28 @@ async def hand(page: Page, widget: Widget, token: str, expected_url: str = "") -
     out = await quietly(page.evaluate(_HAND_JS, [widget.kind, token, widget.callback or "", expected_url]), None,
                         timeout=10.0)
     return out if isinstance(out, dict) else {"filled": 0, "called": "none"}
+
+
+async def close_puzzle(page: Page) -> str:
+    """Close reCAPTCHA's image puzzle when it is still open: "none" (no puzzle open), "closed", or "open" (no point
+    where only its overlay would take the click, or it stayed open after the one click; nothing else is clicked)."""
+    import asyncio
+
+    from openajar.node.interaction import checks
+
+    seen = await quietly(page.evaluate(_PUZZLE_JS), None, timeout=5.0)
+    if not isinstance(seen, dict) or not seen.get("open"):
+        return "none"
+    point = seen.get("point")
+    if not (isinstance(point, list) and len(point) == 2):
+        return "open"
+    await checks._page_click(page, (float(point[0]), float(point[1])))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + CLOSE_WAIT_S
+    while True:
+        seen = await quietly(page.evaluate(_PUZZLE_JS), None, timeout=5.0)
+        if isinstance(seen, dict) and not seen.get("open"):
+            return "closed"
+        if loop.time() >= deadline:
+            return "open"
+        await asyncio.sleep(0.2)

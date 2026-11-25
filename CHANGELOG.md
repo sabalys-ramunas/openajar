@@ -20,8 +20,10 @@ All notable changes to openajar are recorded here. The format follows
   browser is held for you and the agent waits with `browser_wait_handback`. `ended_by` says which step ended
   it and `steps` what each did. It refuses an account's browser (`check_for_human`). Its solver step does not
   send Cloudflare's full-page check, reCAPTCHA Enterprise or a widget inside another site's frame (no token from
-  a service works there), and the token goes in only while the page is at the address it was asked for. Every
-  request is a line in `solver/solves.jsonl` with the cost the service reported.
+  a service works there), and the token goes in only while the page is at the address it was asked for. A
+  reCAPTCHA image puzzle still open over the page after the token went in is closed with one click on its own
+  overlay, so the form's button can be clicked. Every request is a line in `solver/solves.jsonl` with the cost
+  the service reported.
 
 ### Changed
 

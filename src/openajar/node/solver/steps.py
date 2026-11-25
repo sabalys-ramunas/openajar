@@ -43,6 +43,8 @@ SETTLE_S = 8.0           # after the token is handed: the page's callback and wh
 # which step ended it
 NOTHING, WAITED, CLICK, SOLVER, HUMAN = "nothing", "wait", "click", "solver", "human"
 
+PUZZLE_WORDS = {"closed": "; the image puzzle left over the page was closed with one click outside it",
+                "open": "; the image puzzle still covers part of the page: a click outside it closes it"}
 FULL_PAGE = ("not for Cloudflare's full-page check. Its answer is a cookie tied to this browser and its exit "
              "address, which a service cannot get without the proxy's credentials, and openajar never sends those")
 
@@ -196,12 +198,14 @@ async def _solver(ix: Any, page: Page, report: SignalReport, *, browser: str,
             ledger.write(home_dir, replace(line, result=ledger.NOT_PASSED, note=f"not used: {moved}"))
             return await ix.report(page), False, f"solver: the token was not used: {moved}"
         report = await _settle(ix, page)
+        puzzle = await widgets.close_puzzle(page) if handed.get("filled") else "none"
     except BaseException:
         ledger.write(home_dir, replace(line, result=ledger.CANCELLED, note="cut off while the token was handed over"))
         raise
     passed = not is_check(report)
     note = f"token in {handed.get('filled', 0)} field(s); the page's callback: {handed.get('called', 'none')}"
     ledger.write(home_dir, replace(line, result=ledger.PASSED if passed else ledger.NOT_PASSED, note=note))
+    note += PUZZLE_WORDS.get(puzzle, "")
     words = "the check passed" if passed else "the check still shows"
     return report, passed, (f"solver: {name} answered the {services.KIND_WORDS[widget.kind]} widget for {cost}: "
                             f"{words}; {note}")

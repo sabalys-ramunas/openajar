@@ -740,7 +740,11 @@ or `tools_call`). Its steps, in order, each only when the one before did not get
    services that takes that kind is asked for a token, and, when the page is still at the address the token was
    asked for, the token goes where the widget puts it (`cf-turnstile-response`, `g-recaptcha-response`,
    `h-captcha-response`), then the page's own callback is called when the page named one (`data-callback`, or
-   reCAPTCHA's client table). The site checks the token when the form is sent;
+   reCAPTCHA's client table). The site checks the token when the form is sent. reCAPTCHA leaves an image puzzle
+   that the click opened over the page, where it blocks the next click: openajar clicks once on the puzzle's own
+   transparent overlay, at a point where that overlay is what the page's hit test answers, which closes it as a
+   click outside it does. When there is no such point, or it stays open, nothing else is clicked and the step
+   says so. hCaptcha's challenge is left as it is;
 4. **human**: nothing got it past, so the browser is held for the human, and the agent waits with
    `browser_wait_handback`. A call that ends early on a page with a check (its 240 s deadline, a cancel, an
    error) holds the browser the same way.

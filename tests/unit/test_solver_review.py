@@ -303,3 +303,40 @@ async def test_9_the_full_page_check_is_refused_by_its_markers_whatever_the_fram
     page.full_page = True  # #challenge-form on the page, and the signal read its widget frame first
     out = await steps.get_past(Ix(TURNSTILE), page, browser="env/x", home=tmp_path)
     assert sent == [] and "not for Cloudflare's full-page check" in out.steps[-2]
+
+
+# ---- a real run (2026-11-25): reCAPTCHA's puzzle stays over the page after the token went in ---------------------
+
+@pytest.mark.parametrize(("seen", "said", "clicked"), [
+    ([{"open": True, "point": [4, 4]}, {"open": False}], "was closed with one click outside it", [(4.0, 4.0)]),
+    ([{"open": True, "point": None}], "still covers part of the page: a click outside it closes it", []),
+    ([{"open": True, "point": [4, 4]}], "still covers part of the page", [(4.0, 4.0)]),  # one click, never more
+    ([{"open": False}], "", []),
+])
+async def test_puzzle_an_open_puzzle_is_closed_by_one_click_on_its_own_overlay(tmp_path, monkeypatch, seen, said,
+                                                                               clicked):
+    entry(tmp_path)
+    page = env_page()
+    answers = list(seen)
+
+    async def evaluate(script, arg=None):
+        if script == widgets._HAND_JS:
+            page.handed.append(arg)
+            return {"filled": 1, "called": "called"}
+        if script == widgets._PUZZLE_JS:
+            return answers.pop(0) if len(answers) > 1 else answers[0]
+        return False
+    page.evaluate = evaluate
+    clicks = []
+
+    async def click(p, point):
+        clicks.append(point)
+    monkeypatch.setattr(checks, "_page_click", click)
+    monkeypatch.setattr(widgets, "CLOSE_WAIT_S", 0.0)
+
+    async def answer(e, job):
+        return services.Answer("tok", 0.00299)
+    monkeypatch.setattr(services, "solve", answer)
+    out = await steps.get_past(Ix(PUZZLE), page, browser="env/x", home=tmp_path)
+    assert out.ended_by == steps.SOLVER and clicks == clicked
+    assert said in out.steps[-1] and (said or "puzzle" not in out.steps[-1])

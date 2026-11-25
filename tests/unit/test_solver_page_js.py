@@ -111,3 +111,33 @@ async def test_review2_the_token_goes_only_into_the_page_it_was_asked_for(page):
     assert await page.title() == ""
     here = await page.evaluate("() => location.href")
     assert (await widgets.hand(page, widget, "XXXX.DUMMY.TOKEN.XXXX", here + "#top"))["filled"] == 1
+
+
+PUZZLE_PAGE = """<button id="send" style="position:absolute;left:120px;top:140px;width:120px;height:40px">Send</button>
+<div id="box" style="visibility:visible;position:absolute;left:20px;top:20px;z-index:2000000000">
+  <div id="overlay" style="position:fixed;left:0;top:0;width:100%;height:100%;background:transparent"></div>
+  <div style="position:relative"><iframe src="https://www.google.com/recaptcha/api2/bframe?k=6LeTest"
+    style="width:400px;height:580px;border:0;background:#fff"></iframe></div>
+</div>
+<script>document.getElementById('overlay').addEventListener('click', () => {  // as reCAPTCHA's own overlay does
+  const box = document.getElementById('box'); box.style.top = '-9999px'; box.style.visibility = 'hidden'; });</script>"""
+AT_SEND = """() => { const b = document.getElementById('send').getBoundingClientRect();
+  return document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2).id; }"""
+
+
+async def test_a_puzzle_left_over_the_page_is_closed_by_one_click_on_its_overlay(page):
+    await page.route("**/*", lambda route: route.abort())  # nothing is fetched
+    await page.set_content(PUZZLE_PAGE)
+    assert await page.evaluate(AT_SEND) != "send"  # the puzzle covers the button: a click there would not reach it
+    assert await widgets.close_puzzle(page) == "closed"
+    assert await page.evaluate(AT_SEND) == "send"
+    assert await widgets.close_puzzle(page) == "none"
+
+
+async def test_a_puzzle_with_no_overlay_of_its_own_is_left_and_nothing_is_clicked(page):
+    await page.route("**/*", lambda route: route.abort())
+    await page.set_content(PUZZLE_PAGE.replace('position:fixed;', 'position:absolute;width:1px;height:1px;'))
+    clicked = await page.evaluate("() => { window.__c = 0; document.addEventListener('click', () => window.__c++, true);"
+                                  " return true; }")
+    assert clicked and await widgets.close_puzzle(page) == "open"
+    assert await page.evaluate("() => window.__c") == 0
