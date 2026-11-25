@@ -315,8 +315,10 @@ reCAPTCHA v2, hCaptcha), `openajar solver add` plugs in a captcha-solving servic
 with your key (kept on this computer), the most it may spend in a month and the sites it may answer for. A
 solving service may be against a site's terms; the choice and the cost are yours. The agent reaches it only
 through `browser_challenge`, which waits, clicks once, asks your service, then hands the browser to you, and
-says which step ended it. It never runs on an account's browser, on a sign-up, login or payment page, or for
-Cloudflare's full-page check, and every try is in `openajar solver log`.
+says which step ended it. It never runs on an account's browser or for Cloudflare's full-page check, and it
+refuses a page it recognises as a sign-up, login or payment page (a password, username, one-time-code or card
+field, a payment provider's frame, a word for it in the address). It errs toward refusing and can still miss
+some, such as a sign-up that asks only for an email. Every try is in `openajar solver log`.
 [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md#the-owners-solving-service) has the details.
 
 What it does not get through, from the same runs:

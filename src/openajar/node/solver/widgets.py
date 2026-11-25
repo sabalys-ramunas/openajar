@@ -3,16 +3,21 @@
 Reads (Camoufox's isolated world; nothing on the page changes):
 
 - the widget: its kind (Cloudflare Turnstile, reCAPTCHA v2, hCaptcha), its site key, Turnstile's action and cData,
-  whether it is invisible, the name of the page's callback for it, whether it already holds a token. From the
-  widget's element (data-sitekey and friends) first, else from its frame's address (reCAPTCHA's anchor carries
-  `k=`, hCaptcha's frame `sitekey=`, Turnstile's frame its key in the path). reCAPTCHA Enterprise is not taken.
+  whether it is invisible, the name of the page's callback for it, whether it already holds a token. Only a widget
+  in the page's own document: its element there (data-sitekey and friends) first, else the address of the vendor's
+  frame directly in the page (reCAPTCHA's anchor carries `k=`, hCaptcha's frame `sitekey=`, Turnstile's frame its
+  key in the path). A widget inside another site's frame is refused, and so is reCAPTCHA on a page that loads
+  reCAPTCHA Enterprise (its script or its frame).
+- Cloudflare's full-page check by its own markers (`full_page`).
 - the page's kind: a sign-up, login or payment page is never solved (`sensitive`). The reasons are structural,
-  never the page's words: a password, one-time-code or card field that shows (or any in the widget's own form),
-  an autocomplete token for one, a payment provider's frame (Stripe, PayPal, Braintree, Adyen and others), or a
-  word for it in the page's address or the form's action (login, signup, register, checkout, payment...). It
-  errs on the side of refusing: a contact form next to a visible login box is refused too. It misses a sign-up
-  made only of an email field on a page whose address says nothing, and a multi-step sign-up whose check comes
-  before its password step: docs/ENVIRONMENTS.md says so.
+  never the page's words, read in the document, its open shadow roots and every frame: a password field (a
+  disabled one too), a one-time-code, username (a passwordless login) or card field that shows, or any such field
+  in the widget's own form; an autocomplete token for one; a payment provider's frame (Stripe, PayPal, Braintree,
+  Adyen, Shopify and others); a word for it in the page's address, its query or the form's action (login,
+  sign_in, wp-login, register, session, checkout, my-account, payment...). It errs on the side of refusing: a
+  contact form next to a visible login box is refused too. It misses a sign-up made only of an email field with
+  no autocomplete="username" on a page whose address says nothing, a form in a closed shadow root, and a sign-up
+  whose check comes before any of its fields show: docs/ENVIRONMENTS.md says so.
 
 The write: the token goes into the widget's response field (and reCAPTCHA's, which hCaptcha also fills), then the
 page's own callback for it is called when the page named one (data-callback, or reCAPTCHA's own client table),
@@ -38,16 +43,23 @@ _TURNSTILE_KEY = re.compile(r"/(0x[0-9A-Za-z_-]{16,}|[123]x0{20}[A-F]{2})(?:/|$)
 PAYMENT_HOSTS = ("js.stripe.com", "checkout.stripe.com", "hooks.stripe.com", "paypal.com", "paypalobjects.com",
                  "braintreegateway.com", "braintree-api.com", "adyen.com", "checkout.com", "pay.google.com",
                  "squareup.com", "squarecdn.com", "klarna.com", "recurly.com", "chargebee.com", "paddle.com",
-                 "authorize.net", "worldpay.com", "mollie.com", "razorpay.com", "2checkout.com", "affirm.com")
-# a word for a sign-up, login or payment step, as a whole part of the path (or the host's first label)
+                 "authorize.net", "worldpay.com", "mollie.com", "razorpay.com", "2checkout.com", "affirm.com",
+                 "shopifycs.com", "checkout.shopify.com", "shop.app", "afterpay.com", "clearpay.co.uk")
+# A word for a sign-up, login or payment step: a whole part of the address's path or of a query value
+# ("/users/sign_in", "/wp-login.php", "?route=account/register"), or the first or last word of such a part
+# ("/user-login", "/signin-oidc"), or the host's first label.
 PAGE_WORDS = re.compile(
     r"^(?:log-?in|log-?on|sign-?in|sign-?on|sign-?up|register|registration|join|enrol+|create-?account|"
-    r"new-?account|account-?create|auth|authenticate|oauth2?|sso|saml|password|reset-?password|forgot(?:-?password)?|"
-    r"verify-?email|checkout|payment|payments|pay|billing|purchase|donate)$", re.IGNORECASE)
+    r"new-?account|account-?create|my-?account|auth|authenticate|authorize|oauth2?|oidc|sso|saml|session|sessions|"
+    r"password|reset-?password|forgot(?:-?password)?|verify-?email|checkout|checkouts|payment|payments|pay|billing|"
+    r"purchase|donate)$", re.IGNORECASE)
+_EXTENSION = re.compile(r"\.(?:php|html?|aspx?|jsp|cgi|do)$", re.IGNORECASE)
+MAX_FRAMES = 50
 HOST_WORDS = frozenset({"login", "signin", "signup", "auth", "accounts", "account", "sso", "id", "checkout", "pay",
                         "payment", "payments", "billing", "secure"})
 
-# The widgets on the page, from their elements (light DOM), with whether each holds its token already.
+# The widgets in the page's own document, from their elements (light DOM), with whether each holds its token already,
+# and whether the page loads reCAPTCHA Enterprise (its script, or its frame).
 _WIDGETS_JS = """
 () => {
   const kindOf = (el) => {
@@ -69,9 +81,16 @@ _WIDGETS_JS = """
               callback: el.getAttribute('data-callback'), passed: !!(field && field.value),
               shown: r.width > 0 && r.height > 0});
   }
-  return out;
+  const enterprise = Array.from(document.querySelectorAll('script[src], iframe[src]')).slice(0, 500)
+    .some((el) => /\\/recaptcha\\/enterprise(\\.js|\\/)/.test(el.getAttribute('src') || ''));
+  return {widgets: out, enterprise};
 }
 """
+
+# Cloudflare's full-page check by its own markers, whatever the frames say.
+_FULL_PAGE_JS = """() => !!(document.getElementById('challenge-form') || document.getElementById('challenge-stage') ||
+  Array.from(document.scripts).slice(0, 200).some((s) =>
+    /\\/cdn-cgi\\/challenge-platform\\/h\\/[^/]+\\/orchestrate\\//.test(s.getAttribute('src') || '')))"""
 
 # Why this page is a sign-up, login or payment page (structural reads only), for the document it runs in.
 _SENSITIVE_JS = """
@@ -82,15 +101,25 @@ _SENSITIVE_JS = """
   let form = null;
   for (const name of fields) { const f = document.getElementsByName(name)[0]; if (f && f.form) { form = f.form; break; } }
   const near = (el) => shown(el) || (form && el.form === form);
-  const inputs = Array.from(document.querySelectorAll('input')).slice(0, 500);
-  const ac = /(^|\\s)(current-password|new-password|one-time-code|cc-number|cc-csc|cc-exp|cc-exp-month|cc-exp-year)(\\s|$)/i;
+  // the inputs of the document and of its open shadow roots (a login form in a web component is one too)
+  const inputsIn = (root, depth) => {
+    let out = Array.from(root.querySelectorAll('input'));
+    if (depth < 5) {
+      for (const el of Array.from(root.querySelectorAll('*')).slice(0, 5000)) {
+        if (el.shadowRoot) out = out.concat(inputsIn(el.shadowRoot, depth + 1));
+      }
+    }
+    return out;
+  };
+  const inputs = inputsIn(document, 0).slice(0, 1000);
+  const ac = /(^|\\s)(current-password|new-password|one-time-code|username|webauthn|cc-number|cc-csc|cc-exp|cc-exp-month|cc-exp-year)(\\s|$)/i;
   const card = /(card.?num|cardnumber|cc-?num|\\bcvv|\\bcvc|security.?code|card.?exp|expiry)/i;
-  for (const el of inputs) {
-    if (el.disabled || !near(el)) continue;
+  for (const el of inputs) {  // a disabled one too: a multi-step login shows its password field disabled first
+    if (!near(el)) continue;
     if (el.type === 'password') { why.push('a password field'); break; }
   }
   for (const el of inputs) {
-    if (el.disabled || !near(el)) continue;
+    if (!near(el)) continue;
     const auto = el.getAttribute('autocomplete') || '';
     if (ac.test(auto)) { why.push('a field for ' + auto.trim().split(/\\s+/).pop()); break; }
     if (card.test((el.name || '') + ' ' + (el.id || ''))) { why.push('a card field'); break; }
@@ -175,15 +204,30 @@ def from_frame_url(url: str) -> Widget | None:
     return None
 
 
+def _direct(page: Page, frame: Any) -> bool:
+    """`frame` sits directly in the page's own document (its parent is the main frame)."""
+    main = getattr(page, "main_frame", None)
+    parent = getattr(frame, "parent_frame", None)
+    return main is not None and parent is main
+
+
 async def find(page: Page) -> tuple[Widget | None, str]:
-    """The widget the solver would answer for on this page, and why there is none when there is none."""
-    read = await quietly(page.evaluate(_WIDGETS_JS), [], timeout=5.0) or []
+    """The widget the solver would answer for on this page, and why there is none when there is none. Only a widget
+    in the page's own document: its element there, or the vendor's frame directly in it. A widget inside another
+    site's frame is refused (its key would be sent under this page's address, and its token could not reach it), and
+    so is any reCAPTCHA on a page that loads reCAPTCHA Enterprise."""
+    read = await quietly(page.evaluate(_WIDGETS_JS), {}, timeout=5.0) or {}
+    read = read if isinstance(read, dict) else {}
     widgets = [Widget(w["kind"], str(w.get("key") or ""), w.get("action") or None, w.get("cdata") or None,
                       (w.get("size") or "") == "invisible", w.get("callback") or None, bool(w.get("passed")))
-               for w in read if isinstance(w, dict) and w.get("kind") in FIELDS]
-    framed = [w for w in (from_frame_url(getattr(f, "url", "") or "") for f in list(getattr(page, "frames", []))[1:])
-              if w is not None]
-    enterprise = any("/recaptcha/enterprise/" in (getattr(f, "url", "") or "") for f in getattr(page, "frames", []))
+               for w in read.get("widgets") or [] if isinstance(w, dict) and w.get("kind") in FIELDS]
+    frames = list(getattr(page, "frames", []))[1:MAX_FRAMES]
+    vendor = [(f, from_frame_url(getattr(f, "url", "") or "")) for f in frames]
+    framed = [w for f, w in vendor if w is not None and _direct(page, f)]
+    nested = [f for f, w in vendor if w is not None and not _direct(page, f)]
+    enterprise = bool(read.get("enterprise")) or any("/recaptcha/enterprise" in (getattr(f, "url", "") or "")
+                                                     for f in frames)
+    found: Widget | None = None
     for w in widgets:
         if w.passed:
             continue
@@ -192,24 +236,54 @@ async def find(page: Page) -> tuple[Widget | None, str]:
             if match is None:
                 continue
             w = Widget(w.kind, match.site_key, w.action, w.cdata, w.invisible or match.invisible, w.callback)
-        return w, ""
+        found = w
+        break
+    if found is None and not (widgets and all(w.passed for w in widgets)) and framed:
+        found = framed[0]
+    if found is not None and found.kind == "recaptcha_v2" and enterprise:
+        return None, "a reCAPTCHA Enterprise widget, which openajar does not send to a service"
+    if found is not None:
+        return found, ""
     if widgets and all(w.passed for w in widgets):
         return None, "the widget on this page already holds its token"
-    if framed:
-        return framed[0], ""
+    if nested:
+        host = urlsplit(getattr(nested[0], "url", "") or "").hostname or "another site"
+        return None, (f"the widget ({host}) is inside a frame of another site, so its key would go under this page's "
+                      "address and its token could not reach this page")
     if enterprise:
         return None, "a reCAPTCHA Enterprise widget, which openajar does not send to a service"
     return None, "no Turnstile, reCAPTCHA v2 or hCaptcha widget with a site key is on this page"
 
 
+async def full_page(page: Page) -> bool:
+    """Cloudflare's full-page check shows its own markers (its form, its stage, its orchestrate script)."""
+    return bool(await quietly(page.evaluate(_FULL_PAGE_JS), False, timeout=5.0))
+
+
+def _word(part: str) -> str | None:
+    """`part` (one piece of a path or a query value) when it or its first or last word names such a step."""
+    part = _EXTENSION.sub("", part.strip().lower()).replace("_", "-")
+    if not part:
+        return None
+    words = [w for w in part.split("-") if w]
+    if PAGE_WORDS.match(part) or (words and (PAGE_WORDS.match(words[0]) or PAGE_WORDS.match(words[-1]))):
+        return part
+    return None
+
+
 def _path_words(url: str) -> list[str]:
     try:
         parts = urlsplit(url or "")
+        query = parse_qs(parts.query, keep_blank_values=True)
     except ValueError:
         return []
-    words = [p for p in re.split(r"[/._]", parts.path or "") if p and PAGE_WORDS.match(p)]
-    first = (parts.hostname or "").split(".")[0]
-    if first in HOST_WORDS and (parts.hostname or "").count(".") >= 2:
+    pieces = (parts.path or "").split("/")
+    for key, values in query.items():
+        pieces += [p for v in values for p in v.split("/")] + ([key] if values == [""] else [])
+    words = [w for w in (_word(p) for p in pieces) if w]
+    host = (parts.hostname or "")
+    first = host.split(".")[0]
+    if first in HOST_WORDS and host.count(".") >= 2:
         words.append(f"{first}.")
     return words
 
@@ -230,12 +304,12 @@ async def sensitive(page: Page, widget: Widget | None) -> list[str]:
             why.append(f"its form goes to {_path_words(action)[0]!r}")
     elif main is None:
         why.append("the page could not be read to check it is not a sign-up, login or payment page")
-    for frame in list(getattr(page, "frames", []))[1:20]:
+    for frame in list(getattr(page, "frames", []))[1:MAX_FRAMES]:
         host = urlsplit(getattr(frame, "url", "") or "").hostname or ""
         if any(host_is(host, h) for h in PAYMENT_HOSTS):
             why.append(f"a payment frame ({host})")
             break
-    for frame in list(getattr(page, "frames", []))[1:10]:
+    for frame in list(getattr(page, "frames", []))[1:MAX_FRAMES]:
         host = urlsplit(getattr(frame, "url", "") or "").hostname or ""
         if not host or from_frame_url(frame.url) is not None or any(host_is(host, h) for h in
                                                                      ("google.com", "recaptcha.net", "hcaptcha.com",

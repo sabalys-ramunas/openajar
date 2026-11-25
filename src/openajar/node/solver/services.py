@@ -84,8 +84,21 @@ class Answer:
     cost: float | None     # US dollars, when the service reports it
 
 
+SHOWN = 300                # characters of a service's message that are shown, cut only after the key is redacted
+
+
 class SolveError(Exception):
-    """The service gave no token. The message is safe to show (the key is redacted)."""
+    """The service gave no token. Once out of `solve` the message is safe to show: the key was redacted from the
+    whole message before it was cut. `may_have_cost`: the request went out and the service may have charged for it
+    (False: it was never sent, or the service answered with an error code, for which the three charge nothing)."""
+
+    def __init__(self, message: str, *, may_have_cost: bool = True):
+        super().__init__(message)
+        self.may_have_cost = may_have_cost
+
+
+def _shown(text: str, key: str | None) -> str:
+    return redact(text, key)[:SHOWN]
 
 
 def supports(entry: SolverEntry, kind: str) -> bool:
@@ -136,9 +149,9 @@ async def solve(entry: SolverEntry, job: Job) -> Answer:
         else:
             answer = await _webhook(entry, job)
     except SolveError as e:
-        raise SolveError(redact(str(e), entry.key)) from None
-    except (httpx.HTTPError, OSError, ValueError) as e:
-        raise SolveError(redact(f"{type(e).__name__}: {e}"[:300], entry.key)) from None
+        raise SolveError(_shown(str(e), entry.key), may_have_cost=e.may_have_cost) from None
+    except Exception as e:  # noqa: BLE001 - any other failure (a malformed answer included) is one with no token
+        raise SolveError(_shown(f"{type(e).__name__}: {e}", entry.key)) from None
     token = answer.token
     if not isinstance(token, str) or not token.strip() or len(token) > MAX_TOKEN or any(c in token for c in "\r\n\0"):
         raise SolveError("the service answered with no usable token")
@@ -152,9 +165,9 @@ async def balance(entry: SolverEntry) -> float | None:
     try:
         data = await _post(entry, "getBalance", {})
     except SolveError as e:
-        raise SolveError(redact(str(e), entry.key)) from None
-    except (httpx.HTTPError, OSError, ValueError) as e:
-        raise SolveError(redact(f"{type(e).__name__}: {e}"[:300], entry.key)) from None
+        raise SolveError(_shown(str(e), entry.key), may_have_cost=False) from None
+    except Exception as e:  # noqa: BLE001 - shown as a failed check
+        raise SolveError(_shown(f"{type(e).__name__}: {e}", entry.key), may_have_cost=False) from None
     try:
         return float(data.get("balance"))
     except (TypeError, ValueError):
@@ -183,22 +196,25 @@ def task_body(provider: str, job: Job) -> dict[str, Any]:
 
 async def _task_api(entry: SolverEntry, job: Job) -> Answer:
     if not supports(entry, job.kind):
-        raise SolveError(f"{NAMES[entry.provider]} does not take {KIND_WORDS.get(job.kind, job.kind)}")
+        raise SolveError(f"{NAMES[entry.provider]} does not take {KIND_WORDS.get(job.kind, job.kind)}",
+                         may_have_cost=False)
     created = await _post(entry, "createTask", {"task": task_body(entry.provider, job)})
     task_id = created.get("taskId")
     if task_id in (None, ""):
-        raise SolveError("the service gave no task id")
+        raise SolveError("the service gave no task id", may_have_cost=False)
     deadline = time.monotonic() + SOLVE_TIMEOUT_S
     await asyncio.sleep(FIRST_POLL_S)
     while True:
         result = await _post(entry, "getTaskResult", {"taskId": task_id})
         if result.get("status") == "ready":
-            solution = result.get("solution") or {}
+            solution = result.get("solution")
+            if not isinstance(solution, dict):
+                raise SolveError("the service said ready with no solution object")
             token = solution.get("token") if job.kind == "turnstile" else solution.get("gRecaptchaResponse")
             token = token or solution.get("token") or solution.get("gRecaptchaResponse")
             return Answer(str(token or ""), _cost(result.get("cost")))
         if time.monotonic() + POLL_S > deadline:
-            raise SolveError(f"no token within {SOLVE_TIMEOUT_S:.0f} s")
+            raise SolveError(f"no token within {SOLVE_TIMEOUT_S:.0f} s (the service may still charge for it)")
         await asyncio.sleep(POLL_S)
 
 
@@ -206,7 +222,7 @@ async def _post(entry: SolverEntry, method: str, body: dict[str, Any]) -> dict[s
     base = (entry.endpoint or ENDPOINTS[entry.provider]).rstrip("/")
     why = check_address(base)
     if why is not None:
-        raise SolveError(f"the service's address is refused: {why}")
+        raise SolveError(f"the service's address is refused: {why}", may_have_cost=False)
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S, follow_redirects=False, trust_env=False) as client:
         response = await client.post(f"{base}/{method}", json={"clientKey": entry.key or "", **body})
     if response.status_code != 200:
@@ -214,10 +230,10 @@ async def _post(entry: SolverEntry, method: str, body: dict[str, Any]) -> dict[s
     data = response.json()
     if not isinstance(data, dict):
         raise SolveError(f"{method} answered with no JSON object")
-    if data.get("errorId") not in (0, None, "0"):
-        code = str(data.get("errorCode") or data.get("errorId"))[:80]
-        text = str(data.get("errorDescription") or "")[:200]
-        raise SolveError(f"{code}: {text}" if text else code)
+    if data.get("errorId") not in (0, None, "0"):  # an error answer: the services charge nothing for one
+        code = str(data.get("errorCode") or data.get("errorId"))
+        text = str(data.get("errorDescription") or "")
+        raise SolveError(f"{code}: {text}" if text else code, may_have_cost=False)
     return data
 
 
@@ -226,7 +242,7 @@ def _cost(value: Any) -> float | None:
         cost = float(value)
     except (TypeError, ValueError):
         return None
-    return cost if 0 <= cost < 100 else None
+    return cost if 0 <= cost <= 1000 else None
 
 
 # ---- the hooks -------------------------------------------------------------------------------------------------
@@ -243,14 +259,14 @@ def _hook_answer(raw: bytes, who: str) -> Answer:
     if not isinstance(data, dict):
         raise SolveError(f"{who} printed no JSON object")
     if data.get("error"):
-        raise SolveError(f"{who} said: {str(data['error'])[:300]}")
+        raise SolveError(f"{who} said: {data['error']}")
     return Answer(str(data.get("token") or ""), _cost(data.get("cost")))
 
 
 async def _command(entry: SolverEntry, job: Job) -> Answer:
     argv = shlex.split(entry.command or "")
     if not argv:
-        raise SolveError("the command hook has no command")
+        raise SolveError("the command hook has no command", may_have_cost=False)
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER")}
     if entry.key:
         env["OPENAJAR_SOLVER_KEY"] = entry.key
@@ -264,7 +280,7 @@ async def _command(entry: SolverEntry, job: Job) -> Answer:
         await proc.wait()
         raise SolveError(f"the command gave no answer within {SOLVE_TIMEOUT_S:.0f} s") from None
     if proc.returncode != 0:
-        tail = err.decode("utf-8", errors="replace").strip()[-300:]
+        tail = redact(err.decode("utf-8", errors="replace"), entry.key).strip()[-SHOWN:]  # redacted, then cut
         raise SolveError(f"the command exited {proc.returncode}" + (f": {tail}" if tail else ""))
     return _hook_answer(out[:HOOK_OUTPUT], "the command")
 
@@ -273,7 +289,7 @@ async def _webhook(entry: SolverEntry, job: Job) -> Answer:
     url = entry.endpoint or ""
     why = check_address(url)
     if why is not None:
-        raise SolveError(f"the webhook's address is refused: {why}")
+        raise SolveError(f"the webhook's address is refused: {why}", may_have_cost=False)
     headers = {"Authorization": f"Bearer {entry.key}"} if entry.key else {}
     async with httpx.AsyncClient(timeout=SOLVE_TIMEOUT_S, follow_redirects=False, trust_env=False) as client:
         response = await client.post(url, json=job_json(job), headers=headers)

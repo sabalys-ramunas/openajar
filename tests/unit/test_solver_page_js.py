@@ -112,3 +112,41 @@ async def test_recaptchas_own_client_table_gives_the_callback_when_the_page_pass
     widget, _ = await widgets.find(page)
     assert await widgets.hand(page, widget, "03AF-token") == {"filled": 1, "called": "called"}
     assert await page.title() == "cfg:03AF-token"
+
+
+# ---- the review of 2026-11-25 (test_solver_review has the rest) ----
+
+async def test_review_2_a_login_form_in_an_open_shadow_root_counts(page):
+    await page.set_content('<login-box></login-box>' + CONTACT + '''<script>
+      customElements.define('login-box', class extends HTMLElement { constructor() { super();
+        this.attachShadow({mode: 'open'}).innerHTML = '<form action="/x"><input name=user>' +
+          '<input type=password name=pw autocomplete=current-password></form>'; }});
+    </script>''')
+    assert "a password field" in await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
+
+
+async def test_review_2_a_disabled_password_field_counts(page):
+    await page.set_content(CONTACT.replace("<button>", '<input type="password" name="pw" disabled><button>'))
+    assert "a password field" in await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
+
+
+async def test_review_2_a_passwordless_login_counts(page):
+    await page.set_content(CONTACT.replace('<input type="email" name="email">',
+                                           '<input type="email" name="email" autocomplete="username">'))
+    assert "a field for username" in await widgets.sensitive(page, widgets.Widget("turnstile", "k"))
+
+
+async def test_review_6_a_page_that_loads_recaptcha_enterprise_is_refused(page):
+    await page.route("**/*", lambda route: route.abort())  # nothing is fetched
+    await page.set_content('<script src="https://www.google.com/recaptcha/enterprise.js" async></script>'
+                           '<div class="g-recaptcha" data-sitekey="6LcEnterpriseKey000000000000000000000000" '
+                           'data-action="LOGIN"><textarea name="g-recaptcha-response"></textarea></div>')
+    widget, why = await widgets.find(page)
+    assert widget is None and "Enterprise" in why
+
+
+async def test_review_9_the_full_page_markers_are_read(page):
+    await page.set_content('<div id="challenge-stage"></div>')
+    assert await widgets.full_page(page)
+    await page.set_content(CONTACT)
+    assert not await widgets.full_page(page)

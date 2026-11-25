@@ -22,6 +22,18 @@ NOTICE = ("A solving service may be against a site's terms; the choice and the c
           "full-page check, and never past your cap.")
 
 
+ANY_SITE_NOTE = ("With --sites '*' any page an agent opens can have your service answer a widget: the page chooses "
+                 "the site key, so a hostile page can get another site's check answered on your account and read "
+                 "the token. Your cap bounds what that costs. Name the sites instead when you can.")
+
+
+def _record(cfg: NodeConfig, month: str) -> list[ledger.Solve]:
+    try:
+        return ledger.read(cfg.home, month=month)
+    except ledger.LedgerError as e:
+        raise fail(f"{e}. Until then no solve is sent.") from None
+
+
 def _entries(cfg: NodeConfig) -> list[SolverEntry]:
     home = cfg.home
     try:
@@ -111,6 +123,8 @@ def solver_add(
         typer.echo(f"It takes: {', '.join(services.KIND_WORDS[k] for k in services.TASK_TYPES[provider])}. "
                    "hCaptcha only through a command or webhook.")
     typer.echo(NOTICE)
+    if settings.ANY_SITE in entry.sites:
+        typer.echo(ANY_SITE_NOTE)
     typer.echo(f"Check it with `openajar solver test {name}`.")
 
 
@@ -126,7 +140,7 @@ def solver_list() -> None:
                    "`openajar solver add <name> <provider> --cap 5 --sites example.com`.")
         return
     month = ledger.this_month()
-    record = ledger.read(cfg.home, month=month)
+    record = _record(cfg, month)
     for e in entries:
         mine = [s for s in record if s.service == e.name]
         tried = [s for s in mine if s.result != ledger.REFUSED]
@@ -134,7 +148,8 @@ def solver_list() -> None:
         how = settings.safe_url(e.endpoint) if e.endpoint else (e.command.split()[0] if e.command else "its own API")
         typer.echo(f"{e.name}  {services.NAMES[e.provider]} ({how})  sites: {where}  "
                    f"{'key stored' if e.key else 'no key'}")
-        typer.echo(f"{' ' * len(e.name)}  {month}: {ledger.usd(ledger.spent(cfg.home, e.name, month=month))} of "
+        spent = round(sum(s.cost for s in mine), 6)
+        typer.echo(f"{' ' * len(e.name)}  {month}: {ledger.usd(spent)} of "
                    f"{e.monthly_cap:.2f} USD, {len(tried)} solves ({sum(s.result == ledger.PASSED for s in tried)} "
                    f"passed), {len(mine) - len(tried)} refused")
 
@@ -190,20 +205,30 @@ async def _test_one(home: Path, e: SolverEntry, solve: bool) -> bool:
         if not solve:
             return True
     job = services.Job("turnstile", services.TEST_SITE_KEY, services.TEST_PAGE)
-    spent = ledger.spent(home, e.name)
-    if spent + e.assumed_cost > e.monthly_cap:
-        typer.echo(f"{e.name}  not tried: this month's cap is reached ({ledger.usd(spent)} of {e.monthly_cap:.2f} USD)")
+    base = ledger.Solve(settings.now_iso(), "openajar solver test", "example.com", "turnstile", e.name, e.provider,
+                        ledger.PENDING)
+    try:  # the same reservation as the node's, under the same lock: this process and the node take turns
+        pending = ledger.reserve(home, base, assumed=e.assumed_cost, cap=e.monthly_cap)
+    except ledger.CapReached as full:
+        typer.echo(f"{e.name}  not tried: this month's cap is reached ({ledger.usd(full.spent)} of "
+                   f"{e.monthly_cap:.2f} USD)")
+        return False
+    except ledger.LedgerError as err:
+        typer.echo(f"{e.name}  not tried: {err}")
         return False
     try:
         answer = await services.solve(e, job)
     except services.SolveError as err:
-        ledger.write(home, ledger.Solve(settings.now_iso(), "openajar solver test", "example.com", "turnstile",
-                                        e.name, e.provider, ledger.FAILED, note=str(err)[:300]))
+        cost, cost_from = (e.assumed_cost, "assumed") if err.may_have_cost else (0.0, "")
+        ledger.settle(pending, home, result=ledger.FAILED, cost=cost, cost_from=cost_from, note=str(err))
         typer.echo(f"{e.name}  failed: {err}")
         return False
+    except BaseException:
+        ledger.settle(pending, home, result=ledger.CANCELLED, cost=e.assumed_cost, cost_from="assumed",
+                      note="cut off while the service worked")
+        raise
     cost, cost_from = (answer.cost, "reported") if answer.cost is not None else (e.assumed_cost, "assumed")
-    ledger.write(home, ledger.Solve(settings.now_iso(), "openajar solver test", "example.com", "turnstile",
-                                    e.name, e.provider, ledger.PASSED, round(cost, 6), cost_from, "a test token"))
+    ledger.settle(pending, home, result=ledger.PASSED, cost=cost, cost_from=cost_from, note="a test token")
     typer.echo(f"{e.name}  gave a token for Cloudflare's test widget ({len(answer.token)} characters), "
                f"{ledger.usd(cost)} USD ({cost_from})")
     return True
@@ -221,7 +246,7 @@ def solver_log(
 
     cfg = initialized_config()
     month = month or ledger.this_month()
-    record = ledger.read(cfg.home, month=month)
+    record = _record(cfg, month)
     if not record:
         typer.echo(f"No solves in {month}.")
         return

@@ -233,7 +233,8 @@ def test_the_record_sums_a_months_spend_per_service(tmp_path):
     p = ledger.record_path(tmp_path)
     assert stat.S_IMODE(p.stat().st_mode) == 0o600
     p.write_text(p.read_text() + "not json\n")
-    assert len(ledger.read(tmp_path)) == 4  # a broken line is skipped
+    with pytest.raises(ledger.LedgerError, match="line 5"):  # a broken line is never skipped: it could lower the spend
+        ledger.read(tmp_path)
 
 
 # ---- the command line -----------------------------------------------------------------------------------------

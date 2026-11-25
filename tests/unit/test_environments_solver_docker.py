@@ -99,7 +99,7 @@ async def _run(envs, env, lanes, svc, home, create_interaction, steps, ledger):
     report = await _widget_shows(interaction, page)
     assert (report.signal.value, report.detail) == ("captcha", "Cloudflare Turnstile frame"), report
     snap = await interaction.snapshot(page)
-    assert "call browser_challenge once (toolset browser)" in snap.text.lower(), snap.text[:600]
+    assert "browser_challenge" not in snap.text, snap.text[:600]  # no service may take a login page's check
     out = await steps.get_past(interaction, page, browser=lane, home=home)
     print(f"the login page: {out.ended_by}: {out.steps}")
     assert out.ended_by == steps.HUMAN and not out.passed
@@ -119,6 +119,8 @@ async def _run(envs, env, lanes, svc, home, create_interaction, steps, ledger):
     # the contact form: the click does not pass, the owner's solver does
     await interaction.navigate(page, "http://shop.example.test:3000/contact.html?ref=newsletter")
     await _widget_shows(interaction, page)
+    snap = await interaction.snapshot(page)
+    assert "call browser_challenge once (toolset browser)" in snap.text.lower(), snap.text[:600]
     out = await steps.get_past(interaction, page, browser=lane, home=home)
     print(f"the contact form: {out.ended_by}: {out.steps}")
     assert (out.ended_by, out.passed) == (steps.SOLVER, True), out.steps
@@ -139,7 +141,7 @@ async def _run(envs, env, lanes, svc, home, create_interaction, steps, ledger):
     assert sent["cf-turnstile-response"] == [DUMMY_TOKEN] and sent["email"] == ["someone@example.test"]
 
     record = ledger.read(home)
-    assert [(s.result, s.site, s.kind) for s in record] == [
+    assert [(s.result, s.site, s.kind) for s in record] == [  # the reservation settled into one line
         (ledger.REFUSED, "shop.example.test", "turnstile"), (ledger.PASSED, "shop.example.test", "turnstile")]
     # the key stayed on this computer: not on the machine, not in the record
     # the key never on this command line either: the machine gets it reversed and turns it round itself

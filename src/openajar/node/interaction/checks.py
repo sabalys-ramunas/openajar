@@ -153,7 +153,8 @@ async def check_lines(page: Page, report: SignalReport | Any) -> list[str]:
     if not allowed(page):
         _forget(page)
         return []
-    solver_on = solver_for(page)
+    solver_on = solver_for(page) and await solver_could_take(page, getattr(report, "signal", None),
+                                                             getattr(report, "detail", None))
     if not wants_a_click(report):
         _forget(page)
         if solver_on and getattr(report, "signal", None) is Signal.CAPTCHA and \
@@ -183,6 +184,21 @@ async def check_lines(page: Page, report: SignalReport | Any) -> list[str]:
     except TypeError:
         return []
     return lines
+
+
+async def solver_could_take(page: Page, signal: Any, detail: str | None) -> bool:
+    """A service of the owner's could take this page's check now (openajar.node.solver.steps.could_take): its site
+    list, the widget's kind, the sign-up, login and payment guard and its cap. False on any failure to read."""
+    if not solver_for(page):
+        return False
+    from openajar.node.solver.steps import could_take
+
+    try:
+        report = SignalReport(Signal(getattr(signal, "value", signal)), detail, getattr(page, "url", "") or "")
+        return await could_take(page, report)
+    except Exception:  # a page that cannot be read: hold, as without a solver
+        log.debug("could not tell whether the owner's solver could take the check", exc_info=True)
+        return False
 
 
 def solver_for(page: Page) -> bool:

@@ -4,12 +4,14 @@ the default list: an agent learns of it from the snapshot's line for a check, wh
 
 An account's browser never gets here: the handler refuses a lane that is not an environment's (check_for_human),
 and the steps refuse a page whose context is not an environment's browser on its machine (checks.allowed).
-When nothing got the browser past the check, the handler holds it for the human, as any check on a browser
-without a solver does, so browser_wait_handback waits for the person.
+When nothing got the browser past the check, or the call ended early on a page that showed one (its deadline, a
+cancel, an error), the handler holds it for the human, as any check on a browser without a solver does, so
+browser_wait_handback waits for the person.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from urllib.parse import urlsplit
@@ -51,11 +53,18 @@ async def browser_challenge(ctx: ToolContext, *, on: str) -> dict[str, Any]:
     await ctx.authorize(Effect.DRAFT, lane_id=on, summary=f"get past a site's check on {on}", content={})
     interaction = ctx.runtime.interaction
     home = getattr(getattr(ctx.runtime, "config", None), "home", None)
-    async with driven_session(ctx, on) as page:
-        if not checks.allowed(page):
-            raise CheckForHuman(NOT_HERE)
-        async with guarded(ctx, on, page) as blocks:
-            outcome = await steps.get_past(interaction, page, browser=on, home=home)
+    progress = steps.Progress()
+    page = None
+    try:
+        async with driven_session(ctx, on) as page:
+            if not checks.allowed(page):
+                raise CheckForHuman(NOT_HERE)
+            async with guarded(ctx, on, page) as blocks:
+                outcome = await steps.get_past(interaction, page, browser=on, home=home, progress=progress)
+    except BaseException:
+        if progress.saw_check:  # cut off (its deadline, a cancel) or failed on a page with a check: the human's
+            await asyncio.shield(_hold(ctx, on, page))
+        raise
     if outcome.ended_by == steps.HUMAN:
         await _hold(ctx, on, page)
     label_page_text(ctx, "browser_challenge", getattr(page, "url", None))

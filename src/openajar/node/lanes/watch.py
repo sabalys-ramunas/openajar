@@ -9,7 +9,9 @@ browser on its machine, never an account's): a check that asks for one click on 
 is not held, because the snapshot gives the agent its ref. And when the owner set up a solving service whose site
 list covers the page (openajar.node.solver), an image puzzle of hCaptcha or reCAPTCHA (sites.PUZZLE_DETAILS) is not
 held either, so the agent can call browser_challenge, which holds the browser for the human itself when the
-service does not get it past. Every other signal, Cloudflare's full-page check included, holds as everywhere."""
+service does not get it past. Only when a service of the owner's could take it now (its site list, the widget's
+kind, the sign-up, login and payment guard, the cap: solver.steps.could_take); otherwise it holds as before. Every
+other signal, Cloudflare's full-page check included, holds as everywhere."""
 
 from __future__ import annotations
 
@@ -109,8 +111,8 @@ class SignalWatch:
             return
         if detail in CHECKBOX_DETAILS and checks.allowed(page):
             return  # an environment's browser: the agent has the check's ref (interaction.checks)
-        if detail in PUZZLE_DETAILS and checks.allowed(page) and checks.solver_for(page):
-            return  # an environment's browser with the owner's solver for this site: browser_challenge, then a hold
+        if detail in PUZZLE_DETAILS and checks.allowed(page) and await checks.solver_could_take(page, signal, detail):
+            return  # an environment's browser where the owner's solver could take it now: browser_challenge holds
         lane_id = self._lanes.lane_for_page(page)
         if lane_id is None:
             return

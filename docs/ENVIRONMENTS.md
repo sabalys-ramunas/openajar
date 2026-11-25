@@ -724,27 +724,43 @@ openajar solver remove main      # the entry and its key; the record stays
   dollars, optional) or `{"error": "why"}`. The key, when there is one, is the command's environment variable
   `OPENAJAR_SOLVER_KEY` (never its command line), or the webhook's `Authorization: Bearer` header.
 - **The owner's limits.** `--cap`: the most it may spend in a calendar month (UTC), in US dollars. `--sites`:
-  the hosts it may answer for (a host covers its subdomains, `*` is any). Both are required. A solve counts the
-  cost the service reports (2Captcha and Anti-Captcha do), else `--assumed-cost` (0.003 by default, above the
-  list price of one token at all three; CapSolver reports none). The cap is checked, with the next solve's
-  cost added, before anything is sent, so a looping agent stops at it.
+  the hosts it may answer for (a host covers its subdomains, `*` is any). Both are required. With `*`, any page
+  an agent opens can pick the site key it shows, so a hostile page can have your service answer another site's
+  widget and read the token; the cap bounds what that costs, and `solver add` says so.
+- **How the cap holds.** Before anything is sent, a `pending` line at `--assumed-cost` (0.003 by default, above
+  the list price of one token at all three) goes into the record and is synced to disk, under a file lock the
+  node and `openajar solver test --solve` share, and only when this month's spend plus that cost fits the cap.
+  The lock is let go while the service works. Then the line is settled: with the cost the service reports
+  (2Captcha and Anti-Captcha do), the assumed cost when it may have charged and did not say (CapSolver; a
+  timeout; a call cut off by its deadline or a cancel), or nothing for an error answer. A pending line nobody
+  settled counts at the assumed cost. So a looping agent, several at once, or a call cut off mid-solve stop at
+  the cap. The one overspend left: a solve the service charges more for than the assumed cost, by that
+  difference, for the solves already in flight; the next reservation sees it and refuses.
+- **The record fails closed.** When `solver/solves.jsonl` cannot be read or written (permissions, a symlink,
+  bytes that are not UTF-8), or holds a line openajar did not write (a cost that is not a number from 0 to
+  1000, a bad time), nothing is sent until you fix or move it. `solver list` and `solver log` say which line.
 
 The agent uses it through one tool, `browser_challenge(on)` in the `browser` toolset (`tools_more("browser")`,
 or `tools_call`). Its steps, in order, each only when the one before did not get past the check:
 
 1. **wait**: up to 20 s for Cloudflare's check, 5 s for the others, for it to pass by itself;
 2. **click**: one click on its checkbox, as above, unless one was made on that page in the last minute;
-3. **solver**: the widget's site key and kind are read from the page (its element's `data-sitekey`, else its
-   frame's address), the owner's service is asked for a token, and the token goes where the widget puts it
+3. **solver**: the widget's site key and kind are read from the page's own document (its element's
+   `data-sitekey`, else the address of the vendor's frame directly in the page), the owner's service is asked
+   for a token, the guards are read again on the page as it is then (same address, still no sign-up, login or
+   payment sign), and the token goes where the widget puts it
    (`cf-turnstile-response`, `g-recaptcha-response`, `h-captcha-response`), then the page's own callback is
    called when the page named one (`data-callback`, or reCAPTCHA's client table). The site checks the token
    when the form is sent;
 4. **human**: nothing got it past, so the browser is held for the human, and the agent waits with
-   `browser_wait_handback`.
+   `browser_wait_handback`. A call that ends early on a page with a check (its 240 s deadline, a cancel, an
+   error) holds the browser the same way.
 
 The result's `ended_by` is `nothing`, `wait`, `click`, `solver` or `human`, and `steps` says what each step
-did, the service and its cost included. When a solver covers the site, an image puzzle in an environment's
-browser is not held at once, so the agent can call the tool, and the snapshot says so.
+did, the service and its cost included. An image puzzle in an environment's browser is not held at once only
+when a service of the owner's could take it now (it covers the site, takes the widget's kind, the page passes
+the guards and the cap has room), so the agent can call the tool, and the snapshot says so. Otherwise it is held
+for you at once, as without a solver.
 
 What it never does:
 
@@ -753,15 +769,23 @@ What it never does:
   (`browser = "node"`) is refused too.
 - **Cloudflare's full-page check** ("Just a moment..."): its answer is a cookie tied to the browser and its
   exit address, so a service would need the proxy's credentials, and openajar never sends a proxy or its
-  credentials anywhere. The step says it cannot solve that kind, and the browser goes to the human.
-- **A sign-up, login or payment page.** Before it asks the service it reads the page (structure, never its
-  words): a password, one-time-code or card field that shows, or any such field in the widget's own form;
-  an autocomplete token for one; a payment provider's frame (Stripe, PayPal, Braintree, Adyen, Klarna and
-  others); a word for such a step in the address or the form's action (login, signup, register, checkout,
-  payment...). Any of them refuses. It errs on the side of refusing (a contact form beside a visible login box
-  is refused too), and it can miss a sign-up made only of an email field on a page whose address says nothing,
-  and a sign-up whose check comes before its password step.
-- **reCAPTCHA Enterprise**, and any widget it finds no site key for.
+  credentials anywhere. It is recognised by its signal and by its own markers (`#challenge-form`,
+  `#challenge-stage`, the orchestrate script). The step says it cannot solve that kind, and the browser goes to
+  the human.
+- **A sign-up, login or payment page, as far as it can tell.** Before it asks the service, and again before the
+  token goes in, it reads the page (structure, never its words), in the document, its open shadow roots and
+  every frame: a password field (a disabled one too: a multi-step login shows it so first), a one-time-code,
+  username (a passwordless login) or card field that shows, or any such field in the widget's own form; an
+  autocomplete token for one; a payment provider's frame (Stripe, PayPal, Braintree, Adyen, Shopify, Klarna and
+  others); a word for such a step in the address, its query or the form's action (login, sign_in, wp-login,
+  register, session, checkout, my-account, payment...). Any of them refuses. It errs on the side of refusing (a
+  contact form beside a visible login box is refused too). It can miss a sign-up made only of an email field
+  with no `autocomplete="username"` on a page whose address says nothing, a form in a closed shadow root, and a
+  sign-up whose check comes before any of its fields show.
+- **A widget inside another site's frame.** Only a widget in the page's own document is sent: one inside a third
+  party's frame would go under this page's address, and its token could not reach this page.
+- **reCAPTCHA Enterprise**: refused when the page loads its script or its frame. Also any widget it finds no
+  site key for.
 - **Past the cap, or off the site list.** Those tries are in the record too, with no cost.
 
 What the service learns: the page's scheme, host and path (never its query or fragment), the widget's site

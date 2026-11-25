@@ -16,18 +16,22 @@ All notable changes to openajar are recorded here. The format follows
   computer and is in no tool result, log, trace or record. openajar ships no key and shares none. A solving
   service may be against a site's terms; the choice and the cost are yours.
 - `browser_challenge` (toolset `browser`): one explicit call that gets an environment's browser past a site's
-  check in this order: wait for it to pass by itself, the browser's own click, your solver, then you (the
-  browser is held for you, and the agent waits with `browser_wait_handback`). `ended_by` says which step ended
-  it and `steps` what each did. It refuses an account's browser (`check_for_human`), and its solver step never
-  runs for Cloudflare's full-page check, on a sign-up, login or payment page, for a site off your list, or
-  past your month's cap. Every try, refused ones too, is in the record with the cost the service reported or
-  your assumed cost.
+  check in this order: wait for it to pass by itself, the browser's own click, your solver, then you. When
+  nothing got it past, or the call ends early on a page with a check (its deadline, a cancel, an error), the
+  browser is held for you and the agent waits with `browser_wait_handback`. `ended_by` says which step ended
+  it and `steps` what each did. It refuses an account's browser (`check_for_human`). Its solver step never runs
+  for Cloudflare's full-page check, for reCAPTCHA Enterprise, for a widget inside another site's frame, for a
+  site off your list or past your month's cap, and it refuses a page it recognises as a sign-up, login or
+  payment page (checked again before the token goes in). The cap holds through a reservation written to the
+  record before anything is sent, and the record fails closed: one that cannot be read or written sends
+  nothing. Every try, refused ones too, is in the record with its cost.
 
 ### Changed
 
-- In an environment's browser, when your solver covers the site, the snapshot's line for a check names
-  `browser_challenge`, and an hCaptcha or reCAPTCHA image puzzle is not held at once, so the agent can call
-  it. Without a solver nothing changes.
+- In an environment's browser, when a service of yours could take the check now (it covers the site, takes the
+  widget, the page passes the guards and the cap has room), the snapshot's line for it names
+  `browser_challenge`, and an hCaptcha or reCAPTCHA image puzzle is not held at once, so the agent can call it.
+  Otherwise nothing changes.
 
 ## [0.6.1] - 2026-11-25
 
