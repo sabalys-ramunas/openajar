@@ -431,7 +431,7 @@ class VmManager(Pausing):
         prov = self.provider()
         place = getattr(prov, "place", None)  # a provider whose images each live in one place (openajar.vms.own:
         if callable(place):                   # a person's machines): the machine made where its image is
-            location = place(p.image)
+            location = await maybe_await(place(p.image)) or location
         out = {"lane": lane_id, "profile": label, "size": p.words(), "image": p.image, "location": location,
                "ttl_minutes": ttl, "fallbacks": []}
         if p.server_type:

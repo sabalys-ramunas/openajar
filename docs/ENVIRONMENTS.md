@@ -144,6 +144,46 @@ Setup also pins the host key of Morph's SSH gateway (it prints its fingerprint) 
 - Every machine has a time limit at Morph too (its own limit plus a margin), so one the node forgot
   stops billing by itself.
 
+**DigitalOcean (experimental)**: each environment is a Droplet in your DigitalOcean account, with a
+firewall that lets SSH in from the node only, and a save is a snapshot there, as on Hetzner.
+Experimental means: it was written from DigitalOcean's API reference and tested against a fake of
+that API, not yet against the real one: no Droplet has been rented with it so far. Tried against
+the fake: a Droplet made with its tags, key and firewall, a closed network, a snapshot and a machine
+made from it, the reaper, and the errors. Not tried against DigitalOcean itself: all of it, among
+it how soon a firewall covers a new Droplet, how a snapshot of a running Droplet behaves, and the
+exact form of its firewall rules. Setup, the CLI and `openajar environments setup` say so too. After your first environments there, look at the DigitalOcean control
+panel for a Droplet or a snapshot left behind. Make a token with write access at
+cloud.digitalocean.com (API, Tokens) and give it to the node:
+
+```
+openajar vm setup --provider digitalocean    # asks for the token, keeps it in $OPENAJAR_HOME/secrets/digitalocean.token (0600)
+openajar vm types                            # what can be ordered today, and what each profile rents
+```
+
+Setup sets `provider = "digitalocean"` in `vms.toml`. What is different from Hetzner, said plainly:
+
+- Machines are Droplets in Frankfurt (`fra1`) unless `location` in `vms.toml` names another region
+  (`ams3`, `nyc3`, ...). Without a size, an environment gets the cheapest Droplet with at least 2
+  vCPU and 4 GB (DigitalOcean's cheapest has 512 MB, too little): `s-2vcpu-4gb`, about EUR 0.03 an
+  hour, three times Hetzner's cheapest.
+- Prices are DigitalOcean's USD prices turned into EUR at `digitalocean_eur_per_usd` (0.86 unless
+  you set it): estimates, marked as such. DigitalOcean bills by the second; openajar counts started
+  hours, so what it shows is the most a machine costs.
+- A snapshot costs about USD 0.06 per GB a month there, five times Hetzner's. Set
+  `snapshot_eur_per_gb_month = 0.052` in `environments.toml` so saves show what they cost.
+- A snapshot lives in the region of the Droplet it was taken from, so a save resumes in that region,
+  also after you change `location`.
+- DigitalOcean has tags, not labels: openajar's labels are tags like `agentos-vm:vm_ab12` on its
+  Droplets and snapshots, and it only ever lists and deletes what carries its own. The token itself
+  reaches every Droplet of its team, so a team for openajar alone is the careful choice.
+- The firewall covers a Droplet through a tag the Droplet is created with. For the first moments of a
+  new Droplet its port 22 may be open to the internet before DigitalOcean applies the firewall; it
+  takes the node's key only (no password), and its host key is pinned.
+- A machine with a closed network (`limited`, `none`) has a firewall whose only rule out is ping to
+  the node, so nothing else leaves it, DNS included.
+- There are no ARM Droplets, and no warm-pool label changes (`update_labels`), so a warm machine is
+  not relabelled there.
+
 **Your own machine**: a Linux box you already have (a computer at home, a server you rent somewhere
 else, a VM at any cloud) becomes the computer of your environments. Nothing is rented. Bring it in
 with one command, at the node:

@@ -15,6 +15,15 @@ from openajar.core.errors import OpenajarError
 SETTINGS_FILE = "vms.toml"
 TOKEN_FILE = "secrets/hetzner.token"
 MORPH_TOKEN_FILE = "secrets/morph.token"      # the Morph Cloud API key (openajar.vms.morph), 0600
+DIGITALOCEAN_TOKEN_FILE = "secrets/digitalocean.token"  # the DigitalOcean API token (openajar.vms.digitalocean), 0600
+TOKEN_FILES = {"hetzner": TOKEN_FILE, "morph": MORPH_TOKEN_FILE, "digitalocean": DIGITALOCEAN_TOKEN_FILE}
+# How each provider is written in a sentence ("Hetzner has no room for ...").
+PROVIDER_NAMES = {"hetzner": "Hetzner", "docker": "Docker", "morph": "Morph", "digitalocean": "DigitalOcean",
+                  "own": "Your machine"}
+
+
+def provider_name(provider: str | None) -> str:
+    return PROVIDER_NAMES.get(provider or "", (provider or "").capitalize()) or "The provider"
 
 # paused: the machine is kept with its memory and bills only its storage (a provider with the "pause"
 # capability; an environment's save, openajar.environments.pausing). Not live: it counts toward no limit.
@@ -96,7 +105,8 @@ class VmSettings(BaseModel):
     # docker: local containers with sshd (openajar.vms.docker); morph: Morph Cloud (openajar.vms.morph);
     # own: containers on the person's own machines, reached over SSH (openajar.vms.own), where `location`
     # names the machine new environments go to
-    provider: Literal["hetzner", "docker", "morph", "own"] = "hetzner"
+    # digitalocean: DigitalOcean Droplets (openajar.vms.digitalocean), experimental
+    provider: Literal["hetzner", "docker", "morph", "own", "digitalocean"] = "hetzner"
     location: str = "nbg1"
     default_profile: str = "small"
     profiles: dict[str, Profile] = Field(default_factory=lambda: dict(DEFAULT_PROFILES))
@@ -130,6 +140,10 @@ class VmSettings(BaseModel):
     morph_usd_per_mcu: float = Field(default=0.05, ge=0)
     morph_storage_usd_per_gb_month: float = Field(default=0.0073, ge=0)
     morph_eur_per_usd: float = Field(default=0.86, gt=0)
+    # DigitalOcean (openajar.vms.digitalocean, experimental). Its prices are in USD; openajar shows EUR at this
+    # rate, as estimates. `location` is a region's slug (fra1, ams3, nyc3, ...).
+    digitalocean_api_url: str = "https://api.digitalocean.com/v2"
+    digitalocean_eur_per_usd: float = Field(default=0.86, gt=0)
 
     @field_validator("profiles")
     @classmethod
@@ -149,6 +163,14 @@ class VmSettings(BaseModel):
             self.location = "local"  # a container on this computer, not a Hetzner site
         if self.provider == "morph" and "location" not in self.model_fields_set:
             self.location = "morph"  # Morph picks the site; it has one region
+        if self.provider == "digitalocean":
+            if "location" not in self.model_fields_set:
+                self.location = "fra1"  # Frankfurt, as Hetzner's nbg1 is in Germany
+            if "profiles" not in self.model_fields_set:
+                # DigitalOcean's cheapest Droplet has 512 MB, too little for an environment: the default
+                # profile asks for what Hetzner's cheapest type has
+                self.profiles = {**self.profiles, "small": Profile(
+                    min_cpu=2, min_memory_gb=4, description="the cheapest Droplet with 2+ vCPU and 4+ GB")}
         if self.provider == "own" and "location" not in self.model_fields_set:
             self.location = "own"    # no machine named: the only one registered (openajar.vms.own.default_name)
         return self

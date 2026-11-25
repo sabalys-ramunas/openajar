@@ -34,7 +34,13 @@ LOOKUP_TIMEOUT_S = 6.0
 # Hetzner's locations: where each is, for when the lookup does not answer (vms.capacity.ZONES has the same names)
 PROVIDER_PLACES = {"nbg1": ("Europe/Berlin", "DE"), "fsn1": ("Europe/Berlin", "DE"), "hel1": ("Europe/Helsinki", "FI"),
                    "ash": ("America/New_York", "US"), "hil": ("America/Los_Angeles", "US"),
-                   "sin": ("Asia/Singapore", "SG")}
+                   "sin": ("Asia/Singapore", "SG"),
+                   # DigitalOcean's regions (openajar.vms.digitalocean)
+                   "fra1": ("Europe/Berlin", "DE"), "ams3": ("Europe/Amsterdam", "NL"), "lon1": ("Europe/London", "GB"),
+                   "nyc1": ("America/New_York", "US"), "nyc2": ("America/New_York", "US"),
+                   "nyc3": ("America/New_York", "US"), "sfo2": ("America/Los_Angeles", "US"),
+                   "sfo3": ("America/Los_Angeles", "US"), "tor1": ("America/Toronto", "CA"),
+                   "sgp1": ("Asia/Singapore", "SG"), "blr1": ("Asia/Kolkata", "IN"), "syd1": ("Australia/Sydney", "AU")}
 _KNOWN: dict[str, dict[str, str]] = {}  # machine address -> ipinfo's answer, while the node runs
 
 
