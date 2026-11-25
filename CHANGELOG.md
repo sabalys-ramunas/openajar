@@ -10,17 +10,17 @@ All notable changes to openajar are recorded here. The format follows
 
 - Your own captcha-solving service for every browser, off until you add one: `openajar solver add
   <name> <provider> [key] [--url] [--command]`, with `solver list`, `solver test`, `solver remove` and
-  `solver log`. Built in: CapSolver, 2Captcha and Anti-Captcha by their documented task APIs (Turnstile and
-  reCAPTCHA v2, proxyless task types only); a `command` or `webhook` hook plugs in any other service or your own
-  script, hCaptcha included. The key stays in `secrets/solvers.json` (600) on this computer and is in no tool
+  `solver log`. Built in: CapSolver, 2Captcha and Anti-Captcha by their documented task APIs (Turnstile,
+  reCAPTCHA v2 and reCAPTCHA Enterprise v2, proxyless task types only); a `command` or `webhook` hook plugs in
+  any other service or your own script, hCaptcha included. The key stays in `secrets/solvers.json` (600) on this computer and is in no tool
   result, log or trace. openajar ships no key and shares none. The service and its cost are your choice.
-- `browser_challenge` (toolset `browser`): one explicit call that gets an environment's browser past a site's
+- `browser_challenge` (toolset `browser`): one explicit call that gets a browser past a site's
   check in this order: wait for it to pass by itself, the browser's own click, your solver, then you. When
   nothing got it past, or the call ends early on a page with a check (its deadline, a cancel, an error), the
   browser is held for you and the agent waits with `browser_wait_handback`. `ended_by` says which step ended
   it and `steps` what each did. It runs in any browser, an account's included. Its solver step does not
-  send Cloudflare's full-page check, reCAPTCHA Enterprise or a widget inside another site's frame (no token from
-  a service works there), and the token goes in only while the page is at the address it was asked for. A
+  send Cloudflare's full-page check or a widget inside another site's frame (no token from a service works
+  there), and the token goes in only while the page is at the address it was asked for. A
   reCAPTCHA image puzzle still open over the page after the token went in is closed with one click on its own
   overlay, so the form's button can be clicked. Every request is a line in `solver/solves.jsonl` with the cost
   the service reported.

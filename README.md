@@ -311,7 +311,7 @@ hands the browser to you. An account's browser gets the same: the checkbox's ref
 `browser_challenge`.
 
 **Your own solving service**, if you want one. For a widget a click does not pass (Cloudflare Turnstile,
-reCAPTCHA v2, hCaptcha), `openajar solver add` plugs in a captcha-solving service you pay for: CapSolver,
+reCAPTCHA v2 and Enterprise v2, hCaptcha), `openajar solver add` plugs in a captcha-solving service you pay for: CapSolver,
 2Captcha or Anti-Captcha built in, or any other through a command or a webhook. It is off until you add one,
 with your key (kept on this computer). The service and what it costs are your choice. The agent reaches it only
 through `browser_challenge`, which waits, clicks once, asks your service, then hands the browser to you, and

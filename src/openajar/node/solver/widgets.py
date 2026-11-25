@@ -2,12 +2,13 @@
 
 Reads (Camoufox's isolated world; nothing on the page changes):
 
-- the widget: its kind (Cloudflare Turnstile, reCAPTCHA v2, hCaptcha), its site key, Turnstile's action and cData,
-  whether it is invisible, the name of the page's callback for it, whether it already holds a token. Only a widget
-  in the page's own document: its element there (data-sitekey and friends) first, else the address of the vendor's
-  frame directly in the page (reCAPTCHA's anchor carries `k=`, hCaptcha's frame `sitekey=`, Turnstile's frame its
-  key in the path). A widget inside another site's frame is refused, and so is reCAPTCHA on a page that loads
-  reCAPTCHA Enterprise (its script or its frame).
+- the widget: its kind (Cloudflare Turnstile, reCAPTCHA v2, reCAPTCHA Enterprise v2, hCaptcha), its site key,
+  Turnstile's action and cData, reCAPTCHA Enterprise's `s`, whether it is invisible, the name of the page's callback
+  for it, whether it already holds a token. Only a widget in the page's own document: its element there
+  (data-sitekey and friends) first, else the address of the vendor's frame directly in the page (reCAPTCHA's anchor
+  carries `k=` and, for Enterprise, often `s=`; hCaptcha's frame `sitekey=`; Turnstile's frame its key in the
+  path). reCAPTCHA is Enterprise when the page loads its script (recaptcha/enterprise.js) or its frame
+  (/recaptcha/enterprise/anchor). A widget inside another site's frame is refused.
 - Cloudflare's full-page check by its own markers (`full_page`).
 - an image puzzle left open after the token went in (`close_puzzle`): reCAPTCHA keeps its puzzle (the bframe, 400 by
   580) over the page even once its field holds a token, and it then blocks the next click on the form. Its
@@ -35,7 +36,8 @@ from openajar.node.sites import host_is
 Page = Any
 
 FIELDS = {"turnstile": "cf-turnstile-response", "recaptcha_v2": "g-recaptcha-response",
-          "hcaptcha": "h-captcha-response"}
+          "recaptcha_v2_enterprise": "g-recaptcha-response", "hcaptcha": "h-captcha-response"}
+ENTERPRISE = "recaptcha_v2_enterprise"
 _TURNSTILE_KEY = re.compile(r"/(0x[0-9A-Za-z_-]{16,}|[123]x0{20}[A-F]{2})(?:/|$)")
 # The widgets in the page's own document, from their elements (light DOM), with whether each holds its token already,
 # and whether the page loads reCAPTCHA Enterprise (its script, or its frame).
@@ -57,7 +59,7 @@ _WIDGETS_JS = """
     const r = el.getBoundingClientRect();
     out.push({kind, key: el.getAttribute('data-sitekey') || '', action: el.getAttribute('data-action'),
               cdata: el.getAttribute('data-cdata'), size: el.getAttribute('data-size'),
-              callback: el.getAttribute('data-callback'), passed: !!(field && field.value),
+              callback: el.getAttribute('data-callback'), s: el.getAttribute('data-s'), passed: !!(field && field.value),
               shown: r.width > 0 && r.height > 0});
   }
   const enterprise = Array.from(document.querySelectorAll('script[src], iframe[src]')).slice(0, 500)
@@ -105,6 +107,7 @@ _HAND_JS = """
   // the address is read here, in the same step that writes the token: a page that moved since the guards ran gets none
   if (expected && location.href.split('#')[0] !== expected.split('#')[0]) return {filled: 0, called: 'none', moved: true};
   const names = {turnstile: ['cf-turnstile-response'], recaptcha_v2: ['g-recaptcha-response'],
+                 recaptcha_v2_enterprise: ['g-recaptcha-response'],
                  hcaptcha: ['h-captcha-response', 'g-recaptcha-response']}[kind] || [];
   let filled = 0;
   for (const name of names) {
@@ -119,8 +122,8 @@ _HAND_JS = """
     return typeof o === 'function' ? o : null; };
   let called = 'none';
   let fn = callback ? find(callback) : null;
-  if (!fn && kind === 'recaptcha_v2') {
-    // reCAPTCHA keeps a widget's callback in its own client table when the page passed a function, not a name
+  if (!fn && (kind === 'recaptcha_v2' || kind === 'recaptcha_v2_enterprise')) {
+    // reCAPTCHA (Enterprise too) keeps a widget's callback in its own client table when the page passed a function
     const seen = new Set();
     const walk = (o, depth) => {
       if (fn || o == null || typeof o !== 'object' || depth > 4 || seen.has(o)) return;
@@ -143,27 +146,30 @@ _HAND_JS = """
 
 @dataclass(frozen=True, slots=True)
 class Widget:
-    kind: str                   # "turnstile", "recaptcha_v2" or "hcaptcha"
+    kind: str                   # "turnstile", "recaptcha_v2", "recaptcha_v2_enterprise" or "hcaptcha"
     site_key: str
     action: str | None = None
     cdata: str | None = None
     invisible: bool = False
     callback: str | None = None
     passed: bool = False
+    s: str | None = None        # reCAPTCHA Enterprise's `s` value, when the page has one
 
 
 def from_frame_url(url: str) -> Widget | None:
-    """A widget read from its frame's address, or None (reCAPTCHA Enterprise and invisible badges included)."""
+    """A widget read from its frame's address, or None (an invisible hCaptcha included)."""
     try:
         parts = urlsplit(url or "")
     except ValueError:
         return None
     host = parts.hostname or ""
-    if (host_is(host, "google.com") or host_is(host, "recaptcha.net")) and re.match(r"^/recaptcha/api2/anchor\b",
-                                                                                    parts.path):
+    anchor = re.match(r"^/recaptcha/(api2|enterprise)/anchor\b", parts.path)
+    if (host_is(host, "google.com") or host_is(host, "recaptcha.net")) and anchor:
         query = parse_qs(parts.query)
         key = (query.get("k") or [""])[0]
-        return Widget("recaptcha_v2", key, invisible=(query.get("size") or [""])[0] == "invisible") if key else None
+        kind = ENTERPRISE if anchor.group(1) == "enterprise" else "recaptcha_v2"
+        return Widget(kind, key, invisible=(query.get("size") or [""])[0] == "invisible",
+                      s=(query.get("s") or [None])[0] if kind == ENTERPRISE else None) if key else None
     if host_is(host, "hcaptcha.com"):
         frag = parse_qs(parts.fragment)
         if (frag.get("frame") or [""])[0] not in ("checkbox", "challenge"):
@@ -186,34 +192,38 @@ def _direct(page: Page, frame: Any) -> bool:
 async def find(page: Page) -> tuple[Widget | None, str]:
     """The widget the solver would answer for on this page, and why there is none when there is none. Only a widget
     in the page's own document: its element there, or the vendor's frame directly in it. A widget inside another
-    site's frame is refused (its key would be sent under this page's address, and its token could not reach it), and
-    so is any reCAPTCHA on a page that loads reCAPTCHA Enterprise."""
+    site's frame is refused (its key would be sent under this page's address, and its token could not reach it).
+    reCAPTCHA on a page that loads reCAPTCHA Enterprise is Enterprise."""
     read = await quietly(page.evaluate(_WIDGETS_JS), {}, timeout=5.0) or {}
     read = read if isinstance(read, dict) else {}
-    widgets = [Widget(w["kind"], str(w.get("key") or ""), w.get("action") or None, w.get("cdata") or None,
-                      (w.get("size") or "") == "invisible", w.get("callback") or None, bool(w.get("passed")))
-               for w in read.get("widgets") or [] if isinstance(w, dict) and w.get("kind") in FIELDS]
     frames = list(getattr(page, "frames", []))[1:]
-    vendor = [(f, from_frame_url(getattr(f, "url", "") or "")) for f in frames]
-    framed = [w for f, w in vendor if w is not None and _direct(page, f)]
-    nested = [f for f, w in vendor if w is not None and not _direct(page, f)]
     enterprise = bool(read.get("enterprise")) or any("/recaptcha/enterprise" in (getattr(f, "url", "") or "")
                                                      for f in frames)
+
+    def kind_of(kind: str) -> str:
+        return ENTERPRISE if kind == "recaptcha_v2" and enterprise else kind
+
+    widgets = [Widget(kind_of(w["kind"]), str(w.get("key") or ""), w.get("action") or None, w.get("cdata") or None,
+                      (w.get("size") or "") == "invisible", w.get("callback") or None, bool(w.get("passed")),
+                      w.get("s") or None)
+               for w in read.get("widgets") or [] if isinstance(w, dict) and w.get("kind") in FIELDS]
+    vendor = [(f, from_frame_url(getattr(f, "url", "") or "")) for f in frames]
+    framed = [Widget(kind_of(w.kind), w.site_key, invisible=w.invisible, s=w.s)
+              for f, w in vendor if w is not None and _direct(page, f)]
+    nested = [f for f, w in vendor if w is not None and not _direct(page, f)]
     found: Widget | None = None
     for w in widgets:
         if w.passed:
             continue
-        if not w.site_key:
-            match = next((f for f in framed if f.kind == w.kind), None)
-            if match is None:
-                continue
-            w = Widget(w.kind, match.site_key, w.action, w.cdata, w.invisible or match.invisible, w.callback)
-        found = w
+        match = next((f for f in framed if f.kind == w.kind), None)
+        if not w.site_key and match is None:
+            continue
+        found = Widget(w.kind, (w.site_key or match.site_key) if match else w.site_key, w.action, w.cdata,
+                       w.invisible or bool(match and match.invisible), w.callback, False,
+                       w.s or (match.s if match else None))
         break
     if found is None and not (widgets and all(w.passed for w in widgets)) and framed:
         found = framed[0]
-    if found is not None and found.kind == "recaptcha_v2" and enterprise:
-        return None, "a reCAPTCHA Enterprise widget, which openajar does not send to a service"
     if found is not None:
         return found, ""
     if widgets and all(w.passed for w in widgets):
@@ -222,9 +232,7 @@ async def find(page: Page) -> tuple[Widget | None, str]:
         host = urlsplit(getattr(nested[0], "url", "") or "").hostname or "another site"
         return None, (f"the widget ({host}) is inside a frame of another site, so its key would go under this page's "
                       "address and its token could not reach this page")
-    if enterprise:
-        return None, "a reCAPTCHA Enterprise widget, which openajar does not send to a service"
-    return None, "no Turnstile, reCAPTCHA v2 or hCaptcha widget with a site key is on this page"
+    return None, "no Turnstile, reCAPTCHA or hCaptcha widget with a site key is on this page"
 
 
 async def full_page(page: Page) -> bool:

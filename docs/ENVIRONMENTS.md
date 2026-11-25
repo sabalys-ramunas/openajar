@@ -702,7 +702,8 @@ not chain to another proxy, so `proxy add` says so on such a node.
 
 #### The owner's solving service
 
-For a widget a click does not pass (Cloudflare Turnstile, reCAPTCHA v2, hCaptcha on an ordinary page), the
+For a widget a click does not pass (Cloudflare Turnstile, reCAPTCHA v2, reCAPTCHA Enterprise v2, hCaptcha on an
+ordinary page), the
 owner can plug in a captcha-solving service of their own. It is off until they add one. openajar ships no key
 and shares none. The service, and what it costs, are the owner's choice.
 
@@ -717,15 +718,19 @@ openajar solver remove main      # the entry and its key; the log stays
 ```
 
 - **Services.** Built in: `capsolver`, `2captcha` and `anticaptcha`, each by its documented task API (createTask,
-  then getTaskResult; getBalance for `test`), with the proxyless task types only. All three take Turnstile and
-  reCAPTCHA v2. None of them lists hCaptcha any more (their documentation, read 2026-11-25), so hCaptcha goes
+  then getTaskResult; getBalance for `test`), with the proxyless task types only. All three take Turnstile,
+  reCAPTCHA v2 and reCAPTCHA Enterprise v2 (the checkbox: CapSolver's `ReCaptchaV2EnterpriseTaskProxyLess`,
+  2Captcha's and Anti-Captcha's `RecaptchaV2EnterpriseTaskProxyless`, with the widget's `s` as
+  `enterprisePayload` when the page has one). reCAPTCHA is Enterprise when the page loads
+  `recaptcha/enterprise.js` or its frame is `/recaptcha/enterprise/anchor`. None of them lists hCaptcha any more (their documentation, read 2026-11-25), so hCaptcha goes
   only to a hook. `--url` points a built-in at another address with the same API. `test --solve` asks for a token
   for Cloudflare's test key that forces the interactive check (`3x00000000000000000000FF`) on 2Captcha's demo
   page; 2Captcha refuses the always-pass key.
 - **Hooks.** `command` runs a command line on this computer, with no shell. `webhook` POSTs to an https URL
   (http only to this computer itself), and follows no redirect. Both get the job as JSON:
-  `{"kind": "turnstile" | "recaptcha_v2" | "hcaptcha", "site_key": "...", "page_url": "https://host/path",
-  "action": ..., "cdata": ..., "invisible": false}`, and answer `{"token": "...", "cost": 0.002}` (`cost` in US
+  `{"kind": "turnstile" | "recaptcha_v2" | "recaptcha_v2_enterprise" | "hcaptcha", "site_key": "...",
+  "page_url": "https://host/path", "action": ..., "cdata": ..., "invisible": false, "s": ...}` (`s`: reCAPTCHA
+  Enterprise's, when the page has one), and answer `{"token": "...", "cost": 0.002}` (`cost` in US
   dollars, optional) or `{"error": "why"}`. The key, when there is one, is the command's environment variable
   `OPENAJAR_SOLVER_KEY` (never its command line), or the webhook's `Authorization: Bearer` header.
 - **The log.** `solver/solves.jsonl` in the node's home gets one line after each request: the result, and the
@@ -766,7 +771,7 @@ from a service works there:
   `#challenge-stage`, the orchestrate script).
 - **A widget inside another site's frame.** Its key would go under this page's address, and its token could not
   reach this page.
-- **reCAPTCHA Enterprise**, when the page loads its script or its frame, and any widget it finds no site key for.
+- **A widget it finds no site key for.**
 
 What the service learns: the page's scheme, host and path (never its query or fragment), the widget's site
 key, and for Turnstile its action and cData. The request goes from the node (with openajar local, this

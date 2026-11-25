@@ -12,7 +12,7 @@ click, the owner's solver, the human (openajar.node.solver.steps).
 - ledger: the log of every request to a service, with the cost it reported.
 - steps: the order above.
 
-What it never does: send Cloudflare's full-page check, reCAPTCHA Enterprise or a widget inside another site's frame to a service (no
+What it never does: send Cloudflare's full-page check or a widget inside another site's frame to a service (no
 token from one works there), or send a proxy or its credentials anywhere. The key stays on this computer: it is in
 no tool result, log or trace, and never reaches an environment's machine or a page.
 """

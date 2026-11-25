@@ -15,9 +15,12 @@ from typing import Any, Self
 
 # The documented task types each provider takes (no proxy task types: openajar never sends one)
 TASK_TYPES = {
-    "capsolver": {"AntiTurnstileTaskProxyLess": "token", "ReCaptchaV2TaskProxyLess": "gRecaptchaResponse"},
-    "2captcha": {"TurnstileTaskProxyless": "token", "RecaptchaV2TaskProxyless": "gRecaptchaResponse"},
-    "anticaptcha": {"TurnstileTaskProxyless": "token", "RecaptchaV2TaskProxyless": "gRecaptchaResponse"},
+    "capsolver": {"AntiTurnstileTaskProxyLess": "token", "ReCaptchaV2TaskProxyLess": "gRecaptchaResponse",
+                  "ReCaptchaV2EnterpriseTaskProxyLess": "gRecaptchaResponse"},
+    "2captcha": {"TurnstileTaskProxyless": "token", "RecaptchaV2TaskProxyless": "gRecaptchaResponse",
+                 "RecaptchaV2EnterpriseTaskProxyless": "gRecaptchaResponse"},
+    "anticaptcha": {"TurnstileTaskProxyless": "token", "RecaptchaV2TaskProxyless": "gRecaptchaResponse",
+                    "RecaptchaV2EnterpriseTaskProxyless": "gRecaptchaResponse"},
 }
 REPORTS_COST = {"capsolver": False, "2captcha": True, "anticaptcha": True}
 DUMMY_TOKEN = "XXXX.DUMMY.TOKEN.XXXX"  # Cloudflare's documented dummy token for its test keys

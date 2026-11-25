@@ -6,7 +6,8 @@
    early;
 4. a widget inside another site's frame is not sent;
 5. a key in a long message is redacted before the message is cut;
-6. reCAPTCHA Enterprise is refused even when the page's own markup looks like v2;
+6. reCAPTCHA Enterprise is known as Enterprise even when the page's own markup looks like v2 (and since then sent as
+   its own kind);
 8. a malformed answer is a failed solve;
 9. Cloudflare's full-page check is refused by its own markers too.
 No real service is called: a fake `services.solve`, or a command hook."""
@@ -149,7 +150,7 @@ class Lanes:
         self.held.append((lane_id, signal, detail))
 
 
-@pytest.mark.parametrize("why", ["only_built_ins", "enterprise"])
+@pytest.mark.parametrize("why", ["only_built_ins", "no_widget"])
 async def test_3_a_puzzle_is_held_when_no_service_could_take_it(tmp_path, monkeypatch, why):
     lanes = Lanes()
     watch = SignalWatch(SimpleNamespace(), lanes)
@@ -157,7 +158,7 @@ async def test_3_a_puzzle_is_held_when_no_service_could_take_it(tmp_path, monkey
     hcaptcha = widgets.Widget("hcaptcha", "10000000-ffff-ffff-ffff-000000000001")
 
     async def found(p):
-        return (None, "a reCAPTCHA Enterprise widget") if why == "enterprise" else (hcaptcha, "")
+        return (None, "no widget with a site key") if why == "no_widget" else (hcaptcha, "")
     monkeypatch.setattr(widgets, "find", found)
     entry(tmp_path, provider="capsolver" if why == "only_built_ins" else "command")
     settings.bind_home(tmp_path)
@@ -262,7 +263,7 @@ async def test_5_a_key_in_a_long_message_is_redacted_before_it_is_cut(tmp_path):
 
 # ---- 6. reCAPTCHA Enterprise ----------------------------------------------------------------------------------
 
-async def test_6_enterprise_is_refused_though_the_markup_looks_like_v2(monkeypatch):
+async def test_6_enterprise_is_known_though_the_markup_looks_like_v2(monkeypatch):
     monkeypatch.undo()
     page = Page()
 
@@ -272,8 +273,8 @@ async def test_6_enterprise_is_refused_though_the_markup_looks_like_v2(monkeypat
     page.evaluate = markup
     page.frames = [page.main_frame, SimpleNamespace(
         url="https://www.google.com/recaptcha/enterprise/anchor?k=6LcEnterpriseKey0000", parent_frame=page.main_frame)]
-    widget, why = await widgets.find(page)
-    assert widget is None and "Enterprise" in why
+    widget, _ = await widgets.find(page)
+    assert (widget.kind, widget.site_key) == ("recaptcha_v2_enterprise", "6LcEnterpriseKey000000000000000000000000")
 
 
 # ---- 8. odd answers -------------------------------------------------------------------------------------------

@@ -60,7 +60,7 @@ async def test_the_widget_and_its_site_key_are_read_from_the_page(page):
     assert await widgets.find(page) == (None, "the widget on this page already holds its token")
     await page.set_content("<p>nothing here</p>")
     widget, why = await widgets.find(page)
-    assert widget is None and "no Turnstile, reCAPTCHA v2 or hCaptcha widget" in why
+    assert widget is None and "no Turnstile, reCAPTCHA or hCaptcha widget" in why
 
 
 async def test_the_token_goes_into_the_field_and_the_pages_callback(page):
@@ -86,13 +86,19 @@ async def test_recaptchas_own_client_table_gives_the_callback_when_the_page_pass
 
 # ---- the reviews of 2026-11-25 (test_solver_review has the rest) ----
 
-async def test_review_6_a_page_that_loads_recaptcha_enterprise_is_refused(page):
+async def test_review_6_a_page_that_loads_recaptcha_enterprise_has_an_enterprise_widget(page):
     await page.route("**/*", lambda route: route.abort())  # nothing is fetched
     await page.set_content('<script src="https://www.google.com/recaptcha/enterprise.js" async></script>'
                            '<div class="g-recaptcha" data-sitekey="6LcEnterpriseKey000000000000000000000000" '
-                           'data-action="LOGIN"><textarea name="g-recaptcha-response"></textarea></div>')
-    widget, why = await widgets.find(page)
-    assert widget is None and "Enterprise" in why
+                           'data-action="LOGIN" data-s="aBcD-sValue"><textarea name="g-recaptcha-response"></textarea>'
+                           '</div><script>window.___grecaptcha_cfg = {clients: {0: {aa: {bb: {sitekey: "x", '
+                           'callback: (t) => { document.title = "ent:" + t; }}}}}};</script>')
+    widget, _ = await widgets.find(page)
+    assert (widget.kind, widget.site_key, widget.s, widget.action) == (
+        "recaptcha_v2_enterprise", "6LcEnterpriseKey000000000000000000000000", "aBcD-sValue", "LOGIN")
+    # handed over as v2 is: its field, then the callback from reCAPTCHA's own client table
+    assert await widgets.hand(page, widget, "03AF-enterprise") == {"filled": 1, "called": "called"}
+    assert await page.title() == "ent:03AF-enterprise"
 
 
 async def test_review_9_the_full_page_markers_are_read(page):

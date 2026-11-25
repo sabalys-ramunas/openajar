@@ -5,8 +5,7 @@
    this page in the last minute;
 3. the owner's solver: when the owner set one up, the widget's token from their service, put where the widget
    would put it (openajar.node.solver.widgets), only while the page is at the address it was asked for. Never
-   for Cloudflare's full-page check, reCAPTCHA Enterprise or a widget inside another site's frame: no token from
-   a service works there;
+   for Cloudflare's full-page check or a widget inside another site's frame: no token from a service works there;
 4. the human: nothing got it past, so the browser is handed to the person (the tool holds it for them).
 
 The result says which step ended it. Every request to a service is a line in the log (openajar.node.solver.ledger).
@@ -171,7 +170,7 @@ async def _solver(ix: Any, page: Page, report: SignalReport, *, browser: str,
     line = ledger.Solve(settings.now_iso(), browser, _host(page), widget.kind, entry.name, entry.provider,
                         ledger.FAILED)
     job = services.Job(widget.kind, widget.site_key, services.page_address(url), widget.action, widget.cdata,
-                       widget.invisible)
+                       widget.invisible, widget.s)
     name = f"{entry.name} ({services.NAMES[entry.provider]})"
     try:
         answer = await services.solve(entry, job)

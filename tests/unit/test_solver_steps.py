@@ -188,6 +188,24 @@ async def test_a_service_that_reports_no_cost_is_logged_with_none(tmp_path):
     assert ledger.read(tmp_path)[0].cost is None
 
 
+async def test_a_recaptcha_enterprise_widget_is_sent_as_enterprise_and_handed_over(tmp_path, monkeypatch):
+    page = env_page()
+    enterprise = widgets.Widget("recaptcha_v2_enterprise", "6Lf26sUnAAAAAIKLuWNYgRsFUfmI-3Lex3xT5N-s", s="aBcD-sValue")
+
+    async def found(p):
+        return enterprise, ""
+    monkeypatch.setattr(widgets, "find", found)
+    with FakeService("2captcha", key=KEY, token="03AF-enterprise", cost="0.00299") as svc:
+        solver(tmp_path, svc.url)
+        out = await steps.get_past(Ix(page, PUZZLE), page, browser="env/e1-browser", home=tmp_path)
+    assert (out.ended_by, out.passed) == (steps.SOLVER, True)
+    assert "answered the reCAPTCHA Enterprise widget for 0.00299 USD" in out.steps[2]
+    task = svc.requests[0][1]["task"]
+    assert (task["type"], task["enterprisePayload"]) == ("RecaptchaV2EnterpriseTaskProxyless", {"s": "aBcD-sValue"})
+    assert page.handed == [["recaptcha_v2_enterprise", "03AF-enterprise", "", URL]]
+    assert ledger.read(tmp_path)[0].kind == "recaptcha_v2_enterprise"
+
+
 async def test_a_token_that_does_not_take_goes_to_the_human(tmp_path):
     page = env_page()
     with FakeService("2captcha", key=KEY) as svc:

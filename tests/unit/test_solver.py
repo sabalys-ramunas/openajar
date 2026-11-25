@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import stat
 import sys
+from dataclasses import replace
 
 import pytest
 from solver_fake import DUMMY_TOKEN, FakeService
@@ -97,6 +98,26 @@ async def test_recaptcha_v2_goes_as_the_proxyless_task_and_comes_back_from_its_f
     assert answer.token == "03AFcWeA-token"
 
 
+ENTERPRISE = services.Job("recaptcha_v2_enterprise", "6Lf26sUnAAAAAIKLuWNYgRsFUfmI-3Lex3xT5N-s",
+                          "https://2captcha.com/demo/recaptcha-v2-enterprise", s="aBcD-sValue")
+
+
+@pytest.mark.parametrize(("provider", "task_type"), [("capsolver", "ReCaptchaV2EnterpriseTaskProxyLess"),
+                                                     ("2captcha", "RecaptchaV2EnterpriseTaskProxyless"),
+                                                     ("anticaptcha", "RecaptchaV2EnterpriseTaskProxyless")])
+async def test_recaptcha_enterprise_goes_as_each_services_documented_enterprise_task(provider, task_type):
+    with FakeService(provider, key=KEY, token="03AFcWeA-enterprise", cost="0.00299") as svc:
+        answer = await services.solve(entry(provider, url=svc.url), ENTERPRISE)
+        plain = await services.solve(entry(provider, url=svc.url), replace(ENTERPRISE, s=None, invisible=True))
+    task, bare = svc.requests[0][1]["task"], [b for p, b, _ in svc.requests if p == "/createTask"][1]["task"]
+    assert task == {"type": task_type, "websiteURL": "https://2captcha.com/demo/recaptcha-v2-enterprise",
+                    "websiteKey": "6Lf26sUnAAAAAIKLuWNYgRsFUfmI-3Lex3xT5N-s", "enterprisePayload": {"s": "aBcD-sValue"}}
+    assert bare == {"type": task_type, "websiteURL": "https://2captcha.com/demo/recaptcha-v2-enterprise",
+                    "websiteKey": "6Lf26sUnAAAAAIKLuWNYgRsFUfmI-3Lex3xT5N-s", "isInvisible": True}  # no s: no payload
+    assert answer.token == plain.token == "03AFcWeA-enterprise"
+    assert answer.cost == (None if provider == "capsolver" else 0.00299)
+
+
 @pytest.mark.parametrize("provider", ["capsolver", "2captcha", "anticaptcha"])
 async def test_hcaptcha_is_not_sent_to_a_built_in_that_no_longer_takes_it(provider):
     assert not services.supports(entry(provider), "hcaptcha")
@@ -172,6 +193,8 @@ async def test_the_command_hook_gets_the_job_on_stdin_and_the_key_in_its_environ
     e = entry("command", command=f"{sys.executable} {script} {KEY[::-1]}")
     answer = await services.solve(e, HCAPTCHA)  # a hook takes hCaptcha
     assert (answer.token, answer.cost) == ("tok-hcaptcha-10000000-ffff-ffff-ffff-000000000001", 0.002)
+    answer = await services.solve(e, ENTERPRISE)  # and reCAPTCHA Enterprise, as any kind
+    assert answer.token == "tok-recaptcha_v2_enterprise-6Lf26sUnAAAAAIKLuWNYgRsFUfmI-3Lex3xT5N-s"
     with pytest.raises(services.SolveError, match="exited 3") as err:
         await services.solve(e, services.Job("turnstile", "fail", "https://x.example/"))
     assert KEY not in str(err.value) and "***" in str(err.value)
@@ -184,7 +207,10 @@ async def test_the_webhook_gets_the_job_and_the_key_as_a_bearer_token():
         path, body, headers = svc.requests[0]
         assert path == "/solve" and headers["Authorization"] == f"Bearer {KEY}"
         assert body == {"kind": "turnstile", "site_key": "0x4AAAAAAAexample00000", "invisible": False,
-                        "page_url": "https://shop.example.com/contact", "action": "contact", "cdata": "c-123"}
+                        "page_url": "https://shop.example.com/contact", "action": "contact", "cdata": "c-123", "s": None}
+        await services.solve(entry("webhook", url=f"{svc.url}/solve"), ENTERPRISE)
+        assert {k: svc.requests[-1][1][k] for k in ("kind", "s")} == {"kind": "recaptcha_v2_enterprise",
+                                                                     "s": "aBcD-sValue"}
         with pytest.raises(services.SolveError, match="HTTP 401"):
             await services.solve(entry("webhook", url=svc.url, key=OTHER), TURNSTILE)
 
@@ -291,7 +317,12 @@ def test_a_widget_is_read_from_its_frames_address_when_its_element_says_nothing(
     w = widgets.from_frame_url("https://www.google.com/recaptcha/api2/anchor?ar=1&k=6LeIxAcTAAAAAJcZVRqyHh71UMIEGN"
                                "Q_MXjiZKhI&co=aHR0cHM6&size=normal")
     assert (w.kind, w.site_key, w.invisible) == ("recaptcha_v2", "6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI", False)
-    assert widgets.from_frame_url("https://www.google.com/recaptcha/enterprise/anchor?k=6Lxyz") is None
+    w = widgets.from_frame_url("https://www.google.com/recaptcha/enterprise/anchor?ar=1&k=6Lf26sUnAAAAAIKLuWNYgRsFUfmI"
+                               "-3Lex3xT5N-s&co=aHR0cHM6&size=normal")
+    assert (w.kind, w.site_key, w.s, w.invisible) == ("recaptcha_v2_enterprise", "6Lf26sUnAAAAAIKLuWNYgRsFUfmI-3Lex3xT5N-s",
+                                                      None, False)
+    w = widgets.from_frame_url("https://www.recaptcha.net/recaptcha/enterprise/anchor?k=6LeKey&s=aBcD-sValue&size=invisible")
+    assert (w.kind, w.s, w.invisible) == ("recaptcha_v2_enterprise", "aBcD-sValue", True)
     w = widgets.from_frame_url("https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=checkbox&id=0"
                                "&host=shop.example.com&sitekey=10000000-ffff-ffff-ffff-000000000001&theme=light")
     assert (w.kind, w.site_key) == ("hcaptcha", "10000000-ffff-ffff-ffff-000000000001")

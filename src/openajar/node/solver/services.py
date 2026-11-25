@@ -2,12 +2,18 @@
 
 Built in, all three with the same documented shape (createTask, then getTaskResult until it is ready; getBalance):
 
-- CapSolver (api.capsolver.com): Turnstile (AntiTurnstileTaskProxyLess), reCAPTCHA v2 (ReCaptchaV2TaskProxyLess).
-  Its result reports no cost, so its solves are logged with none.
+- CapSolver (api.capsolver.com): Turnstile (AntiTurnstileTaskProxyLess), reCAPTCHA v2 (ReCaptchaV2TaskProxyLess),
+  reCAPTCHA Enterprise v2 (ReCaptchaV2EnterpriseTaskProxyLess). Its result reports no cost, so its solves are
+  logged with none.
 - 2Captcha (api.2captcha.com, its API v2): Turnstile (TurnstileTaskProxyless), reCAPTCHA v2
-  (RecaptchaV2TaskProxyless). Its result reports the cost.
+  (RecaptchaV2TaskProxyless), reCAPTCHA Enterprise v2 (RecaptchaV2EnterpriseTaskProxyless). Its result reports the
+  cost.
 - Anti-Captcha (api.anti-captcha.com): Turnstile (TurnstileTaskProxyless), reCAPTCHA v2
-  (RecaptchaV2TaskProxyless). Its result reports the cost.
+  (RecaptchaV2TaskProxyless), reCAPTCHA Enterprise v2 (RecaptchaV2EnterpriseTaskProxyless). Its result reports the
+  cost.
+
+reCAPTCHA Enterprise's task takes the widget's `s` value, when the page has one, as `enterprisePayload: {"s": ...}`
+(all three document that field), and answers in `gRecaptchaResponse` as v2 does.
 
 None of the three lists hCaptcha in its documentation any more (read 2026-11-25), so hCaptcha goes only to a hook.
 Only the proxyless task types are used: openajar never sends a proxy, its address or its credentials to a service.
@@ -21,8 +27,9 @@ The hooks, for any other service or the owner's own script:
 - webhook: an https URL (http only to this computer itself). It gets the job as the JSON body of a POST, the key
   as `Authorization: Bearer <key>`, and answers with the same JSON as the command. Redirects are not followed.
 
-The job: {"kind": "turnstile" | "recaptcha_v2" | "hcaptcha", "site_key": "...", "page_url": "https://host/path",
-"action": ..., "cdata": ..., "invisible": false}. The page's address goes without its query and fragment.
+The job: {"kind": "turnstile" | "recaptcha_v2" | "recaptcha_v2_enterprise" | "hcaptcha", "site_key": "...",
+"page_url": "https://host/path", "action": ..., "cdata": ..., "invisible": false, "s": ...} ("s": reCAPTCHA
+Enterprise's value, when the page has one). The page's address goes without its query and fragment.
 
 Every message that comes back from a service or a hook goes through `redact` with the key before anything shows it.
 """
@@ -45,14 +52,19 @@ import httpx
 from openajar.core.system import redact
 from openajar.node.solver.settings import BUILT_IN, SolverEntry, safe_url
 
-KINDS: tuple[str, ...] = ("turnstile", "recaptcha_v2", "hcaptcha")
-KIND_WORDS = {"turnstile": "Cloudflare Turnstile", "recaptcha_v2": "reCAPTCHA v2", "hcaptcha": "hCaptcha"}
+KINDS: tuple[str, ...] = ("turnstile", "recaptcha_v2", "recaptcha_v2_enterprise", "hcaptcha")
+KIND_WORDS = {"turnstile": "Cloudflare Turnstile", "recaptcha_v2": "reCAPTCHA v2",
+              "recaptcha_v2_enterprise": "reCAPTCHA Enterprise", "hcaptcha": "hCaptcha"}
 ENDPOINTS = {"capsolver": "https://api.capsolver.com", "2captcha": "https://api.2captcha.com",
              "anticaptcha": "https://api.anti-captcha.com"}
+# By each service's documentation (read 2026-11-25); 2Captcha's Enterprise type also seen answering in a real run.
 TASK_TYPES: dict[str, dict[str, str]] = {
-    "capsolver": {"turnstile": "AntiTurnstileTaskProxyLess", "recaptcha_v2": "ReCaptchaV2TaskProxyLess"},
-    "2captcha": {"turnstile": "TurnstileTaskProxyless", "recaptcha_v2": "RecaptchaV2TaskProxyless"},
-    "anticaptcha": {"turnstile": "TurnstileTaskProxyless", "recaptcha_v2": "RecaptchaV2TaskProxyless"},
+    "capsolver": {"turnstile": "AntiTurnstileTaskProxyLess", "recaptcha_v2": "ReCaptchaV2TaskProxyLess",
+                  "recaptcha_v2_enterprise": "ReCaptchaV2EnterpriseTaskProxyLess"},
+    "2captcha": {"turnstile": "TurnstileTaskProxyless", "recaptcha_v2": "RecaptchaV2TaskProxyless",
+                 "recaptcha_v2_enterprise": "RecaptchaV2EnterpriseTaskProxyless"},
+    "anticaptcha": {"turnstile": "TurnstileTaskProxyless", "recaptcha_v2": "RecaptchaV2TaskProxyless",
+                    "recaptcha_v2_enterprise": "RecaptchaV2EnterpriseTaskProxyless"},
 }
 NAMES = {"capsolver": "CapSolver", "2captcha": "2Captcha", "anticaptcha": "Anti-Captcha", "command": "a command",
          "webhook": "a webhook"}
@@ -77,6 +89,7 @@ class Job:
     action: str | None = None
     cdata: str | None = None
     invisible: bool = False
+    s: str | None = None        # reCAPTCHA Enterprise's `s` (data-s, or the anchor frame's s=), when the page has one
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +200,8 @@ def task_body(provider: str, job: Job) -> dict[str, Any]:
             task.update({k: v for k, v in (("action", job.action), ("cData", job.cdata)) if v})
     elif job.invisible:
         task["isInvisible"] = True
+    if job.kind == "recaptcha_v2_enterprise" and job.s:
+        task["enterprisePayload"] = {"s": job.s}
     return task
 
 
