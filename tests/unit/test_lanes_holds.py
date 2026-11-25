@@ -1058,28 +1058,23 @@ class BrowserContext:
     pass
 
 
-async def test_a_checkbox_check_holds_an_account_browser_but_not_an_environments(tmp_path):
-    """The boundary of the agent's click on a check (openajar.node.interaction.checks): an environment's browser on
-    its machine is allowed, an account's never is, and an image puzzle holds both."""
-    from openajar.node.interaction import checks
-
+async def test_a_checkbox_check_holds_no_browser_and_a_puzzle_holds_every_browser(tmp_path):
+    """The agent's click on a check (openajar.node.interaction.checks) is for every browser alike: an account's
+    browser is not held for a checkbox, as an environment's is not, and an image puzzle no solver takes holds both."""
     t = build(tmp_path, policy=policy)
     await t.mgr.create(LaneSpec(id="biz/glassdoor"))
     await t.mgr.create(LaneSpec(id="env/e1-browser"))
     interaction = CheckReads()
     watched = t.mgr.watch(interaction)
     interaction.signal_value = Signal.CAPTCHA
-    async with t.mgr.using("biz/glassdoor") as page:
-        page.context = BrowserContext()  # an account's browser: never allowed
-        await watched.navigate(page, "https://www.glassdoor.com/")
-    assert t.mgr.get("biz/glassdoor").hold == "needs_human:captcha on www.glassdoor.com"
-    async with t.mgr.using("env/e1-browser") as page:
-        page.context = BrowserContext()
-        checks.allow(page.context)  # what openajar.environments.vmkeys.attach does for its browser
-        await watched.navigate(page, "https://www.glassdoor.com/")
-        await watched.screenshot(page)
-        assert t.mgr.get("env/e1-browser").hold is None  # the agent has the check's ref
-        interaction.detail = "hCaptcha frame"  # an image puzzle: the human's, here too
-        await watched.navigate(page, "https://www.glassdoor.com/")
-    assert t.mgr.get("env/e1-browser").hold == "needs_human:captcha on www.glassdoor.com"
+    for lane in ("biz/glassdoor", "env/e1-browser"):
+        interaction.detail = "Cloudflare challenge page"
+        async with t.mgr.using(lane) as page:
+            page.context = BrowserContext()
+            await watched.navigate(page, "https://www.glassdoor.com/")
+            await watched.screenshot(page)
+            assert t.mgr.get(lane).hold is None, lane  # the agent has the check's ref
+            interaction.detail = "hCaptcha frame"  # an image puzzle and no solver: the human's
+            await watched.navigate(page, "https://www.glassdoor.com/")
+        assert t.mgr.get(lane).hold == "needs_human:captcha on www.glassdoor.com", lane
     await t.mgr.shutdown()

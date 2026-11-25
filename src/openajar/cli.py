@@ -24,6 +24,7 @@ from openajar.commands.features import mount_features, wire_feature_clis
 from openajar.commands.members import members_app
 from openajar.commands.node import config_app, node_app
 from openajar.commands.proxy import proxy_app
+from openajar.commands.solver import solver_app
 from openajar.core import catalog
 from openajar.core.config import NodeConfig
 from openajar.dev import cli as dev_cli
@@ -46,6 +47,7 @@ app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False,
                   help="openajar: a self-hosted computer for your agents.")
 app.add_typer(node_app, name="node")
 app.add_typer(proxy_app, name="proxy")
+app.add_typer(solver_app, name="solver")
 app.add_typer(lane_app, name="lane")
 app.add_typer(device_app, name="device")
 

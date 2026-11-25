@@ -114,3 +114,17 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 paths = ['''^tests/fixtures/pinned/verify\.json$''']
 regexes = ['''^ed25519:c945cbf2a5602002141e2fb9d17054d6$''', '''^c945cbf2a5602002141e2fb9d17054d6$''']
+
+# Not secrets: reCAPTCHA site keys, which every page that shows the widget prints in its HTML (Google's
+# own published test key, and the key of 2Captcha's public Enterprise demo page), and a made-up token
+# the fake solving service answers with.
+[[allowlists]]
+description = "published reCAPTCHA site keys and a made-up token in the solver tests"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^tests/unit/test_solver\.py$''', '''^tests/unit/test_solver_page_js\.py$''']
+regexes = [
+  '''^6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI$''',
+  '''^6Lf26sUnAAAAAIKLuWNYgRsFUfmI-3Lex3xT5N-s$''',
+  '''^03AFcWeA-enterprise$''',
+]

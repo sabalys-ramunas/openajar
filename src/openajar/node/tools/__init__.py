@@ -43,6 +43,7 @@ from openajar.node.tools.browser import (
     browser_snapshot,
     trace_read_back,
 )
+from openajar.node.tools.challenge import browser_challenge
 from openajar.node.tools.form_check import (
     check_form_unchanged,
     form_before_submit,
@@ -208,6 +209,8 @@ def tool_specs(runtime: Runtime) -> list[ToolSpec | PromptSpec]:
                  hidden_without="interaction"),
         ToolSpec(name="browser_wait", handler=with_handback(browser_wait), tags=browser,
                  hidden_without="interaction"),
+        ToolSpec(name="browser_challenge", handler=with_handback(browser_challenge), effect=Effect.DRAFT,
+                 tags=(*browser, "changes_state"), hidden_without="interaction"),
         ToolSpec(name="howto", handler=howto, lane_arg=None, tags=("node",), hidden_without="lanes"),
         *prompt_specs(runtime),
     ]

@@ -154,7 +154,8 @@ async def test_signed_action_links(env):
     with pytest.raises(InvalidRequest):
         svc.approvals.decide_by_link(ap, "deny", exp + 1, sig)
     with pytest.raises(InvalidRequest):
-        svc.approvals.decide_by_link(ap, "deny", exp, sig[:-2] + "AA")
+        # a changed first character: always another signature (a changed end could be the real one, 1 run in 4096)
+        svc.approvals.decide_by_link(ap, "deny", exp, ("B" if sig[0] == "A" else "A") + sig[1:])
     assert svc.approvals.decide_by_link(ap, "deny", exp, sig).decided_by == "owner:push"
     with pytest.raises(Conflict):
         svc.approvals.decide_by_link(ap, "deny", exp, sig)  # single use

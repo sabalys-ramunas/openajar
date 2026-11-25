@@ -28,6 +28,7 @@ USERNAME = "customer-acme-zone-isp"
 TOOLS = {
     "whoami", "browsers_list", "browser_open", "browser_close", "browser_view", "browser_claim", "browser_release", "browser_queue",
     "browser_navigate", "browser_snapshot", "browser_act", "browser_scroll", "browser_screenshot", "browser_wait",
+    "browser_challenge",
     "howto",
 }
 

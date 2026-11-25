@@ -256,7 +256,7 @@ async def test_real_http_sessions_per_token(config):
                 act = await client.call_tool("browser_act", {"on": "personal/reddit", "ref": "e1", "action": "click"})
                 assert act.is_error == (token == GRANT), act.content[0].text
         assert "browser_act" in names[TOKEN] and "browser_act" not in names[GRANT]
-        assert names[TOKEN] - names[GRANT] == {"browser_act"}
+        assert names[TOKEN] - names[GRANT] == {"browser_act", "browser_challenge"}  # the draft tools
         assert seen == [("ping", TOKEN), ("browser_snapshot", TOKEN), ("browser_act", TOKEN),
                         ("ping", GRANT), ("browser_snapshot", GRANT)]
 

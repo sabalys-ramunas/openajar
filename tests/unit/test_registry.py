@@ -406,6 +406,7 @@ NODE_CALLS = [
     ("browser_snapshot", {"on": "personal/reddit"}),
     ("browser_act", {"on": "personal/reddit", "ref": "e2", "action": "type", "text": "hello"}),
     ("browser_scroll", {"on": "personal/reddit"}),
+    ("browser_challenge", {"on": "personal/reddit"}),  # an account's browser, as any
     ("browser_screenshot", {"on": "personal/reddit"}),
     ("browser_wait", {"on": "personal/reddit", "for_text": "Posted", "wait_s": 1}),
     ("howto", {"topic": "waiting"}),
@@ -432,14 +433,14 @@ async def test_every_node_tool_goes_through_the_wrapper_and_authorizes(monkeypat
     by_tool = {ctx.spec.name: ctx.authorized for ctx in wrap.contexts}
     for name, args in NODE_CALLS:
         [auth] = by_tool[name]
-        assert auth["effect"] is (Effect.DRAFT if name == "browser_act" else Effect.READ), name
+        assert auth["effect"] is (Effect.DRAFT if name in ("browser_act", "browser_challenge") else Effect.READ), name
         assert auth.get("lane_id") == args.get("on"), name
         assert auth["summary"], name
     act = by_tool["browser_act"][0]
     assert act["summary"] == 'type e2 on personal/reddit with "hello"'
     assert act["content"] == {"ref": "e2", "action": "type", "text": "hello"}
     assert by_tool["browser_navigate"][0]["domain"] == "example.com"
-    assert manager.principals == ["agent"] * 6
+    assert manager.principals == ["agent"] * 7
 
 
 async def test_a_lane_manager_without_principal_kind_still_works():

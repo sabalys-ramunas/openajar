@@ -38,7 +38,7 @@ TERMINAL = frozenset({
     "environment_download",
 })  # not terminal_jobs: without `on` it already lists every run the caller may see (`openajar run --list`)
 BROWSER = frozenset({
-    "browser_act", "browser_console", "browser_dialog", "browser_navigate",
+    "browser_act", "browser_challenge", "browser_console", "browser_dialog", "browser_navigate",
     "browser_network", "browser_record", "browser_screenshot", "browser_scroll", "browser_snapshot", "browser_tabs",
     "browser_upload", "browser_wait", "browser_file_delete", "browser_file_get", "browser_files", "browser_file_put", "browser_claim",
     "browser_close", "browser_control", "browser_open", "browser_queue", "browser_release", "browser_request_control", "browser_view",

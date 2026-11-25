@@ -125,14 +125,9 @@ class VmKeys:
 
 async def attach(env_id: str, tunnel: Any, context: Any, started: Any) -> VmKeys | None:
     """After the browser started: when the helper runs (`started["keys"]`, the control script's answer), open
-    the relay to it and make it the lane's X keyboard and hand. Never raises: without it letters go in as text.
-    Whatever the helper does, this is an environment's browser on its machine, so its agent may click a check
-    (openajar.node.interaction.checks): an account's browser never comes here."""
+    the relay to it and make it the lane's X keyboard and hand. Never raises: without it letters go in as text."""
     from openajar.node import human
-    from openajar.node.interaction import checks
     from openajar.vms.ssh import ssh_base
-
-    checks.allow(context)
 
     await detach(env_id)
     keys = started.get("keys") if isinstance(started, dict) else None

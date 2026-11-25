@@ -7,6 +7,7 @@ re-exported here so the tests keep their import path.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from openajar.core.errors import RefNotFound
 from openajar.core.models import ActionKind, ActionResult, NavigateResult, Signal, SnapshotResult
@@ -85,3 +86,9 @@ class FakeInteraction:
 
     async def signal(self, page: FakePage) -> Signal:
         return self.signal_value
+
+    async def report(self, page: FakePage) -> Any:
+        """The page's signal with the rule that matched (none here), as the real interaction's report."""
+        from openajar.node.sites import SignalReport
+
+        return SignalReport(self.signal_value, None, page.url)

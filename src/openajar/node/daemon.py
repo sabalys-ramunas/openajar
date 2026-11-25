@@ -123,10 +123,12 @@ def node_runtime(config: NodeConfig, lanes: LaneManager, interaction: Interactio
     from openajar.audit.captures import after_commit
     from openajar.mcp.providers import ProviderCatalog
     from openajar.node.cardfacts import NodeCardFacts
+    from openajar.node.solver import settings as solver_settings
     from openajar.node.tools.browser import AFTER_COMMIT
 
     if interaction is not None:
         services["interaction"] = interaction
+    solver_settings.bind_home(config.home)  # the owner's solving services, if any (openajar.node.solver)
     runtime = Runtime(config=config, lanes=lanes, card_facts=NodeCardFacts(), **services)
     if not runtime.has(AFTER_COMMIT):
         runtime.register(AFTER_COMMIT, after_commit)

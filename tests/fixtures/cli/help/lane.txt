@@ -170,6 +170,8 @@
 │                      shared by a company's lanes.                            │
 │ proxy                Proxies that lanes and environments' browsers exit      │
 │                      through.                                                │
+│ solver               Your own captcha-solving service for every browser (off │
+│                      until you add one).                                     │
 │ env                  Terminal and service lanes: isolation, programs,        │
 │                      shells.                                                 │
 │ identity             Signed agent identity (Web Bot Auth) for browser lanes. │

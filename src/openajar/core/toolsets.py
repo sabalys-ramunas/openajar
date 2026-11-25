@@ -53,8 +53,10 @@ TOOLSETS: tuple[Toolset, ...] = (
         "browser_view", "browser_file_put", "browser_upload", "approval_confirm", "human_ask",
         "memory_context", "run_status",
     ), (), "the owner's signed-in browsers"),
-    Toolset("browser", "more for a browser: its inbox and downloads, scrolling a feed", (
-        "browser_files", "browser_file_get", "browser_file_delete", "browser_scroll",
+    # browser_challenge is here, not in core: the default list has no room for it (tests/unit/test_toolsets.py), and
+    # an agent needs it only on a page with a check, whose snapshot line names it when the owner set up a solver
+    Toolset("browser", "more for a browser: its inbox and downloads, scrolling a feed, getting past a site's check", (
+        "browser_files", "browser_file_get", "browser_file_delete", "browser_scroll", "browser_challenge",
     ), ("files",), "files, scroll"),
     Toolset("devtools", "why a page broke: its console messages and page errors, its requests and which "
             "failed, and one response's body", (

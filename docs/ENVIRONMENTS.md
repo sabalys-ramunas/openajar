@@ -673,7 +673,7 @@ machine on this computer), the browser starts as before, its clock UTC, and the 
 launch never waits more than a few seconds for this and never fails for it. Its languages stay `en-US`
 whatever `browser_language` says, and it gets no position, as with a proxy.
 
-A check the agent can click. In an environment's browser on its machine, a site's "are you human" checkbox
+A check the agent can click. In any browser, an environment's or an account's, a site's "are you human" checkbox
 (Cloudflare's, hCaptcha's, reCAPTCHA's "I'm not a robot") shows at the top of the snapshot as a checkbox with
 a ref, and the browser is not held for it:
 
@@ -687,14 +687,96 @@ node, and on Cloudflare's own challenge page the frame is out of Playwright's re
 events never arrive there. So openajar finds the checkbox the way a person does, in a picture of the check,
 and `browser_act(ref="c1", action="click")` clicks it with real input on the machine's screen (the keyboard
 helper's X hand): a glide to just beside the check, a short move onto the box, a press held as a hand holds
-it. Then it waits for the vendor's answer and says it: the check passed, an image puzzle appeared (openajar
-never solves one: tell your human and wait with `browser_wait_handback`), or it did not pass (do not click
-again in a loop). A check still at work by itself ("Verifying...") shows a line that says to wait instead of
-a ref. An account's browser never gets a check ref, and a challenge there still holds it for its human.
+it. A browser without the machine's hand (an account's browser on the node) clicks with the browser's own
+pointer, which reaches the widget frames but may not reach Cloudflare's full-page check; then the browser goes to
+the human as before. After the click it waits for the vendor's answer and says it: the check passed, an image
+puzzle appeared (the owner's solving service through `browser_challenge`, else the human), or it did not pass
+(do not click again in a loop). A click that did not get past the check holds the browser for the human, unless
+what it left is a puzzle the owner's solver could take. A check still at work by itself ("Verifying...") shows a
+line that says to wait instead of a ref. When a solving service the owner set up could take the check (below),
+the line names `browser_challenge` instead.
 
 It covers `browser = "vm"` only. An environment whose browser runs on the node (`browser = "node"`)
 exits through its machine as before: that browser's traffic is the tunnel's SOCKS proxy, which does
 not chain to another proxy, so `proxy add` says so on such a node.
+
+#### The owner's solving service
+
+For a widget a click does not pass (Cloudflare Turnstile, reCAPTCHA v2, reCAPTCHA Enterprise v2, hCaptcha on an
+ordinary page), the
+owner can plug in a captcha-solving service of their own. It is off until they add one. openajar ships no key
+and shares none. The service, and what it costs, are the owner's choice.
+
+```
+openajar solver add main 2captcha                                  # prompts for the key
+openajar solver add mine webhook --url https://solve.example.net/token
+openajar solver add mine command --command "python3 /path/solve.py"
+openajar solver list             # each service, and this month's solves with the spend they reported
+openajar solver test main        # the balance (free); --solve buys one token for Cloudflare's test widget
+openajar solver log              # every request: when, which browser, site, widget, service, result, cost
+openajar solver remove main      # the entry and its key; the log stays
+```
+
+- **Services.** Built in: `capsolver`, `2captcha` and `anticaptcha`, each by its documented task API (createTask,
+  then getTaskResult; getBalance for `test`), with the proxyless task types only. All three take Turnstile,
+  reCAPTCHA v2 and reCAPTCHA Enterprise v2 (the checkbox: CapSolver's `ReCaptchaV2EnterpriseTaskProxyLess`,
+  2Captcha's and Anti-Captcha's `RecaptchaV2EnterpriseTaskProxyless`, with the widget's `s` as
+  `enterprisePayload` when the page has one). reCAPTCHA is Enterprise when the page loads
+  `recaptcha/enterprise.js` or its frame is `/recaptcha/enterprise/anchor`. None of them lists hCaptcha any more (their documentation, read 2026-11-25), so hCaptcha goes
+  only to a hook. `--url` points a built-in at another address with the same API. `test --solve` asks for a token
+  for Cloudflare's test key that forces the interactive check (`3x00000000000000000000FF`) on 2Captcha's demo
+  page; 2Captcha refuses the always-pass key.
+- **Hooks.** `command` runs a command line on this computer, with no shell. `webhook` POSTs to an https URL
+  (http only to this computer itself), and follows no redirect. Both get the job as JSON:
+  `{"kind": "turnstile" | "recaptcha_v2" | "recaptcha_v2_enterprise" | "hcaptcha", "site_key": "...",
+  "page_url": "https://host/path", "action": ..., "cdata": ..., "invisible": false, "s": ...}` (`s`: reCAPTCHA
+  Enterprise's, when the page has one), and answer `{"token": "...", "cost": 0.002}` (`cost` in US
+  dollars, optional) or `{"error": "why"}`. The key, when there is one, is the command's environment variable
+  `OPENAJAR_SOLVER_KEY` (never its command line), or the webhook's `Authorization: Bearer` header.
+- **The log.** `solver/solves.jsonl` in the node's home gets one line after each request: the result, and the
+  cost the service reported (2Captcha and Anti-Captcha report one, CapSolver does not). It is only a log: a line
+  that cannot be written or read is a warning in the node's log, and nothing waits for it.
+
+The agent uses it through one tool, `browser_challenge(on)` in the `browser` toolset (`tools_more("browser")`,
+or `tools_call`). Its steps, in order, each only when the one before did not get past the check:
+
+1. **wait**: up to 20 s for Cloudflare's check, 5 s for the others, for it to pass by itself;
+2. **click**: one click on its checkbox, as above, unless one was made on that page in the last minute;
+3. **solver**: the widget's site key and kind are read from the page's own document (its element's
+   `data-sitekey`, else the address of the vendor's frame directly in the page), the first of the owner's
+   services that takes that kind is asked for a token, and, when the page is still at the address the token was
+   asked for, the token goes where the widget puts it (`cf-turnstile-response`, `g-recaptcha-response`,
+   `h-captcha-response`), then the page's own callback is called when the page named one (`data-callback`, or
+   reCAPTCHA's client table). The site checks the token when the form is sent. reCAPTCHA leaves an image puzzle
+   that the click opened over the page, where it blocks the next click: openajar clicks once on the puzzle's own
+   transparent overlay, at a point where that overlay is what the page's hit test answers, which closes it as a
+   click outside it does. When there is no such point, or it stays open, nothing else is clicked and the step
+   says so. hCaptcha's challenge is left as it is;
+4. **human**: nothing got it past, so the browser is held for the human, and the agent waits with
+   `browser_wait_handback`. A call that ends early on a page with a check (its 240 s deadline, a cancel, an
+   error) holds the browser the same way.
+
+The result's `ended_by` is `nothing`, `wait`, `click`, `solver` or `human`, and `steps` says what each step
+did, the service and its cost included. An image puzzle in an environment's browser is not held at once when a
+service of the owner's could take it (a widget is found in the page's own document and a service takes its
+kind), so the agent can call the tool, and the snapshot says so. Otherwise it is held for you at once, as without
+a solver.
+
+It works the same in every browser, an environment's or an account's. What it does not send, because no token
+from a service works there:
+
+- **Cloudflare's full-page check** ("Just a moment..."): its answer is a cookie tied to the browser and its
+  exit address, so a service would need the proxy's credentials, and openajar never sends a proxy or its
+  credentials anywhere. It is recognised by its signal and by its own markers (`#challenge-form`,
+  `#challenge-stage`, the orchestrate script).
+- **A widget inside another site's frame.** Its key would go under this page's address, and its token could not
+  reach this page.
+- **A widget it finds no site key for.**
+
+What the service learns: the page's scheme, host and path (never its query or fragment), the widget's site
+key, and for Turnstile its action and cData. The request goes from the node (with openajar local, this
+computer), not from the machine. The key is stored in `secrets/solvers.json` (600) and is in no tool result,
+log, trace or the solve log. [THREAT-MODEL.md](THREAT-MODEL.md#the-owners-solving-service) has the rest.
 
 #### This computer's own connection
 

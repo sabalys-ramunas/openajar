@@ -6,6 +6,44 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-26
+
+This version adds your own captcha-solving service (`openajar solver`, off until you add one) and the tool
+`browser_challenge`, and it changes what happens at a site's "are you human" check in an account's browser:
+it now gets the checkbox's ref, the one click and `browser_challenge`, where 0.6.1 held it for you.
+
+### Added
+
+- Your own captcha-solving service for every browser, off until you add one: `openajar solver add
+  <name> <provider> [key] [--url] [--command]`, with `solver list`, `solver test`, `solver remove` and
+  `solver log`. Built in: CapSolver, 2Captcha and Anti-Captcha by their documented task APIs (Turnstile,
+  reCAPTCHA v2 and reCAPTCHA Enterprise v2, proxyless task types only); a `command` or `webhook` hook plugs in
+  any other service or your own script, hCaptcha included. The key stays in `secrets/solvers.json` (600) on this computer and is in no tool
+  result, log or trace. openajar ships no key and shares none. The service and its cost are your choice.
+- `browser_challenge` (toolset `browser`): one explicit call that gets a browser past a site's
+  check in this order: wait for it to pass by itself, the browser's own click, your solver, then you. When
+  nothing got it past, or the call ends early on a page with a check (its deadline, a cancel, an error), the
+  browser is held for you and the agent waits with `browser_wait_handback`. `ended_by` says which step ended
+  it and `steps` what each did. It runs in any browser, an account's included. Its solver step does not
+  send Cloudflare's full-page check or a widget inside another site's frame (no token from a service works
+  there), and the token goes in only while the page is at the address it was asked for. A
+  reCAPTCHA image puzzle still open over the page after the token went in is closed with one click on its own
+  overlay, so the form's button can be clicked. Every request is a line in `solver/solves.jsonl` with the cost
+  the service reported.
+
+### Changed
+
+- An account's browser now gets every check feature an environment's browser has: the checkbox's ref in the
+  snapshot, the one click with `browser_act`, and `browser_challenge`, where 0.6.1 held it for you at any check.
+  A browser without the machine's hand (an account's browser on the node) clicks with the browser's own pointer,
+  which may not reach Cloudflare's full-page check; then it goes to you as before. A check on your own account is
+  now clicked and answered without you, and a site that sees that may act on the account.
+- A `browser_act` click on a check that does not get past it now holds the browser for you, so
+  `browser_wait_handback` waits for you (unless what it left is a puzzle your solver could take).
+- In any browser, when a service of yours could take the check (a widget is found in the page's
+  own document and a service takes its kind), the snapshot's line for it names `browser_challenge`, and an
+  hCaptcha or reCAPTCHA image puzzle is not held at once, so the agent can call it. Otherwise nothing changes.
+
 ## [0.6.1] - 2026-11-25
 
 This version adds one reserved label for `browser_proxies` (`this-computer`) and changes what an agent

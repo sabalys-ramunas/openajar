@@ -1,6 +1,5 @@
-"""A site's "are you human" checkbox in an environment's browser (openajar.node.interaction.checks): a ref in the
-snapshot, one click by a hand on the machine's screen (or the browser's pointer), the vendor's answer said
-plainly, and never on an account's browser."""
+"""A site's "are you human" checkbox in any browser (openajar.node.interaction.checks): a ref in the snapshot, one
+click by a hand on the machine's screen (or the browser's pointer), and the vendor's answer said plainly."""
 
 from __future__ import annotations
 
@@ -136,10 +135,8 @@ def test_check_refs_are_refs():
         normalize_ref("cx")
 
 
-async def test_the_snapshot_shows_the_check_with_a_ref_only_where_the_agent_may_click_it():
-    page = Page()
-    assert await checks.check_lines(page, CF_PAGE) == []  # an account's browser: never
-    checks.allow(page.context)
+async def test_the_snapshot_shows_the_check_with_a_ref_in_any_browser():
+    page = Page()  # an account's browser as much as an environment's
     assert await checks.check_lines(page, CF_PAGE) == [
         '- checkbox "Verify you are human (Cloudflare check)" [ref=c1] [cursor=pointer]',
         "- text: a site's check on this browser. Click c1 once (browser_act); an image puzzle after it is for your human"]
@@ -149,7 +146,6 @@ async def test_the_snapshot_shows_the_check_with_a_ref_only_where_the_agent_may_
 
 async def test_a_check_at_work_by_itself_gets_no_ref_but_a_word_to_wait():
     page = Page()
-    checks.allow(page.context)
     page.picture = widget_png(at=None)  # "Verifying...": a spinner, no checkbox
     lines = await checks.check_lines(page, CF_PAGE)
     assert lines == [("- text: a Cloudflare check is at work on this browser by itself (no checkbox yet): wait a "
@@ -160,7 +156,6 @@ async def test_a_check_at_work_by_itself_gets_no_ref_but_a_word_to_wait():
 
 async def test_the_click_is_a_hand_on_the_machines_screen_and_the_answer_is_said():
     page = Page()
-    checks.allow(page.context)
     hand = Hand(page)
     human.X_POINTERS[page.context] = hand
     await checks.check_lines(page, CF_PAGE)
@@ -176,7 +171,6 @@ async def test_the_click_is_a_hand_on_the_machines_screen_and_the_answer_is_said
 
 async def test_a_window_that_is_not_where_it_says_is_corrected_on_the_way():
     page = Page(window_off=(6, -11))
-    checks.allow(page.context)
     hand = Hand(page)
     human.X_POINTERS[page.context] = hand
     await checks.check_lines(page, CF_PAGE)
@@ -186,7 +180,6 @@ async def test_a_window_that_is_not_where_it_says_is_corrected_on_the_way():
 
 async def test_without_the_machines_hand_the_browsers_pointer_clicks():
     page = Page()
-    checks.allow(page.context)
     human.X_POINTERS.pop(page.context, None)
     await checks.check_lines(page, CF_PAGE)
     result = await checks.click_check(Ix(CF_PAGE, OK), page, "c1", ActionKind.CLICK)
@@ -196,7 +189,6 @@ async def test_without_the_machines_hand_the_browsers_pointer_clicks():
 
 async def test_an_image_puzzle_is_said_plainly_and_goes_to_the_human():
     page = Page()
-    checks.allow(page.context)
     human.X_POINTERS[page.context] = Hand(page)
     await checks.check_lines(page, CF_PAGE)
     puzzle = await checks.click_check(Ix(CF_PAGE, PUZZLE), page, "c1", ActionKind.CLICK)
@@ -207,18 +199,14 @@ async def test_an_image_puzzle_is_said_plainly_and_goes_to_the_human():
 async def test_a_check_that_stays_says_so(monkeypatch):
     monkeypatch.setattr(checks, "OUTCOME_S", 0.05)
     page = Page()
-    checks.allow(page.context)
     human.X_POINTERS[page.context] = Hand(page)
     await checks.check_lines(page, CF_PAGE)
     result = await checks.click_check(Ix(CF_PAGE), page, "c1", ActionKind.CLICK)
     assert not result.ok and "did not pass" in result.detail and "Do not click it again" in result.detail
 
 
-async def test_only_a_click_on_a_check_ref_the_page_shows_where_it_is_allowed():
+async def test_only_a_click_on_a_check_ref_the_page_shows():
     page = Page()
-    with pytest.raises(InvalidRequest, match="for its human"):
-        await checks.click_check(Ix(CF_PAGE), page, "c1", ActionKind.CLICK)
-    checks.allow(page.context)
     with pytest.raises(InvalidRequest, match="only action"):
         await checks.click_check(Ix(CF_PAGE), page, "c1", ActionKind.TYPE)
     with pytest.raises(RefNotFound):
