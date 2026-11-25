@@ -673,7 +673,7 @@ machine on this computer), the browser starts as before, its clock UTC, and the 
 launch never waits more than a few seconds for this and never fails for it. Its languages stay `en-US`
 whatever `browser_language` says, and it gets no position, as with a proxy.
 
-A check the agent can click. In an environment's browser on its machine, a site's "are you human" checkbox
+A check the agent can click. In any browser, an environment's or an account's, a site's "are you human" checkbox
 (Cloudflare's, hCaptcha's, reCAPTCHA's "I'm not a robot") shows at the top of the snapshot as a checkbox with
 a ref, and the browser is not held for it:
 
@@ -687,12 +687,14 @@ node, and on Cloudflare's own challenge page the frame is out of Playwright's re
 events never arrive there. So openajar finds the checkbox the way a person does, in a picture of the check,
 and `browser_act(ref="c1", action="click")` clicks it with real input on the machine's screen (the keyboard
 helper's X hand): a glide to just beside the check, a short move onto the box, a press held as a hand holds
-it. Then it waits for the vendor's answer and says it: the check passed, an image puzzle appeared (openajar
-never solves one: tell your human and wait with `browser_wait_handback`), or it did not pass (do not click
-again in a loop). A check still at work by itself ("Verifying...") shows a line that says to wait instead of
-a ref. An account's browser never gets a check ref, and a challenge there still holds it for its human.
-When a solving service the owner set up could take the check (below), the line names `browser_challenge`
-instead.
+it. A browser without the machine's hand (an account's browser on the node) clicks with the browser's own
+pointer, which reaches the widget frames but may not reach Cloudflare's full-page check; then the browser goes to
+the human as before. After the click it waits for the vendor's answer and says it: the check passed, an image
+puzzle appeared (the owner's solving service through `browser_challenge`, else the human), or it did not pass
+(do not click again in a loop). A click that did not get past the check holds the browser for the human, unless
+what it left is a puzzle the owner's solver could take. A check still at work by itself ("Verifying...") shows a
+line that says to wait instead of a ref. When a solving service the owner set up could take the check (below),
+the line names `browser_challenge` instead.
 
 It covers `browser = "vm"` only. An environment whose browser runs on the node (`browser = "node"`)
 exits through its machine as before: that browser's traffic is the tunnel's SOCKS proxy, which does
@@ -755,11 +757,9 @@ service of the owner's could take it (a widget is found in the page's own docume
 kind), so the agent can call the tool, and the snapshot says so. Otherwise it is held for you at once, as without
 a solver.
 
-What it does not send, because no token from a service works there:
+It works the same in every browser, an environment's or an account's. What it does not send, because no token
+from a service works there:
 
-- **An account's browser.** The tool refuses one (`check_for_human`), and under it the same boundary as the
-  click (`checks.allowed`: an environment's browser on its machine). A browser that runs on the node
-  (`browser = "node"`) is refused too.
 - **Cloudflare's full-page check** ("Just a moment..."): its answer is a cookie tied to the browser and its
   exit address, so a service would need the proxy's credentials, and openajar never sends a proxy or its
   credentials anywhere. It is recognised by its signal and by its own markers (`#challenge-form`,

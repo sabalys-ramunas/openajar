@@ -74,12 +74,3 @@ async def test_the_hand_glides_and_presses_on_the_machine_in_one_line_each():
     assert await kb.press_button(96.2) is True
     assert proc.stdin.sent == [b"glide 100 201 831 584 413\n", b"press 96\n"]
     assert await kb.glide((831, 584), (835, 580), 120) is False  # the machine could not: the caller falls back
-
-
-async def test_every_environment_browser_on_its_machine_may_click_a_check():
-    from openajar.node.interaction import checks
-
-    context = object.__new__(type("Ctx", (), {}))
-    assert not checks.allowed(types.SimpleNamespace(context=context))
-    assert await vmkeys.attach("e1", types.SimpleNamespace(remote=None), context, {}) is None
-    assert checks.allowed(types.SimpleNamespace(context=context))  # with or without the helper

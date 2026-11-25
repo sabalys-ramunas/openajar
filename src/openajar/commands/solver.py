@@ -1,4 +1,4 @@
-"""`openajar solver`: the owner's own solving service for a site's "are you human" widget in an environment's browser
+"""`openajar solver`: the owner's own solving service for a site's "are you human" widget in any browser
 (openajar.node.solver). Off until the owner adds one; openajar ships no key and shares none."""
 
 from __future__ import annotations
@@ -15,11 +15,11 @@ from openajar.core.config import NodeConfig
 from openajar.node.solver import ledger, settings
 from openajar.node.solver.settings import BUILT_IN, NAME_RE, PROVIDERS, SolverEntry
 
-solver_app = typer.Typer(no_args_is_help=True, help="Your own captcha-solving service for environments' browsers "
-                                                    "(off until you add one).")
+solver_app = typer.Typer(no_args_is_help=True, help="Your own captcha-solving service for every browser (off until "
+                                                    "you add one).")
 
-NOTICE = ("The service and what it costs are your choice. openajar asks it only from environments' browsers, never "
-          "from an account's browser, when a check did not pass by itself or with one click.")
+NOTICE = ("The service and what it costs are your choice. openajar asks it only when a check did not pass by itself "
+          "or with one click, in any browser, your accounts' included.")
 
 
 def _entries(cfg: NodeConfig) -> list[SolverEntry]:
@@ -176,7 +176,7 @@ def solver_log(
     = None,
     limit: Annotated[int, typer.Option("--limit", help="The newest this many lines.")] = 50,
 ) -> None:
-    """The log of every request to a service: when, which environment's browser, the site, the widget, the service,
+    """The log of every request to a service: when, which browser, the site, the widget, the service,
     the result and the cost it reported. Never a key or a token."""
     from openajar.node.solver import services
 

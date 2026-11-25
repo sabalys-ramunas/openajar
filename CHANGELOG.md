@@ -8,7 +8,7 @@ All notable changes to openajar are recorded here. The format follows
 
 ### Added
 
-- Your own captcha-solving service for environments' browsers, off until you add one: `openajar solver add
+- Your own captcha-solving service for every browser, off until you add one: `openajar solver add
   <name> <provider> [key] [--url] [--command]`, with `solver list`, `solver test`, `solver remove` and
   `solver log`. Built in: CapSolver, 2Captcha and Anti-Captcha by their documented task APIs (Turnstile and
   reCAPTCHA v2, proxyless task types only); a `command` or `webhook` hook plugs in any other service or your own
@@ -18,7 +18,7 @@ All notable changes to openajar are recorded here. The format follows
   check in this order: wait for it to pass by itself, the browser's own click, your solver, then you. When
   nothing got it past, or the call ends early on a page with a check (its deadline, a cancel, an error), the
   browser is held for you and the agent waits with `browser_wait_handback`. `ended_by` says which step ended
-  it and `steps` what each did. It refuses an account's browser (`check_for_human`). Its solver step does not
+  it and `steps` what each did. It runs in any browser, an account's included. Its solver step does not
   send Cloudflare's full-page check, reCAPTCHA Enterprise or a widget inside another site's frame (no token from
   a service works there), and the token goes in only while the page is at the address it was asked for. A
   reCAPTCHA image puzzle still open over the page after the token went in is closed with one click on its own
@@ -27,7 +27,14 @@ All notable changes to openajar are recorded here. The format follows
 
 ### Changed
 
-- In an environment's browser, when a service of yours could take the check (a widget is found in the page's
+- An account's browser now gets every check feature an environment's browser has: the checkbox's ref in the
+  snapshot, the one click with `browser_act`, and `browser_challenge`, where 0.6.1 held it for you at any check.
+  A browser without the machine's hand (an account's browser on the node) clicks with the browser's own pointer,
+  which may not reach Cloudflare's full-page check; then it goes to you as before. A check on your own account is
+  now clicked and answered without you, and a site that sees that may act on the account.
+- A `browser_act` click on a check that does not get past it now holds the browser for you, so
+  `browser_wait_handback` waits for you (unless what it left is a puzzle your solver could take).
+- In any browser, when a service of yours could take the check (a widget is found in the page's
   own document and a service takes its kind), the snapshot's line for it names `browser_challenge`, and an
   hCaptcha or reCAPTCHA image puzzle is not held at once, so the agent can call it. Otherwise nothing changes.
 

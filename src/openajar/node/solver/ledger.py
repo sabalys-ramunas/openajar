@@ -1,5 +1,5 @@
 """The log of solves: one JSON line per request to a service, in solver/solves.jsonl in the node's home, shown by
-`openajar solver log` and summed by `openajar solver list`. Each line: when, the environment's browser, the site
+`openajar solver log` and summed by `openajar solver list`. Each line: when, the browser, the site
 (its host only), the widget's kind, the service (the entry's name and provider), the result, the cost the service
 reported (none when it reports none), and a short note. Never the key, the token, the page's path or its query.
 

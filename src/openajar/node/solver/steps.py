@@ -10,7 +10,7 @@
 4. the human: nothing got it past, so the browser is handed to the person (the tool holds it for them).
 
 The result says which step ended it. Every request to a service is a line in the log (openajar.node.solver.ledger).
-Only where `checks.allowed`: an environment's browser on its machine. An account's browser never gets here.
+The same in every browser, an environment's or an account's.
 
 `could_take` answers, for the signal watch (openajar.node.lanes.watch), whether a service of the owner's could take
 the check on this page; only then is an image puzzle left unheld for browser_challenge.
@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from openajar.core.errors import CheckForHuman
 from openajar.core.models import Signal
 from openajar.node.human import quietly
 from openajar.node.interaction import autocheck, checks
@@ -69,10 +68,7 @@ def is_check(report: SignalReport | Any) -> bool:
 
 async def get_past(ix: Any, page: Page, *, browser: str, home: Path | None,
                    progress: Progress | None = None) -> Outcome:
-    """The steps above, on `page` of the environment's browser `browser` (its lane id, for the record)."""
-    if not checks.allowed(page):
-        raise CheckForHuman("this browser's checks are for its human: browser_challenge works only on an "
-                            "environment's own browser on its machine")
+    """The steps above, on `page` of the browser `browser` (its lane id, for the log)."""
     report = await ix.report(page)
     if not is_check(report):
         return Outcome(NOTHING, True, report, ["there is no check on this page now"])

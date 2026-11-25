@@ -473,7 +473,7 @@ off until the owner runs `openajar solver add`; openajar ships no key and shares
 | Where the key goes | only to the owner's own service: in the request body to a built-in (`clientKey`, over https), the `Authorization` header to a webhook (https, or http to this computer itself, no redirects followed), or the environment of the owner's own command (never its command line). Never to an environment's machine, a page, a tool result, a log, a trace or the solve log. Every message from a service or a hook (an error answer, a hook's error or stderr) is redacted with the key as a whole message, and only then cut to its first 300 characters (a stderr tail to its last 300), so no part of the key is left at a cut |
 | Who calls the service | the node (with openajar local, this computer), never the machine. The machine and its root agent never see the key or the request |
 | What the service learns | a new third party in the owner's work: the page's scheme, host and path (never its query or fragment), the widget's site key and kind, Turnstile's action and cData, the time, and the node's address. Never a proxy, its address or its credentials (only proxyless task types are used), and never the page's cookies |
-| Which browsers | an environment's browser on its machine only: the tool refuses a lane that is not an environment's (`check_for_human`), and the steps refuse a page whose context the environment's launch did not allow (`checks.allowed`, the same boundary as the 0.6.1 click). An account's browser is held for any check, solver or not |
+| Which browsers | every browser the caller may use, an environment's and an account's alike: the checkbox's ref, the one click and `browser_challenge` are the same in both. What goes to the human is the same in both too: a check nothing got past (the browser is held) |
 | Which pages | any site. Not sent, because no token from a service works there: Cloudflare's full-page check (by its signal and by its own markers: `#challenge-form`, `#challenge-stage`, the orchestrate script), a widget inside another site's frame (only one in the page's own document, so the key sent is the page's own), and reCAPTCHA Enterprise (its script or frame on the page). The token goes in only while the page is at the address it was asked for, which the script that writes it checks in the same step |
 | What is kept | `solver/solves.jsonl` in the node's home (600): one line per request with when, which browser, the host, the widget's kind, the service, the result and the cost the service reported. Never the key, the token, the path or the query. It is a log only: when it cannot be written or read, the node logs a warning and the solve goes on |
 
@@ -482,7 +482,12 @@ What is not bounded, and what this does not stop:
 - **Spend.** openajar sets no limit on what a service may cost. An agent that calls `browser_challenge` again and
   again spends the owner's balance at the service, one solve per call, until the balance or the service's own
   limits stop it. `solver log` and `solver list` show what was asked and what the services reported.
-- **Which sites.** Any page an environment's browser opens can have a widget answered, and the page chooses the
+- **A check on a person's own account.** Since this version an account's browser is no longer held for a checkbox
+  check, and with a solving service its puzzles are answered too: a check on the owner's own signed-in account is
+  clicked and answered without the owner. A site that sees it (an automated click, a solved token, many checks
+  in a row) may act on that account: ask for more checks, lock it, or close it. Before this version such a check
+  held the browser and went to the owner.
+- **Which sites.** Any page a browser opens can have a widget answered, and the page chooses the
   site key it shows: a hostile page can have the owner's service answer another site's widget and read the token
   through its own callback. Sign-up, login and payment pages are not told apart.
 - **The token in the page.** It has to be there: the page sends it to the site with its form. Anything on the

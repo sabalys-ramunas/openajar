@@ -143,7 +143,7 @@ Argument names removed from tools that kept their name (`wait_s` is how long a c
 | [`brain_use`](#brain_use) | brains | brain | Make a brain the default for a workspace (or for the node when no workspace is given) |
 | [`brains_list`](#brains_list) | brains | read | Brains on this node: kind (subscription, local, metered), state (ready, cooling_down, needs_auth, down) with the reason, seats in use, and how full the usage window is |
 | [`browser_act`](#browser_act) | core | draft | Act on an element by its ref from your latest snapshot, with human input |
-| [`browser_challenge`](#browser_challenge) | browser | draft | Get your environment's browser past a site's "are you human" check, in this order: wait for it to pass by itself, click its checkbox once, ask the owner's solving service (only when the owner set one up), else hand the browser to your human |
+| [`browser_challenge`](#browser_challenge) | browser | draft | Get a browser past a site's "are you human" check, in this order: wait for it to pass by itself, click its checkbox once, ask the owner's solving service (only when the owner set one up), else hand the browser to your human |
 | [`browser_check`](#browser_check) | control | read | Is this browser safe to use right now? A checklist: proxy alive, exit IP and its location against the browser's pinned timezone and locale, WebRTC and DNS leaks, profile and fingerprint pin, still signed in (from the session cookies already in the profile), the expected account, and any hold or quarantine with who can clear it |
 | [`browser_claim`](#browser_claim) | accounts | read | Claim an account browser for a job of several acting calls (a post, a login, a form), so no other agent, flow or brain acts on it in between |
 | [`browser_close`](#browser_close) | accounts | read | Send an account browser to cold: close it gracefully (cookies and logins stay on disk), to free a warm slot when you are done with it for a while |
@@ -508,7 +508,7 @@ Act on an element by its ref from your latest snapshot, with human input. Action
 
 Toolset: `browser`. Effect: `draft`. Needs the `interaction` service.
 
-Get your environment's browser past a site's "are you human" check, in this order: wait for it to pass by itself, click its checkbox once, ask the owner's solving service (only when the owner set one up), else hand the browser to your human. `ended_by` says which step ended it (nothing, wait, click, solver or human) and `steps` what each did. Call it once per check, never in a loop. Effect: draft.
+Get a browser past a site's "are you human" check, in this order: wait for it to pass by itself, click its checkbox once, ask the owner's solving service (only when the owner set one up), else hand the browser to your human. `ended_by` says which step ended it (nothing, wait, click, solver or human) and `steps` what each did. Call it once per check, never in a loop. Effect: draft.
 
 | Argument | Type | Required | Description |
 |---|---|---|---|

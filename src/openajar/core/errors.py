@@ -107,12 +107,6 @@ class HumanInControl(OpenajarError):
     code = "human_in_control"
 
 
-class CheckForHuman(OpenajarError):
-    """browser_challenge was called where a site's check is for the human only: an account's browser (held for any
-    check, as always), or a browser that is not an environment's own on its machine. Nothing was clicked or sent."""
-    code = "check_for_human"
-
-
 class AgentPaused(OpenajarError):
     """Agents are held off this lane: a person stopped them, or openajar paused it itself after a
     challenge or a rate limit. The message says which (openajar.core.pauses)."""

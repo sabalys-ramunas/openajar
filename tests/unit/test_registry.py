@@ -406,6 +406,7 @@ NODE_CALLS = [
     ("browser_snapshot", {"on": "personal/reddit"}),
     ("browser_act", {"on": "personal/reddit", "ref": "e2", "action": "type", "text": "hello"}),
     ("browser_scroll", {"on": "personal/reddit"}),
+    ("browser_challenge", {"on": "personal/reddit"}),  # an account's browser, as any
     ("browser_screenshot", {"on": "personal/reddit"}),
     ("browser_wait", {"on": "personal/reddit", "for_text": "Posted", "wait_s": 1}),
     ("howto", {"topic": "waiting"}),
@@ -423,29 +424,23 @@ async def test_every_node_tool_goes_through_the_wrapper_and_authorizes(monkeypat
     await manager.create(LaneSpec(id="personal/reddit"))
     wrap = RecordingWrap()
     server = build_mcp(node_runtime(NodeConfig(), manager, FakeInteraction()), [node_tool_specs], wrap)
-    # browser_challenge is built too, and refuses an account's browser before it asks the policy for anything
-    assert sorted(wrap.built) == sorted([*(name for name, _ in NODE_CALLS), "browser_challenge"])
+    assert sorted(wrap.built) == sorted(name for name, _ in NODE_CALLS)
     async with Client(server) as client:
         for name, args in NODE_CALLS:
             result = await client.call_tool(name, args)
             assert not result.is_error, (name, text_of(result))
-        refused = await client.call_tool("browser_challenge", {"on": "personal/reddit"})
-        assert refused.is_error and "check_for_human" in text_of(refused)
-    wrap.calls = [c for c in wrap.calls if c[0] != "browser_challenge"]
-    assert [ctx.authorized for ctx in wrap.contexts if ctx.spec.name == "browser_challenge"] == [[]]
-    wrap.contexts = [ctx for ctx in wrap.contexts if ctx.spec.name != "browser_challenge"]
     assert [name for name, _, _ in wrap.calls] == [name for name, _ in NODE_CALLS]
     by_tool = {ctx.spec.name: ctx.authorized for ctx in wrap.contexts}
     for name, args in NODE_CALLS:
         [auth] = by_tool[name]
-        assert auth["effect"] is (Effect.DRAFT if name == "browser_act" else Effect.READ), name
+        assert auth["effect"] is (Effect.DRAFT if name in ("browser_act", "browser_challenge") else Effect.READ), name
         assert auth.get("lane_id") == args.get("on"), name
         assert auth["summary"], name
     act = by_tool["browser_act"][0]
     assert act["summary"] == 'type e2 on personal/reddit with "hello"'
     assert act["content"] == {"ref": "e2", "action": "type", "text": "hello"}
     assert by_tool["browser_navigate"][0]["domain"] == "example.com"
-    assert manager.principals == ["agent"] * 6
+    assert manager.principals == ["agent"] * 7
 
 
 async def test_a_lane_manager_without_principal_kind_still_works():

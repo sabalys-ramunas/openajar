@@ -5,7 +5,7 @@ service (openajar.node.solver.services).
 
 No file, or an empty one, is the default: no solver, and openajar solves nothing. There is no bundled or shared key.
 Each entry is one service: its provider, its key, and its address or command when it needs one. It answers for any
-site an environment's browser is on.
+site a browser is on.
 """
 
 from __future__ import annotations

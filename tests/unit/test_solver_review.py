@@ -90,9 +90,7 @@ def quick(monkeypatch):
 
 
 def env_page(**kw):
-    p = Page(**kw)
-    checks.allow(p.context)
-    return p
+    return Page(**kw)
 
 
 def entry(home, *, provider="command"):

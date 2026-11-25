@@ -1,9 +1,8 @@
-"""browser_challenge: one explicit call to get an environment's browser past a site's "are you human" check, in the
-order openajar.node.solver.steps gives (wait, click, the owner's solver, the human). In the `browser` toolset, not
-the default list: an agent learns of it from the snapshot's line for a check, when the owner set up a solver.
+"""browser_challenge: one explicit call to get a browser (an environment's or an account's) past a site's "are you
+human" check, in the order openajar.node.solver.steps gives (wait, click, the owner's solver, the human). In the
+`browser` toolset, not the default list: an agent learns of it from the snapshot's line for a check, when the owner
+set up a solver.
 
-An account's browser never gets here: the handler refuses a lane that is not an environment's (check_for_human),
-and the steps refuse a page whose context is not an environment's browser on its machine (checks.allowed).
 When nothing got the browser past the check, or the call ended early on a page that showed one (its deadline, a
 cancel, an error), the handler holds it for the human, as any check on a browser without a solver does, so
 browser_wait_handback waits for the person.
@@ -16,7 +15,6 @@ import logging
 from typing import Any
 from urllib.parse import urlsplit
 
-from openajar.core.errors import CheckForHuman
 from openajar.core.models import Effect, Signal
 from openajar.core.tools import ToolContext
 from openajar.node.tools.guarding import guarded, with_blocks
@@ -25,8 +23,6 @@ from openajar.node.tools.session import driven_session, label_page_text
 
 log = logging.getLogger(__name__)
 
-NOT_HERE = ("this browser's checks are for its human: browser_challenge works only on an environment's own browser "
-            "on its machine")
 NEXT = {  # by openajar.node.solver.steps' names for the step that ended it
     "nothing": "Go on with your task.",
     "wait": "Go on with your task.",
@@ -39,28 +35,22 @@ NEXT = {  # by openajar.node.solver.steps' names for the step that ended it
 
 
 async def browser_challenge(ctx: ToolContext, *, on: str) -> dict[str, Any]:
-    """Get your environment's browser past a site's "are you human" check, in this order: wait for it to pass by
+    """Get a browser past a site's "are you human" check, in this order: wait for it to pass by
     itself, click its checkbox once, ask the owner's solving service (only when the owner set one up), else hand
     the browser to your human. `ended_by` says which step ended it (nothing, wait, click,
     solver or human) and `steps` what each did. Call it once per check, never in a loop. Effect: draft.
     """
-    from openajar.node.interaction import checks  # the browser stack, only when it runs
-    from openajar.node.solver import steps
+    from openajar.node.solver import steps  # the browser stack, only when it runs
 
     on = lane_id(on)
-    if not on.startswith("env/"):
-        raise CheckForHuman(NOT_HERE)
     await ctx.authorize(Effect.DRAFT, lane_id=on, summary=f"get past a site's check on {on}", content={})
     interaction = ctx.runtime.interaction
     home = getattr(getattr(ctx.runtime, "config", None), "home", None)
     progress = steps.Progress()
     page = None
     try:
-        async with driven_session(ctx, on) as page:
-            if not checks.allowed(page):
-                raise CheckForHuman(NOT_HERE)
-            async with guarded(ctx, on, page) as blocks:
-                outcome = await steps.get_past(interaction, page, browser=on, home=home, progress=progress)
+        async with driven_session(ctx, on) as page, guarded(ctx, on, page) as blocks:
+            outcome = await steps.get_past(interaction, page, browser=on, home=home, progress=progress)
     except BaseException:
         if progress.saw_check:  # cut off (its deadline, a cancel) or failed on a page with a check: the human's
             await asyncio.shield(_hold(ctx, on, page))

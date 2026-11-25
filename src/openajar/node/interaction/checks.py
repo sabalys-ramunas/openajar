@@ -1,5 +1,5 @@
-"""A site's "are you human" check that asks for one click on a checkbox, in an environment's browser: the snapshot
-shows it with a ref, and browser_act clicks it as a person does.
+"""A site's "are you human" check that asks for one click on a checkbox, in any browser (an environment's or an
+account's: the same features in both): the snapshot shows it with a ref, and browser_act clicks it as a person does.
 
 The checks: Cloudflare's (its "Just a moment..." page and its Turnstile widget), hCaptcha's checkbox and
 reCAPTCHA's "I'm not a robot". Each sits in a cross-origin frame, Cloudflare's also in a closed shadow root, so
@@ -10,17 +10,14 @@ widget on an ordinary page is not. What a person sees is the same on both, so th
 - where: the frame's box when Playwright reaches it, else the box around the widget's token field in the page
   (Turnstile keeps that field outside its shadow root);
 - the checkbox in it: a picture of that box, and the square in it (openajar.node.checkbox);
-- the click: real input on the machine's X screen (human.x_pointer, the environment's helper): a hand's glide
+- the click: real input on the machine's X screen (human.x_pointer, an environment's helper): a hand's glide
   from where the page last saw the pointer to a spot just beside the check (where the page says where it saw
-  it), a short move onto the checkbox and a press; without that helper, Playwright's pointer (humanize's
-  curve) and press, which reach the widget frames but not Cloudflare's challenge page.
+  it), a short move onto the checkbox and a press; a browser without that helper (an account's browser on the
+  node) uses Playwright's pointer (humanize's curve) and press, which reach the widget frames but not
+  Cloudflare's challenge page, so there that check goes to the human.
 
-After the click it waits for the vendor's answer and says it plainly: passed, an image puzzle (never solved
-here: the human takes the browser), or not passed.
-
-Only where an agent may click a check (`allow`): an environment's browser on its machine
-(openajar.environments.vmbrowser allows its context). An account's browser never gets a check ref, and its
-challenge holds it for the human as it always has (openajar.node.lanes.watch).
+After the click it waits for the vendor's answer and says it plainly: passed, an image puzzle (the owner's solving
+service through browser_challenge, else the human), or not passed.
 """
 
 from __future__ import annotations
@@ -60,8 +57,6 @@ OUTCOME_POLL_S = 1.0
 CORRECT_PX = 3         # the page saw the pointer this far off where it was sent (a moved window): corrected
 DEFAULT_OFFSET = (21.0, 0.5)  # in a widget frame's own box: the checkbox's centre, x in px from its left, y share
 
-# Contexts whose agent may click a check (an environment's browser on its machine).
-_ALLOWED: weakref.WeakSet[Any] = weakref.WeakSet()
 # When a check's checkbox on each tab was last clicked (loop time) and on which address: browser_challenge does not
 # click the same page's check twice.
 _CLICKED: weakref.WeakKeyDictionary[Any, tuple[float, str]] = weakref.WeakKeyDictionary()
@@ -105,21 +100,6 @@ class Check:
         return NAMES[self.vendor]
 
 
-def allow(context: Any) -> None:
-    """This browser's agent may click a check (an environment's browser on its machine)."""
-    try:
-        _ALLOWED.add(context)
-    except TypeError:  # a test's stand-in
-        pass
-
-
-def allowed(page: Any) -> bool:
-    try:
-        return getattr(page, "context", None) in _ALLOWED
-    except TypeError:
-        return False
-
-
 def wants_a_click(report: SignalReport | Any) -> bool:
     """The page's signal is a check that asks for one click (CHECKBOX_DETAILS), not a puzzle."""
     return getattr(report, "signal", None) is Signal.CAPTCHA and getattr(report, "detail", None) in CHECKBOX_DETAILS
@@ -144,14 +124,10 @@ async def find_checks(page: Page) -> list[Check]:
 
 
 async def check_lines(page: Page, report: SignalReport | Any) -> list[str]:
-    """The snapshot's lines for the checks on the page, when this browser's agent may click them: a check that
-    shows its checkbox gets a ref (c1, c2...), remembered for act; one still at work by itself ("Verifying...", a
+    """The snapshot's lines for the checks on the page: a check that shows its checkbox gets a ref (c1, c2...), remembered for act; one still at work by itself ("Verifying...", a
     spinner and no checkbox yet) gets a line that says to wait. When the owner set up a solving service for the
     check (openajar.node.solver), the lines name browser_challenge, and an image puzzle gets a line of its own.
     Empty otherwise."""
-    if not allowed(page):
-        _forget(page)
-        return []
     solver_on = solver_for(page) and await solver_could_take(page, getattr(report, "signal", None),
                                                              getattr(report, "detail", None))
     if not wants_a_click(report):
@@ -290,8 +266,6 @@ async def click_check(ix: Any, page: Page, ref: str, kind: ActionKind) -> Action
     """browser_act on a check's ref: one click on its checkbox, then the vendor's answer."""
     if kind is not ActionKind.CLICK:
         raise InvalidRequest(f"{ref} is a check: the only action on it is click")
-    if not allowed(page):
-        raise InvalidRequest("a check on this browser is for its human: hand it over (browser_wait_handback)")
     try:
         check = (_SHOWN.get(page) or {}).get(ref)
     except TypeError:
@@ -321,8 +295,9 @@ class Click:
 PASSED, PUZZLE, NOT_PASSED = "passed", "puzzle", "not_passed"
 OUTCOME_WORDS = {
     PASSED: "the check passed",
-    PUZZLE: ("an image puzzle appeared, which openajar does not solve: tell your human, hand them the browser "
-             "(links.browser) and wait with browser_wait_handback"),
+    PUZZLE: ("an image puzzle appeared: call browser_challenge once (toolset browser) when the owner set up a "
+             "solving service, else tell your human, hand them the browser (links.browser) and wait with "
+             "browser_wait_handback"),
     NOT_PASSED: ("the check did not pass: it still asks for a person. Do not click it again in a loop: tell your "
                  "human and wait with browser_wait_handback"),
 }
@@ -330,9 +305,7 @@ OUTCOME_WORDS = {
 
 async def click_once(ix: Any, page: Page, check: Check) -> Click | None:
     """One click on `check`'s checkbox (where it is now), then the vendor's answer. None when the check shows no
-    checkbox now; a Click with `how` None when it is out of view (nothing was clicked). Only where `allowed`."""
-    if not allowed(page):
-        raise InvalidRequest("a check on this browser is for its human: hand it over (browser_wait_handback)")
+    checkbox now; a Click with `how` None when it is out of view (nothing was clicked)."""
     await human.still(page)
     now = [c for c in await find_checks(page) if c.vendor == check.vendor]
     if now:

@@ -37,8 +37,8 @@ an agent into using it somewhere else.
 A password in the vault is the owner's permission to use it. Storing it is the consent, so a
 login never asks: not on first use, and not after the agent read a page. What guards it is
 the binding: the lane, the domain, https, the frame and the field. What the vault does not
-hold still goes to a person: a captcha (unless, in an environment's own browser, a click or
-a solving service the owner set up gets past it), a code it has no source for, a device
+hold still goes to a person: a captcha (unless a click or a solving service the owner set up
+gets past it), a code it has no source for, a device
 approval, a checkpoint.
 
 ## 4. Closed by default, encrypted, audited

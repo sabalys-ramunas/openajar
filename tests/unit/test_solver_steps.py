@@ -1,6 +1,6 @@
 """browser_challenge's order (openajar.node.solver.steps): wait, the browser's own click, the owner's solver, the
 human, each said plainly; what the solver step does not send (no solver, Cloudflare's full-page check, a widget no
-service of the owner's takes); and an account's browser, which never reaches any of it."""
+service of the owner's takes); all the same in an account's browser as in an environment's."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from types import SimpleNamespace
 import pytest
 from solver_fake import DUMMY_TOKEN, FakeService
 
-from openajar.core.errors import AgentPaused, CheckForHuman
 from openajar.core.models import Signal
 from openajar.node.interaction import autocheck, checks
 from openajar.node.lanes.watch import SignalWatch
@@ -85,7 +84,13 @@ def quick(monkeypatch):
 
 def env_page(**kw) -> Page:
     page = Page(**kw)
-    checks.allow(page.context)
+    page.lane = "env/e1-browser"
+    return page
+
+
+def account_page(**kw) -> Page:
+    page = Page(**kw)
+    page.lane = "acme/linkedin"
     return page
 
 
@@ -95,13 +100,13 @@ def solver(home, url, *, provider="2captcha"):
 
 # ---- the order ------------------------------------------------------------------------------------------------
 
-async def test_an_accounts_browser_never_reaches_any_step(tmp_path):
-    page = Page()  # its context was never allowed: an account's browser
+async def test_an_accounts_browser_goes_through_every_step_as_any_browser(tmp_path):
+    page = account_page()
     with FakeService("2captcha", key=KEY) as svc:
         solver(tmp_path, svc.url)
-        with pytest.raises(CheckForHuman):
-            await steps.get_past(Ix(page, TURNSTILE), page, browser="acme/linkedin", home=tmp_path)
-    assert svc.requests == [] and page.handed == [] and ledger.read(tmp_path) == []
+        out = await steps.get_past(Ix(page, PUZZLE), page, browser="acme/linkedin", home=tmp_path)
+    assert (out.ended_by, out.passed) == (steps.SOLVER, True) and len(page.handed) == 1
+    assert ledger.read(tmp_path)[0].browser == "acme/linkedin"
 
 
 async def test_no_check_is_nothing_to_do(tmp_path):
@@ -232,35 +237,63 @@ class Lanes:
         self.held: list = []
 
     def lane_for_page(self, page):
-        return "env/e1-browser" if checks.allowed(page) else "acme/linkedin"
+        return getattr(page, "lane", "env/e1-browser")
 
     async def report_signal(self, lane_id, signal, detail=None):
         self.held.append((lane_id, signal, detail))
 
 
-async def test_a_puzzle_holds_an_accounts_browser_always_and_an_environments_only_without_a_solver(tmp_path):
+async def test_a_puzzle_holds_any_browser_only_without_a_solver_and_a_checkbox_holds_none(tmp_path):
     lanes = Lanes()
     watch = SignalWatch(SimpleNamespace(), lanes)
-    env, account = env_page(), Page()
+    env, account = env_page(), account_page()
     settings.bind_home(tmp_path)
     try:
-        await watch._seen(env, Signal.CAPTCHA, URL, "reCAPTCHA frame")
-        assert lanes.held == [("env/e1-browser", Signal.CAPTCHA, "shop.example.com")]  # no solver: held
+        for page in (env, account):
+            await watch._seen(page, Signal.CAPTCHA, URL, "reCAPTCHA checkbox")  # the agent has its ref
+        assert lanes.held == []
+        for page in (env, account):
+            await watch._seen(page, Signal.CAPTCHA, URL, "reCAPTCHA frame")
+        assert [h[0] for h in lanes.held] == ["env/e1-browser", "acme/linkedin"]  # no solver: held, either kind
         lanes.held.clear()
         solver(tmp_path, "https://api.2captcha.com")
-        await watch._seen(env, Signal.CAPTCHA, URL, "reCAPTCHA frame")
-        assert lanes.held == []  # the owner's solver could take it: browser_challenge first
-        await watch._seen(env, Signal.CAPTCHA, URL, "Cloudflare challenge page")
-        assert lanes.held == []  # a check that asks for a click, as in 0.6.1
-        await watch._seen(account, Signal.CAPTCHA, URL, "reCAPTCHA frame")
-        await watch._seen(account, Signal.CAPTCHA, URL, "reCAPTCHA checkbox")
-        assert [h[0] for h in lanes.held] == ["acme/linkedin", "acme/linkedin"]  # an account's: held, solver or not
-        lanes.held.clear()
+        for page in (env, account):
+            await watch._seen(page, Signal.CAPTCHA, URL, "reCAPTCHA frame")
+            await watch._seen(page, Signal.CAPTCHA, URL, "Cloudflare challenge page")
+        assert lanes.held == []  # the owner's solver could take it: browser_challenge first, in either kind
         other = env_page(url="https://other.example.org/")
         await watch._seen(other, Signal.CAPTCHA, other.url, "hCaptcha frame")
         assert lanes.held == []  # any site: there is no site list
     finally:
         settings.bind_home(None)
+
+
+@pytest.mark.parametrize(("ok", "detail", "solver_on", "held"), [
+    (False, "Cloudflare challenge page", False, True),  # the click did not reach it (no X hand): the human's
+    (False, "reCAPTCHA frame", False, True),            # a puzzle and no solver: the human's
+    (False, "reCAPTCHA frame", True, False),            # a puzzle a solver could take: browser_challenge first
+    (True, None, False, False),                          # it passed
+])
+async def test_a_click_on_a_check_that_did_not_get_past_it_holds_the_browser(tmp_path, ok, detail, solver_on, held):
+    from openajar.core.models import ActionKind, ActionResult
+
+    page = account_page()
+    result = ActionResult(ok=ok, action=ActionKind.CLICK, ref="c1", url=URL, changed=ok,
+                          signal=Signal.OK if ok else Signal.CAPTCHA, signal_detail=detail)
+
+    async def act(p, ref, kind, text=None):
+        return result
+    lanes = Lanes()
+    watch = SignalWatch(SimpleNamespace(act=act), lanes)
+    settings.bind_home(tmp_path)
+    try:
+        if solver_on:
+            solver(tmp_path, "https://api.2captcha.com")
+        assert await watch.act(page, "c1", ActionKind.CLICK) is result
+    finally:
+        settings.bind_home(None)
+    holds = [h for h in lanes.held if h[1] is Signal.CAPTCHA]  # an ok signal is recorded, and holds nothing
+    assert holds == ([("acme/linkedin", Signal.CAPTCHA, "shop.example.com")] if held else [])
 
 
 async def test_the_snapshot_names_browser_challenge_only_when_the_owner_has_a_solver(tmp_path, monkeypatch):
@@ -286,7 +319,7 @@ async def test_the_snapshot_names_browser_challenge_only_when_the_owner_has_a_so
                "solving service, then your human" in lines[1]
         [line] = await checks.check_lines(page, PUZZLE)
         assert "image puzzle (reCAPTCHA frame)" in line and "browser_challenge" in line
-        assert await checks.check_lines(Page(), PUZZLE) == []  # an account's browser: nothing, solver or not
+        assert await checks.check_lines(account_page(), PUZZLE) == [line]  # an account's browser: the same line
     finally:
         settings.bind_home(None)
 
@@ -300,30 +333,27 @@ class Ctx:
         self.authorized.append((effect, kw))
 
 
-async def test_the_tool_refuses_an_accounts_browser_before_anything(tmp_path):
-    from openajar.node.tools.challenge import browser_challenge
-
-    ctx = Ctx(SimpleNamespace(interaction=None, lanes=None, config=SimpleNamespace(home=tmp_path)))
-    for on in ("acme/linkedin", "ws/shop"):
-        with pytest.raises(CheckForHuman):
-            await browser_challenge(ctx, on=on)
-    assert ctx.authorized == []
-
-
-async def test_the_tool_refuses_an_environment_lane_whose_page_is_not_its_machines(tmp_path, monkeypatch):
+async def test_the_tool_runs_on_an_accounts_browser_as_on_any(tmp_path, monkeypatch):
     import contextlib
 
     from openajar.node.tools import challenge
 
-    page = Page()  # an environment whose browser runs on the node: checks.allow was never called for it
+    page = account_page()
 
     @contextlib.asynccontextmanager
     async def session(ctx, on, **kw):
         yield page
+
+    @contextlib.asynccontextmanager
+    async def unguarded(ctx, on, page):
+        yield []
     monkeypatch.setattr(challenge, "driven_session", session)
-    ctx = Ctx(SimpleNamespace(interaction=Ix(page, PUZZLE), lanes=Lanes(), config=SimpleNamespace(home=tmp_path)))
-    with pytest.raises(CheckForHuman):
-        await challenge.browser_challenge(ctx, on="env/e1-browser")
+    monkeypatch.setattr(challenge, "guarded", unguarded)
+    lanes = Lanes()
+    ctx = Ctx(SimpleNamespace(interaction=Ix(page, CF_PAGE), lanes=lanes, config=SimpleNamespace(home=tmp_path)))
+    out = await challenge.browser_challenge(ctx, on="acme/linkedin")
+    assert ctx.authorized and ctx.authorized[0][1]["lane_id"] == "acme/linkedin"
+    assert out["ended_by"] == "human" and lanes.held == [("acme/linkedin", Signal.CAPTCHA, "shop.example.com")]
 
 
 async def test_the_tool_says_which_step_ended_it_and_holds_for_the_human(tmp_path, monkeypatch):
@@ -356,9 +386,6 @@ async def test_the_tool_says_which_step_ended_it_and_holds_for_the_human(tmp_pat
     assert (out["ended_by"], out["passed"]) == ("solver", True) and lanes.held == []
     assert KEY not in json.dumps(out) and DUMMY_TOKEN not in json.dumps(out)
 
-
-def test_an_agent_paused_error_is_not_the_check_for_human_error():
-    assert CheckForHuman.code == "check_for_human" and not issubclass(CheckForHuman, AgentPaused)
 
 
 async def test_a_click_counts_for_its_own_page_only():

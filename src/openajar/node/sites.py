@@ -446,7 +446,7 @@ CLOUDFLARE_DETAILS: frozenset[str] = frozenset(r.detail for r in VENDORS if r.ve
 # and the checkbox frames of hCaptcha and reCAPTCHA. A puzzle frame on the page wins over them (_vendor_signal).
 CHECKBOX_DETAILS: frozenset[str] = CLOUDFLARE_DETAILS | {HCAPTCHA_CHECKBOX, RECAPTCHA_CHECKBOX}
 # The image puzzles of those widgets (hCaptcha's and reCAPTCHA's other frames): an owner's solving service may answer
-# for the widget in an environment's browser (openajar.node.solver), never openajar itself.
+# for the widget (openajar.node.solver), never openajar itself.
 PUZZLE_DETAILS: frozenset[str] = frozenset({"hCaptcha frame", "reCAPTCHA frame"})
 # Cloudflare's full-page check ("Just a moment..."): its answer is a cookie tied to the browser and its exit address,
 # so no solving service is ever asked for it (openajar.node.solver).
