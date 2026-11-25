@@ -6,12 +6,42 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Bring your own machine. A Linux machine you already have (a box at home, a server you rent elsewhere, a VM
+  at any cloud) can be the computer of your environments, in place of a rented VM: `openajar environments
+  machine add homebox me@192.168.1.20` reads and pins its SSH host key (you confirm the fingerprint), makes a
+  key for it and adds it with your own ssh (openajar never sees or keeps a password), checks the machine
+  (Linux on x86-64 or arm64, Docker, a login that may use it, an sshd that allows forwarding) and puts the
+  environments image in its Docker. From then on each environment is a container there, with the same
+  terminal, browser, live view, ports, git, saves and tools, at no cost: the tools and the CLI say "free"
+  where they said a price, and a save there costs nothing. `machine list`, `check` (`--image` after an
+  upgrade), `use` and `remove` manage them, `openajar setup vms` offers it, and `vms.toml` says `provider =
+  "own"` with `location` naming the machine new environments open on. Several machines can be brought in;
+  environments and saves stay on the machine they were made on.
+  What openajar puts on the machine is one `authorized_keys` line (none with `--key`), the image, and per
+  environment a container and a network, per save an image. It changes no firewall, opens no port (a
+  container's sshd listens on the machine's loopback and is reached through the node's ssh connection to the
+  machine), never stops, restarts or wipes the machine, and deletes only what carries its own label. A machine
+  that is off or out of reach is waited for, never taken for deleted.
+  Said plainly: an environment there is a container, so it shares the machine's kernel and is less isolated
+  than a rented VM, though it reaches neither the machine, your network nor another environment. A machine
+  that restarts loses its open environments (they come back from their last save). Not in this version: macOS
+  and Windows machines, rootless Docker and Podman, a machine behind a jump host, and renting VMs and using
+  your own machine on one node at once. Tried against a container with its own sshd and Docker that plays
+  the machine over ssh; not yet tried against a real remote server.
+
 ### Changed
 
 - The README shows the browser from two addresses in a recorded clip (a datacenter address and a static
   residential one, same browser), says what eBay answered from a datacenter address on 26 November (403 on
   the home page, a search link loaded), shows Computers where it showed Home, and its status note names
   0.7.0.
+
+### Fixed
+
+- A save on the docker provider no longer shows a monthly cost: its image is in your own Docker, so it
+  costs nothing.
 
 ## [0.7.0] - 2026-11-26
 

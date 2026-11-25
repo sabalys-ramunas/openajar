@@ -20,7 +20,8 @@ from openajar.core import catalog
 from openajar.core.config import home_from_env, write_private
 from openajar.core.errors import OpenajarError
 
-app = typer.Typer(no_args_is_help=True, help="Disposable cloud VMs that agents use as lanes (Hetzner, Morph or Docker).")
+app = typer.Typer(no_args_is_help=True, help="Disposable VMs that agents use as lanes (Hetzner, Morph, Docker or your "
+                                             "own machine).")
 image_app = typer.Typer(no_args_is_help=True, help="Snapshots VMs boot from.")
 app.add_typer(image_app, name="image")
 repo_app = typer.Typer(no_args_is_help=True, help="Read-only git tokens for private repos on VMs (vm_clone).")
@@ -31,7 +32,7 @@ _state: dict = {"home": None}
 
 @app.callback()
 def main(home: Annotated[Path | None, typer.Option(help="OPENAJAR_HOME (default: $OPENAJAR_HOME)")] = None) -> None:
-    """Disposable cloud VMs that agents use as lanes (Hetzner, Morph or Docker)."""
+    """Disposable VMs that agents use as lanes (Hetzner, Morph, Docker or your own machine)."""
     _state["home"] = home
 
 
@@ -74,7 +75,8 @@ def setup(token_stdin: Annotated[bool, typer.Option("--token-stdin", help="Read 
 
     if provider not in ("hetzner", "morph"):
         raise typer.BadParameter("the provider is hetzner or morph (docker needs no token: set provider = "
-                                 '"docker" in vms.toml)')
+                                 '"docker" in vms.toml; your own machine needs none either: `openajar environments '
+                                 "machine add NAME user@host`)")
     name = "Morph API key" if provider == "morph" else "Hetzner Cloud API token"
     if token_stdin:
         token = sys.stdin.readline().strip()

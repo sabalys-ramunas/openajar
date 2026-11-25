@@ -434,6 +434,37 @@ visits. The household's IPv6 prefix is taken as a `/56`: a delegation wider than
 another `/56` of it, is not covered. On a server node the "home" address is the server's own, which gains
 nothing over the machine's.
 
+## Your own machine as an environment's computer (docs/ENVIRONMENTS.md "Your own machine")
+
+With `provider = "own"` an environment is a container on a machine the owner brought in, reached over
+SSH (openajar.vms.own). The agent is root in its container, as on any environment's machine, so what
+bounds it is set outside the container, on the machine and on the node.
+
+| Question | Answer |
+|---|---|
+| How the node reaches the machine | SSH with a key made for that machine (`vms/machines/<name>/id_ed25519`, 0600, on the node) or a key file the owner names, with the machine's host key pinned when it was added and confirmed by the owner. No config file, no ssh agent, no password: openajar never asks for one, never sees the one the owner's own ssh may ask for when it installs the key, and stores none |
+| What the node's key may do there | run commands and carry forwards (`restrict,port-forwarding` in `authorized_keys`): it runs Docker, and a login that runs Docker is root on that machine. It is the owner's node acting on the owner's machine |
+| Where that key is | on the node only. Never on the environment's machine, in a tool result or in the record. In local mode the agent runs as the owner on the same computer and could read the node's files, as it could read anything of the owner's there; a server node keeps it away from the agent entirely |
+| What an environment's container gets | the docker provider's walls: a network of its own with no traffic between containers; every capability dropped but the few a dev box and sshd need; no folder, socket or device of the machine mounted; CPU, memory and process limits; and a firewall inside it, set before its sshd starts and out of reach after (no `NET_ADMIN`), that refuses new connections to private, shared and link-local addresses. So it reaches the internet, and not the machine's own services, the owner's home or office network, or another environment (checked for real in tests/unit/test_environments_own_docker.py) |
+| What listens on the machine | the container's sshd, published on the machine's loopback only (`127.0.0.1`, a port Docker picks). It takes one key, the node's key for that environment, and shows a host key the node made. Another account on the same machine can connect to that port and gets no further without the key |
+| How the node reaches the container | through its SSH connection to the machine (a ProxyCommand that only carries the connection), then SSH to the container with that environment's own key and pinned host key. The machine carries the bytes and cannot read them, short of its root swapping the container |
+| What openajar changes on the machine | one `authorized_keys` line (not with the owner's own key), the environments image, and per environment a container and a network, per save an image, all labelled with this node's home id. No firewall rule, no service, no open port. It never stops or restarts the machine |
+| What it deletes there | only containers, networks and images with its own home label (the reaper's orphan sweep and `machine remove` filter by it), the image when it put it there, and its own `authorized_keys` line |
+| A machine that does not answer | is not "deleted": the provider raises instead of listing nothing, so the reaper ends no environment for it and deletes nothing. The owner removes a machine that is gone for good (`machine remove --force`) |
+
+What this does not stop:
+
+- **A container escape.** The container shares the machine's kernel. Code that breaks out is root on the
+  owner's machine, next to their files. A rented VM is the isolated choice for code the owner does not trust.
+- **The machine's own root.** Whoever is root on the machine can read an environment's container, its
+  saves (images in that Docker, sign-in cookies included) and the traffic of its browser. It is the
+  owner's machine: a machine shared with others is shared with them.
+- **Outbound traffic from the machine's address.** A `full` environment goes out to the internet from the
+  machine's own connection, so sites see that address (a home address, say). `limited` and `none` close
+  it as on docker.
+- **A rootless or foreign Docker.** Rootless Docker and Podman cannot set the inner firewall, so `machine
+  add` refuses them instead of running without the wall.
+
 ## Logins in an environment's browser
 
 [ENVIRONMENTS.md, Signing in](ENVIRONMENTS.md#signing-in) is how it works. The owner binds a vault login to environments (`openajar environments login add <site> --title/--repo/--all`),
@@ -508,7 +539,7 @@ An environment saves when idle unless the agent asks for single use (`keep="none
 
 | | |
 |---|---|
-| Where a save lives | the disk snapshot (or, on Morph, the paused machine) in the owner's own provider account; the file part on the node, sealed with the saves key the vault holds (`encrypt_saves`) |
+| Where a save lives | the disk snapshot (or, on Morph, the paused machine) in the owner's own provider account, or an image in the Docker of this computer or of the owner's own machine; the file part on the node, sealed with the saves key the vault holds (`encrypt_saves`) |
 | What it holds | the machine's disk as the agent left it (code, installs, anything the agent wrote, a secret the app printed included), and the browser's storage state: cookies and local storage of the environment's own browser, never an account lane's or the vault's (`signins=false` or `save_signins = false`: none) |
 | What it never holds | the git gateway's token and `~/.git-credentials` (removed before the snapshot; a resume mints a new token), the machine's SSH keys, process memory, swap |
 | Who brings it back | an agent of the same grant family by its title, or the owner (`openajar environments resume`); within the node's limits |

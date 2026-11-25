@@ -175,7 +175,7 @@
 │ env                  Terminal and service lanes: isolation, programs,        │
 │                      shells.                                                 │
 │ identity             Signed agent identity (Web Bot Auth) for browser lanes. │
-│ vm                   Disposable cloud VMs that agents use as lanes (Hetzner, │
-│                      Morph or Docker).                                       │
+│ vm                   Disposable VMs that agents use as lanes (Hetzner,       │
+│                      Morph, Docker or your own machine).                     │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 

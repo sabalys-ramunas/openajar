@@ -1,5 +1,10 @@
 """Which provider vms.toml names, made from its settings and its secret: Hetzner (a token), Docker
-(nothing), Morph Cloud (an API key and the gateway's pinned host keys)."""
+(nothing), Morph Cloud (an API key and the gateway's pinned host keys), or the person's own machines
+(openajar.vms.own: no token, an SSH key and a pinned host key for each machine).
+
+A provider says what it can do with attributes, so few callers need its name: `capabilities`
+(openajar.vms.provider), `firewall` and `closes_network` (openajar.vms.netwall). FREE names the ones
+that rent nothing (the machines are the person's own computers), for costs and their words."""
 
 from __future__ import annotations
 
@@ -15,6 +20,10 @@ def token_path(home: Path, settings: VmSettings) -> Path:
 
 
 def configured(home: Path, settings: VmSettings) -> bool:
+    if settings.provider == "own":
+        from openajar.vms.own import every
+
+        return bool(every(home))
     return settings.provider == "docker" or token_path(home, settings).exists()
 
 
@@ -26,6 +35,10 @@ def make(home: Path, settings: VmSettings) -> Any:
 
         return DockerProvider(image=s.docker_image, docker=s.docker_bin, cpus=s.docker_cpus,
                               memory_gb=s.docker_memory_gb, pids=s.docker_pids)
+    if s.provider == "own":
+        from openajar.vms.own import OwnProvider
+
+        return OwnProvider(home, s)
     path = token_path(home, s)
     if s.provider == "morph":
         if not path.exists():
@@ -43,3 +56,8 @@ def make(home: Path, settings: VmSettings) -> Any:
     from openajar.vms.hetzner import HetznerProvider
 
     return HetznerProvider(path.read_text(), api_url=s.api_url)
+
+
+# Nothing is rented or billed there: containers on this computer, or on a person's own machine. By name,
+# since a record (a VM's, a save's) holds its provider's name long after the provider object is gone.
+FREE = ("docker", "own")

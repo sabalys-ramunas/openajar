@@ -223,7 +223,7 @@ def by_repo(mgr: Any, family: str | None, repo: str, *, saves_of: str, reaches: 
 
 # ---------------------------------------------------------------- what a pause costs
 def resume_time(source: str, provider: str = "") -> str:
-    if provider in ("docker", "morph"):  # a container, or a Morph snapshot's start
+    if provider in ("docker", "own", "morph"):  # a container, or a Morph snapshot's start
         return "in seconds"
     return "in about a minute" if source == "snapshot" else "in a few minutes (a fresh machine, then the files)"
 
@@ -231,7 +231,10 @@ def resume_time(source: str, provider: str = "") -> str:
 def pause_words(cost_eur_month: float | None, *, snapshot: bool, provider: str = "") -> str:
     """"saved: about EUR 0.05 a month, resumes in about a minute"."""
     if not cost_eur_month:
-        cost = "costs nothing while it waits" if not snapshot else "costs under a cent a month"
+        from openajar.vms.providers import FREE
+
+        # nothing rented (docker, the owner's own machine): the save's image is in their own Docker
+        cost = "costs nothing while it waits" if not snapshot or provider in FREE else "costs under a cent a month"
     else:
         cost = f"about EUR {cost_eur_month:.2f} a month" if cost_eur_month >= 0.01 else "under a cent a month"
     return f"saved: {cost}, resumes {resume_time('snapshot' if snapshot else 'files', provider)}"

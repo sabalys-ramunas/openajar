@@ -686,8 +686,10 @@ class Saving:
 
     def snapshots_eur_month(self) -> float:
         """What the kept snapshots cost a month, at snapshot_eur_per_gb_month."""
-        gb = sum(m.snapshot.gb or 0 for m in self.saves().all() if m.snapshot is not None)
-        return round(gb * self.settings.snapshot_eur_per_gb_month, 4)
+        from openajar.environments.saves import snapshot_eur_month
+
+        rate = self.settings.snapshot_eur_per_gb_month
+        return round(sum(snapshot_eur_month(m.snapshot, rate) for m in self.saves().all()), 4)
 
     # ================================================================ resume
     def save_to_resume(self, family: str, title: str, repo: str | None) -> SaveManifest | None:

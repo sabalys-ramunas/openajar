@@ -1,6 +1,7 @@
 # Environments: a computer in the cloud for each agent
 
-An environment is a VM that the node rents for an agent. It has a terminal, a real browser whose
+An environment is a VM that the node rents for an agent (or a container on Docker here, or on a
+machine of your own: [Where the VMs come from](#1-where-the-vms-come-from)). It has a terminal, a real browser whose
 traffic leaves from the VM, and your repository in `/work/<name>`. The agent works there, commits
 and pushes a branch. By default it stays: when it goes idle the whole machine is saved and the VM
 deleted, and it comes back when an agent opens it again with the same title. A single-use one is
@@ -143,6 +144,88 @@ Setup also pins the host key of Morph's SSH gateway (it prints its fingerprint) 
 - Every machine has a time limit at Morph too (its own limit plus a margin), so one the node forgot
   stops billing by itself.
 
+**Your own machine**: a Linux box you already have (a computer at home, a server you rent somewhere
+else, a VM at any cloud) becomes the computer of your environments. Nothing is rented. Bring it in
+with one command, at the node:
+
+```
+openajar environments machine add homebox me@192.168.1.20    # any address your ssh reaches, also me@box.example.com:2222
+```
+
+What the command does, step by step:
+
+1. It reads the machine's SSH host key and shows its fingerprint. You confirm it (or it says the key
+   is the one your own ssh already trusts, or you gave it with `--fingerprint`). Every later
+   connection must show that key.
+2. It makes an SSH key for this machine, kept on the node (`vms/machines/homebox/`, readable by you
+   only), and adds its public half to that login's `~/.ssh/authorized_keys` with your own ssh. If your
+   ssh asks for a password or a passphrase, it asks you: openajar never sees it and never keeps one.
+   `--key ~/.ssh/id_ed25519` uses a key file of yours instead (one without a passphrase), and then
+   nothing is written on the machine. When your ssh cannot sign in, the command prints the one line
+   to add by hand.
+3. It checks the machine: Linux on x86-64 or arm64, Docker running, the login allowed to use it (root,
+   a member of the `docker` group, or passwordless `sudo`), at least 10 GB free, and an sshd that
+   allows port forwarding (the default). What is missing is named with the command that fixes it.
+   openajar does not install Docker for you: `curl -fsSL https://get.docker.com | sh` on the machine does.
+4. It puts the environments image in the machine's Docker: the prebuilt one for your version of
+   openajar (about 4 GB, several minutes), or built there when it cannot be downloaded (`--build`
+   always builds; `--no-image` skips it for now).
+5. It asks whether new environments open there from now on (`vms.toml`: `provider = "own"` and
+   `location = "homebox"`), and says to restart openajar when the provider changed.
+
+From then on `environment_open` starts each environment as a container on that machine, with the
+same terminal, browser, live view, ports, git, saves and tools. An agent asks for a size as on
+docker (the table below), never more than the machine has; `docker_cpus`, `docker_memory_gb` and
+`docker_pids` in `vms.toml` set the default, and `max_live` how many run side by side.
+
+```
+openajar environments machine list                # your machines, which one new environments open on
+openajar environments machine check homebox       # is it reachable, can it hold environments, is the image there
+openajar environments machine check homebox --image   # put this version's image there (after an upgrade of openajar)
+openajar environments machine use attic           # open new environments on another of your machines
+openajar environments machine remove homebox      # take it out, and take away what openajar put there
+```
+
+What openajar puts on the machine, and nothing else:
+
+- one line in that login's `authorized_keys` (`restrict,port-forwarding`: commands and forwards, no
+  terminal, no ssh agent), unless you gave your own key;
+- the environments image;
+- for each environment one container and one Docker network, and for each save one image, each
+  labelled as this node's.
+
+No program of openajar runs there, no firewall rule is changed and no port is opened to the network:
+a container's own sshd listens on the machine's loopback only, and the node reaches it through its
+ssh connection to the machine. openajar never stops, restarts or wipes the machine, and it only ever
+removes containers, networks and images that carry its own label. `machine remove` deletes those,
+the image (when openajar put it there) and the `authorized_keys` line; it refuses while environments
+are open or saved there unless you pass `--force`.
+
+What is different from a rented VM, said plainly:
+
+- An environment is a container, so it shares the machine's kernel. It has the docker provider's
+  walls (above): a network of its own, few capabilities, no folder of the machine inside it, and a
+  firewall inside it that refuses the machine itself, your home or office network and the other
+  environments, while the internet works. A container that breaks out is on your machine. Use your
+  own machine for code you trust; a rented VM is the isolated one.
+- The login openajar uses can run Docker, and a login that can run Docker is as good as root on that
+  machine. The node holds its key (never the agent's machine).
+- A save's disk is an image in that machine's Docker, and it costs nothing. If the machine is lost,
+  the save's files (kept on the node) are what is left, and a resume starts from them.
+- A machine that is switched off or out of reach is waited for: its environments are not ended, and
+  calls say the machine did not answer. A machine that restarts loses its open environments (they
+  show as gone, and come back from their last save: `environment_open` with the same title).
+- Every command goes through two ssh connections (to the machine, then to the container), so each
+  call takes a moment longer than on docker on this computer: about a quarter of a second in all when
+  the machine is near, more over a slow link.
+- The browser claims no timezone of its own (like docker); give it a proxy, or `this-computer`, when
+  the place matters ([The browser's proxy](#the-browsers-proxy)).
+
+Not in this version: macOS and Windows machines, rootless Docker and Podman, a machine your ssh
+reaches only through a jump host, and renting VMs and using your own machine on one node at once
+(a node has one provider; several machines of your own are fine, and environments and saves stay on
+the machine they were made on).
+
 An agent asks for a size by name, and the open's `machine` says what it got and what each bigger
 size would rent and cost (`machine.bigger`):
 
@@ -155,7 +238,9 @@ size would rent and cost (`machine.bigger`):
 | `xlarge` | 16 CPU, 32 GB | the same | 16 CPU, 32 GB, at most this computer's | `morph-xlarge`: 16, 32, 256 |
 
 On Morph a machine of the `dev` snapshot's size (small, unless you built it bigger) starts warm in
-about a second; another size boots cold from it, in seconds more.
+about a second; another size boots cold from it, in seconds more. On your own machine a size is what
+it is on docker (its server types are `own-small` to `own-xlarge`), at most that machine's CPUs and
+memory.
 
 It may also name a server type (`cpx42`) or one of your `vms.toml` profiles. The biggest an agent
 may ask for is `max_size` (default `xlarge`; `openajar environments allow --max-size large`); past
@@ -1679,7 +1764,8 @@ open a fresh one under another title. `save_limit`: forget saves you no longer n
 ## Costs and the reaper
 
 - The price is the provider's hourly price for the server type, shown in the audit log's record
-  of the open, on the environment page and in `environment()`. Hetzner bills each started hour. Docker costs nothing.
+  of the open, on the environment page and in `environment()`. Hetzner bills each started hour. Docker
+  and your own machine cost nothing, and their saves cost nothing either.
 - `cost_eur` so far is started hours times the hourly price. The month's total counts against
   `--monthly-eur` and the node's `monthly_budget_eur`.
 - Every environment has a time limit (`hours` on open, at most `--max-hours`, 8 by default). The
@@ -1812,7 +1898,9 @@ Not on it:
 | `environment_already_open` | the title names an open environment with another repository | the agent picks another title |
 | `environment_in_use` | another chat of the agent holds the live machine with this title | the agent opens its own with another title; `take_over=true` once the holder has been quiet for `take_over_minutes` |
 | `environment_not_ready` | the environment is starting, or its link is down (a restart, a dropped connection, this computer's address moved) and the node is bringing it back | wait a minute; `openajar environments show ID`, and `openajar logs --level warn --since 10m` if it does not come back |
-| `machine_gone`, or `state: "gone"` | the machine stopped for good: the provider says its container or server is off or no longer exists ("Costs and the reaper") | the agent opens the same title again and gets a new machine; if it happens often, `docker ps -a` or the Hetzner console, and `openajar logs --level warn --since 30m` |
+| `machine_gone`, or `state: "gone"` | the machine stopped for good: the provider says its container or server is off or no longer exists ("Costs and the reaper"). On your own machine: it restarted, or the container was removed there | the agent opens the same title again and gets a new machine; if it happens often, `docker ps -a` or the Hetzner console, and `openajar logs --level warn --since 30m` |
+| "machine homebox did not answer over ssh" | your own machine is off, asleep or out of reach from the node, or its address changed | switch it on; `openajar environments machine check homebox` says what is wrong. Its environments wait, they are not ended. A new address: `machine remove` and `machine add` again |
+| "no image agentos-env:latest" on your own machine, or "older than this openajar" | the image is missing there, or openajar was upgraded | `openajar environments machine check homebox --image` |
 | `unsaved_work` on close | uncommitted changes or commits not pushed; "mode change only" names files whose content is as committed (a `chmod +x`) | commit and push, or close with `discard=true` if the work may go |
 | `approval_pending` with `kind: "repo_connect"` | the repository is private and not connected, or its key or token was refused; nothing was rented | open the card's `review_url` and paste a token (see "Connect a repository"), or at the node `openajar environments repo add github.com/me/shop --token` |
 | the token page says it did not work | the token did not work, and nothing was kept; the page says why | do what the page says (table in "Connect a repository"), then paste it again on the same page |

@@ -98,6 +98,8 @@ can be skipped and changed later.
   - a [Hetzner Cloud](https://www.hetzner.com/cloud) account (about 0.011 EUR an hour while a VM is
     open). Make a project just for openajar: its token can delete any server in that project.
   - Docker running on your computer (free, less isolated)
+  - a Linux machine of your own with Docker that you reach over ssh: a box at home, a server you
+    rent elsewhere (free, less isolated; `openajar environments machine add`)
 - Optional: the [GitHub CLI](https://cli.github.com) (`gh`), so setup can reuse your login for
   private repositories
 
@@ -353,6 +355,7 @@ openajar itself is free and open source. You pay your VM provider directly, with
 | A saved computer (about 4 GB) | about **0.05 EUR a month** |
 | A computer kept running all month | about **7.80 EUR a month** |
 | Docker on your own computer | **free** |
+| A machine of your own, reached over ssh | **free** |
 | A static residential proxy for the browser (optional, from a proxy provider) | from about **2.70 USD a month** per address ([more](#which-proxy-and-what-it-costs)) |
 
 Setup sets limits that hold whatever an agent asks: **10 EUR a month, 4 hours per VM, 2 VMs at
@@ -535,6 +538,13 @@ Hetzner Cloud, Morph Cloud (machines start in about a second, and a saved enviro
 its memory, so it comes back in seconds with its dev server still running), and Docker on your own
 computer. Each uses your own account. The provider layer (`openajar.vms`) is small, and more providers
 are welcome.
+
+You can also bring a machine you already have: a Linux box at home, a server you rent somewhere
+else, a VM at any cloud. `openajar environments machine add homebox me@192.168.1.20` checks it over
+ssh and puts the environments image in its Docker, and from then on each environment is a container
+there, with the same terminal, browser, live view and saves. Nothing is rented, openajar never stops
+or wipes the machine, and `machine remove` takes away what it put there. It is a container, so it is
+less isolated than a rented VM ([what is different](docs/ENVIRONMENTS.md#1-where-the-vms-come-from)).
 
 </details>
 

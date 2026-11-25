@@ -74,6 +74,18 @@ class ServiceConfig(BaseModel):
     stop_timeout_s: float = 10.0
 
 
+class RemoteVia(BaseModel):
+    """The SSH host a machine is reached through (openajar.vms.own: a container on a person's own
+    machine listens on that machine's loopback only, so every connection to it goes through the
+    node's SSH login on the machine). The key and the pinned host key are the node's files."""
+    host: str
+    port: int = 22
+    user: str = "root"
+    key_path: str
+    known_hosts: str
+    host_alias: str
+
+
 class RemoteHost(BaseModel):
     """A lane whose commands run on another machine over SSH (openajar.vms): a disposable cloud
     VM. The key and the pinned host key live in the node's own files, never on the lane."""
@@ -87,6 +99,7 @@ class RemoteHost(BaseModel):
     provider: str = "hetzner"
     label: str = ""                  # what people see, e.g. "Hetzner cx22 in nbg1"
     environment: str | None = None   # the agent environment this VM is the machine of (openajar.environments)
+    via: RemoteVia | None = None     # set: `host` is an address on that SSH host, and is reached through it
 
 
 class EnvLane(BaseModel):
