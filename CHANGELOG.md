@@ -10,7 +10,7 @@ All notable changes to openajar are recorded here. The format follows
 
 This version adds one reserved label for `browser_proxies` (`this-computer`) and changes what an agent
 sees on a site's "are you human" check in an environment's browser: the checkbox now has a ref the agent
-may click once. An account's browser is held for any challenge, as before. docs/RESPONSIBLE-USE.md says so.
+may click once. An account's browser is held for any challenge, as before.
 
 ### Added
 

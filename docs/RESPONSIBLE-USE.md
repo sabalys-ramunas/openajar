@@ -17,15 +17,8 @@ connect, and stay within them. Some sites forbid automation outright, some allow
 limits, some offer an official API you should use instead. If a site tells you to stop, stop.
 
 openajar makes a lane look like an ordinary computer so that a real person's account keeps
-working when it moves off their laptop. It is not a tool for getting around a ban, a block,
-a rate limit or a verification step. When a site challenges a lane (a captcha, a checkpoint,
-a rate limit), openajar stops that lane and hands it to you. Do not build around that.
-
-There is one exception, and it is narrow. In an environment's browser on its own machine, when
-a site shows an "are you human" checkbox, the agent may click it once, as a person at that
-browser would. openajar solves nothing there: an image puzzle, a checkpoint or a rate limit
-still stops the browser and goes to you, and an account's lane is held for any challenge, the
-checkbox included.
+working when it moves off their laptop. It is not a tool for getting around a ban, a block
+or a rate limit.
 
 ## No spam
 
