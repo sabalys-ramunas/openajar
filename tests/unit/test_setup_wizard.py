@@ -632,3 +632,27 @@ def test_no_network_says_so_and_setup_goes_on(no_build):
     assert r.exit_code == 0, r.output
     assert "Could not add the web app: could not reach the release" in r.output
     assert "The node works without it" in r.output and "the web app" in r.output.split("Still to do:")[1]
+
+
+def test_your_own_machine_is_offered_and_says_the_one_command(world):
+    """No machine yet: setup names the command that brings one in, and changes nothing."""
+    r = run("vms", input="own\n")
+    assert r.exit_code == 0, r.output
+    assert "Your own machine: a Linux box you reach over ssh" in r.output
+    assert "openajar environments machine add NAME user@host" in r.output
+    assert not (world.home / "vms.toml").exists()
+    _no_secrets(r.output)
+
+
+def test_a_machine_already_brought_in_becomes_where_environments_open(world):
+    from openajar.vms import own
+
+    world.home.mkdir(mode=0o700, exist_ok=True)
+    own.save(world.home, own.Machine(name="homebox", host="192.168.1.20", user="me"))
+    r = run("vms", input="own\n")
+    assert r.exit_code == 0, r.output
+    assert "Environments open as containers on your machine homebox" in r.output
+    vms = tomllib.loads((world.home / "vms.toml").read_text())
+    assert (vms["provider"], vms["location"]) == ("own", "homebox")
+    again = run("vms", input="\n")  # asked again: your own machine is the default now
+    assert again.exit_code == 0 and "your machine homebox" in again.output

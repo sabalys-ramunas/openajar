@@ -39,7 +39,7 @@ GONE_STATUSES = frozenset({"exited", "dead", "removing", "off", "stopping", "del
 RECHECK_S = 2.0         # the provider is asked again this long after it first said gone
 ALIVE_AGAIN_S = 10.0    # a machine the provider said runs is not asked about again for this long
 PROVIDER_S = 15.0       # one question to the provider, at most
-PROVIDERS = {"docker": "Docker", "hetzner": "Hetzner", "morph": "Morph"}
+PROVIDERS = {"docker": "Docker", "hetzner": "Hetzner", "morph": "Morph", "own": "Your machine"}
 
 
 def ran_nothing(words: str) -> str:
@@ -98,7 +98,7 @@ class Liveness:
         if not rec.provider_id:
             return None
         name = PROVIDERS.get(rec.provider, rec.provider or "the provider")
-        what = "container" if rec.provider == "docker" else "server"
+        what = "container" if rec.provider in ("docker", "own") else "server"
         try:
             server = await asyncio.wait_for(vms.provider().get_server(rec.provider_id), PROVIDER_S)
         except Exception as e:  # noqa: BLE001 - a provider that does not answer says nothing either way

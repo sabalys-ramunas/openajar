@@ -37,8 +37,9 @@ class Sizing:
         vms = self.vms()
         if size in SIZES:
             self._check_size(size)
-            if getattr(vms.provider(), "name", "") == "docker":
-                return self.settings.profile, {"server_type": f"docker-{size}"}
+            named = getattr(vms.provider(), "size_type", None)  # containers (docker, a person's own machine)
+            if callable(named):
+                return self.settings.profile, {"server_type": named(size)}
             cpu, memory = SIZES[size]
             return self.settings.profile, {"min_cpu": cpu, "min_memory_gb": memory}
         if size in vms.settings.profiles:
@@ -67,7 +68,7 @@ class Sizing:
         except OpenajarError:
             return
         if types and name not in types:
-            example = next((t for t in types if not t.startswith("docker")), types[0])
+            example = next((t for t in types if not t.startswith(("docker", "own"))), types[0])
             raise InvalidRequest(f"size {name!r} is not one this node knows. size is one of {self._size_names()}, "
                                  f"or a server type the provider rents, like {example}; leave it out for the "
                                  "default. Nothing was rented")

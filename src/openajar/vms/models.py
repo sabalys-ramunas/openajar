@@ -93,8 +93,10 @@ DEFAULT_PROFILES = {
 class VmSettings(BaseModel):
     """`$OPENAJAR_HOME/vms.toml`. Every limit here is enforced by the node, whatever a grant says."""
     model_config = ConfigDict(extra="forbid")
-    # docker: local containers with sshd (openajar.vms.docker); morph: Morph Cloud (openajar.vms.morph)
-    provider: Literal["hetzner", "docker", "morph"] = "hetzner"
+    # docker: local containers with sshd (openajar.vms.docker); morph: Morph Cloud (openajar.vms.morph);
+    # own: containers on the person's own machines, reached over SSH (openajar.vms.own), where `location`
+    # names the machine new environments go to
+    provider: Literal["hetzner", "docker", "morph", "own"] = "hetzner"
     location: str = "nbg1"
     default_profile: str = "small"
     profiles: dict[str, Profile] = Field(default_factory=lambda: dict(DEFAULT_PROFILES))
@@ -147,6 +149,8 @@ class VmSettings(BaseModel):
             self.location = "local"  # a container on this computer, not a Hetzner site
         if self.provider == "morph" and "location" not in self.model_fields_set:
             self.location = "morph"  # Morph picks the site; it has one region
+        if self.provider == "own" and "location" not in self.model_fields_set:
+            self.location = "own"    # no machine named: the only one registered (openajar.vms.own.default_name)
         return self
 
 
@@ -168,7 +172,7 @@ class VmRecord(BaseModel):
     location: str
     image: str
     state: VmState = "creating"
-    host: str | None = None                   # public IPv4
+    host: str | None = None                   # public IPv4 (with `via`: an address on that SSH host)
     created_at: datetime
     ready_at: datetime | None = None
     expires_at: datetime
@@ -187,6 +191,7 @@ class VmRecord(BaseModel):
     kept: bool = False                        # an environment kept live (keep "live"): max_ttl_minutes does not bound it
     network: str = "full"                     # full, or limited / none: its network closed outside it (openajar.vms.netwall)
     ssh_user: str = "root"                    # who the node signs in as (Morph: the instance id, at its gateway)
+    via: dict | None = None                   # the SSH host it is reached through (openajar.vms.own), RemoteVia's fields
 
     @property
     def live(self) -> bool:

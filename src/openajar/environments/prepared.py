@@ -133,8 +133,11 @@ class PreparedStore:
 
 
 def eur_month(rec: Prepared, eur_per_gb: float) -> float:
-    """What its image costs a month: nothing on docker (a local image), else its size at the rate."""
-    if rec.provider == "docker" or not rec.gb:
+    """What its image costs a month: nothing on docker or a person's own machine (an image in their own
+    Docker), else its size at the rate."""
+    from openajar.vms.providers import FREE
+
+    if rec.provider in FREE or not rec.gb:
         return 0.0
     return round(rec.gb * eur_per_gb, 4)
 

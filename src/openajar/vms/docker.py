@@ -99,6 +99,16 @@ def host_key_of(user_data: str) -> tuple[str, str]:
     return "\n".join(private) + "\n", public + "\n"
 
 
+def image_folder() -> Path | None:
+    """The folder with the image's Dockerfile and entrypoint: inside the wheel (openajar/environments/image),
+    or a checkout's deploy/environments. None when this installation has neither."""
+    here = Path(__file__).resolve()
+    for folder in (here.parents[1] / "environments" / "image", here.parents[3] / "deploy" / "environments"):
+        if (folder / "Dockerfile").exists():
+            return folder
+    return None
+
+
 def entrypoint_text() -> str:
     """The image's entrypoint as this package has it: inside the wheel (openajar/environments/image), or a
     checkout's deploy/environments. A closed machine runs this copy (see the module's docstring)."""
@@ -132,6 +142,11 @@ class DockerProvider:
     closes_network = True  # limited and none: the entrypoint's closed wall (openajar.vms.netwall)
     # no cloud-init (the image has run the setup) and no provider firewall (SSH is on this computer's loopback)
     capabilities = frozenset({"snapshot", "network_policy"})
+    # What a provider built on this one changes (openajar.vms.own: the same containers on a person's own
+    # machine): the name of its server types, who its errors name, and how its image is fetched.
+    type_name = SERVER_TYPE
+    said = "docker"
+    image_hint = "get it with `openajar environments setup --pull`"
 
     def __init__(self, *, image: str = "agentos-env:latest", docker: str = "docker", cpus: float = 2.0,
                  memory_gb: float = 4.0, pids: int = 512):
@@ -144,7 +159,16 @@ class DockerProvider:
         self._info: dict | None = None
 
     def __repr__(self) -> str:
-        return f"DockerProvider({self.image})"
+        return f"{type(self).__name__}({self.image})"
+
+    @property
+    def size_types(self) -> dict[str, tuple[int, int]]:
+        """{server type: (CPUs, GB of memory)} of the environments' sizes here ("docker-small", ...)."""
+        return {f"{self.type_name}-{name.split('-', 1)[1]}": limits for name, limits in SIZE_TYPES.items()}
+
+    def size_type(self, size: str) -> str:
+        """The server type of an environment's size (small, medium, large, xlarge) on this provider."""
+        return f"{self.type_name}-{size}"
 
     # ------------------------------------------------------------------ docker
     async def _run(self, *args: str, stdin: bytes | None = None, ok_codes: tuple[int, ...] = (0,),
@@ -180,8 +204,8 @@ class DockerProvider:
         except ValueError:
             version = 0
         if version < IMAGE_VERSION:
-            raise VmError(f"docker: the image {image} is older than this openajar (it does not wall its machines off "
-                          "from this computer); get it again with `openajar environments setup --pull`")
+            raise VmError(f"{self.said}: the image {image} is older than this openajar (it does not wall its "
+                          f"machines off from the computer they run on); {self.image_hint}")
 
     # ------------------------------------------------------------------ provider
     async def check(self) -> None:
@@ -191,7 +215,7 @@ class DockerProvider:
         except ValueError:
             self._info = {}
         if not await self._image_exists(self.image):
-            raise VmError(f"docker: no image {self.image}; get it with `openajar environments setup --pull`")
+            raise VmError(f"{self.said}: no image {self.image}; {self.image_hint}")
         await self._check_version(self.image)
 
     async def price_hourly(self, server_type: str, location: str) -> float | None:
@@ -203,7 +227,7 @@ class DockerProvider:
         info = self._info or {}
         host_cpu = int(info.get("NCPU") or os.cpu_count() or 2)
         host_mem = float(info.get("MemTotal") or 0) / 2**30
-        cpu, mem = (self.cpus, self.memory_gb) if server_type == SERVER_TYPE else SIZE_TYPES[server_type]
+        cpu, mem = (self.cpus, self.memory_gb) if server_type == self.type_name else self.size_types[server_type]
         cores = min(cpu, host_cpu)
         cores = int(cores) if float(cores).is_integer() else cores
         return cores, round(min(mem, host_mem) if host_mem else mem, 1)
@@ -218,12 +242,12 @@ class DockerProvider:
             self._info["MemTotal"] = 4 * 2**30
         arch = "arm" if str(self._info.get("Architecture") or "").lower() in ("aarch64", "arm64") else "x86"
         out = []
-        for name in (SERVER_TYPE, *SIZE_TYPES):
+        for name in (self.type_name, *self.size_types):
             cores, memory = self.limits(name)
             # architecture None: whatever this computer is, so every profile's arch fits (VmManager._fits)
             out.append({"name": name, "cores": cores, "memory_gb": memory, "disk_gb": 0, "cpu_type": "shared",
                         "architecture": None, "host_architecture": arch, "price_hourly_eur": _AnyLocation(),
-                        "available": None, "pinned": name != SERVER_TYPE})
+                        "available": None, "pinned": name != self.type_name})
         return out
 
     async def image_info(self, image: str) -> dict | None:
@@ -242,7 +266,7 @@ class DockerProvider:
         if not await self._image_exists(name):
             if image.startswith("snapshot:"):
                 raise VmError(f"no snapshot named {image.split(':', 1)[1]} (docker image {name})")
-            raise VmError(f"docker: no image {name}; get it with `openajar environments setup --pull`")
+            raise VmError(f"{self.said}: no image {name}; {self.image_hint}")
         await self._check_version(name)
         return name
 
@@ -272,12 +296,12 @@ class DockerProvider:
         await self._run(*args, name)
 
     async def create_server(self, spec: ServerSpec) -> Server:
-        if spec.server_type != SERVER_TYPE and spec.server_type not in SIZE_TYPES:
-            raise VmError(f"docker: no server type {spec.server_type}", provider_code="invalid_input")
+        if spec.server_type != self.type_name and spec.server_type not in self.size_types:
+            raise VmError(f"{self.said}: no server type {spec.server_type}", provider_code="invalid_input")
         host_private, host_public = host_key_of(spec.user_data)
         key = self._keys.get(spec.ssh_key_id or "")
         if key is None:
-            raise VmError("docker: the machine has no login key")
+            raise VmError(f"{self.said}: the machine has no login key")
         entry = entrypoint_text() if netwall.closed(spec.labels.get(netwall.LABEL)) else ""
         await self._network(spec.name, spec.labels)
         cid = ""
@@ -293,8 +317,8 @@ class DockerProvider:
                     break
             if server is None or not server.ssh_port or server.status != "running":
                 said = await self._run("logs", "--tail", "5", cid, ok_codes=(0, 1)) if cid else ""
-                raise VmError("docker: the container did not start" + (f": {said.strip()[-300:]}" if said.strip()
-                                                                        else ""))
+                raise VmError(f"{self.said}: the container did not start"
+                              + (f": {said.strip()[-300:]}" if said.strip() else ""))
         except BaseException:
             if cid:
                 await self._run("rm", "-f", "-v", cid, ok_codes=(0, 1))
@@ -313,7 +337,7 @@ class DockerProvider:
         status = "running" if state.get("Running") else str(state.get("Status") or "off")
         return Server(id=str(d.get("Id", ""))[:12], name=str(d.get("Name", "")).lstrip("/"), status=status,
                       ipv4="127.0.0.1" if port else None, labels=dict(cfg.get("Labels") or {}),
-                      server_type=(cfg.get("Labels") or {}).get(TYPE_LABEL) or SERVER_TYPE,
+                      server_type=(cfg.get("Labels") or {}).get(TYPE_LABEL) or self.type_name,
                       created=str(d.get("Created", "")), ssh_port=port or 22)
 
     async def _inspect(self, ids: list[str]) -> list[dict]:
