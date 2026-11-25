@@ -656,3 +656,21 @@ def test_a_machine_already_brought_in_becomes_where_environments_open(world):
     assert (vms["provider"], vms["location"]) == ("own", "homebox")
     again = run("vms", input="\n")  # asked again: your own machine is the default now
     assert again.exit_code == 0 and "your machine homebox" in again.output
+
+
+def test_digitalocean_is_offered_as_experimental_and_says_so_before_it_asks(world, monkeypatch):
+    from openajar.setup import digitalocean as step
+
+    seen = []
+    monkeypatch.setattr(step, "digitalocean_check", lambda token, api_url: seen.append(token) or None)
+    made_up = "dop_v1_" + "x" * 24  # put together here: not a real token
+    r = run("vms", input=f"digitalocean\n{made_up}\nn\n")
+    assert r.exit_code == 0, r.output
+    assert "DigitalOcean (experimental, not thoroughly tested)" in r.output
+    assert "DigitalOcean is experimental in this version" in r.output
+    assert r.output.index("DigitalOcean is experimental in this version") < r.output.index("Paste the DigitalOcean token")
+    assert seen == [made_up] and made_up not in r.output
+    assert tomllib.loads((world.home / "vms.toml").read_text())["provider"] == "digitalocean"
+    path = world.home / "secrets" / "digitalocean.token"
+    assert path.read_text().strip() == made_up and oct(path.stat().st_mode & 0o777) == "0o600"
+    _no_secrets(r.output)

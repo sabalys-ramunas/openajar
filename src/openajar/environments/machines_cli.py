@@ -32,6 +32,7 @@ import typer
 from openajar.core import catalog
 from openajar.core.config import home_from_env
 from openajar.core.errors import InvalidRequest, OpenajarError
+from openajar.vms.models import provider_name
 
 machine_app = typer.Typer(no_args_is_help=True, help=(
     "Bring your own machine: environments open on a Linux box of yours over ssh, as containers or whole."))
@@ -525,7 +526,7 @@ def _offer_use(name: str, use: bool | None) -> None:
             use = settings.provider == "own" and current is None
         else:
             now = f"on {current}" if current else {"docker": "in Docker on this computer"}.get(
-                settings.provider, f"at {settings.provider.capitalize()}")
+                settings.provider, f"at {provider_name(settings.provider)}")
             use = typer.confirm(f"Open new environments on {name} from now on? (They open {now} today.)", default=True)
     if not use:
         typer.echo(f"{name} is ready. To open new environments there: openajar environments machine use {name}")
@@ -538,7 +539,7 @@ def _use(name: str) -> None:
     others = _live_elsewhere()
     if settings.provider != "own" and others:
         raise _fail(f"{len(others)} machine{'s are' if len(others) != 1 else ' is'} open at "
-                    f"{settings.provider.capitalize()} now, and openajar works with one provider at a time: close "
+                    f"{provider_name(settings.provider)} now, and openajar works with one provider at a time: close "
                     "them first (`openajar environments list`), or they would run on with nobody watching them. "
                     f"Then: openajar environments machine use {name}")
     was = settings.provider
@@ -573,7 +574,7 @@ def list_cmd(json_out: Annotated[bool, typer.Option("--json")] = False) -> None:
                 else f"{r['open']} open, {r['saves']} saved")
         typer.echo(f"{r['name']:<16} {r['address']:<32} {size:<18} {r['mode']:<11} {held}  {mark}".rstrip())
     if settings.provider != "own":
-        where = {"docker": "in Docker on this computer"}.get(settings.provider, f"at {settings.provider.capitalize()}")
+        where = {"docker": "in Docker on this computer"}.get(settings.provider, f"at {provider_name(settings.provider)}")
         typer.echo(f"New environments open {where} now. To open them on one of these: openajar environments "
                    "machine use NAME")
 

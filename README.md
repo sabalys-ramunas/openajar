@@ -97,6 +97,8 @@ can be skipped and changed later.
 - For the VMs, one of:
   - a [Hetzner Cloud](https://www.hetzner.com/cloud) account (about 0.011 EUR an hour while a VM is
     open). Make a project just for openajar: its token can delete any server in that project.
+  - a [DigitalOcean](https://www.digitalocean.com) account (experimental, not yet thoroughly tested;
+    about 0.03 EUR an hour while a VM is open)
   - Docker running on your computer (free, less isolated)
   - a Linux machine of your own that you reach over ssh: a box at home with Docker, or a fresh
     server you hand over as a whole (free, less isolated; `openajar environments machine add`)
@@ -542,8 +544,10 @@ repository. The token never goes through the chat, and the agent never sees it.
 
 Hetzner Cloud, Morph Cloud (machines start in about a second, and a saved environment pauses with
 its memory, so it comes back in seconds with its dev server still running), and Docker on your own
-computer. Each uses your own account. The provider layer (`openajar.vms`) is small, and more providers
-are welcome.
+computer. Each uses your own account. DigitalOcean is there too, as experimental: it rents a Droplet,
+sets its firewall and saves it as a snapshot like Hetzner, but it has not been thoroughly tested against
+the real service yet ([what that means](docs/ENVIRONMENTS.md#1-where-the-vms-come-from)). The provider
+layer (`openajar.vms`) is small, and more providers are welcome.
 
 You can also bring a machine you already have: a Linux box at home, a server you rent somewhere
 else, a VM at any cloud. `openajar environments machine add homebox me@192.168.1.20` checks it over

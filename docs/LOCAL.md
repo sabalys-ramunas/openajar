@@ -161,7 +161,7 @@ through the tools only.
 
 | Step | What it does |
 |---|---|
-| `openajar setup vms` | where VMs come from: a Hetzner token (checked at once), a location, a default size and the `dev` snapshot, or Docker and its image, or a machine of your own (`openajar environments machine add NAME user@host` brings one in: [ENVIRONMENTS.md](ENVIRONMENTS.md#1-where-the-vms-come-from)) |
+| `openajar setup vms` | where VMs come from: a Hetzner token (checked at once), a location, a default size and the `dev` snapshot, or Docker and its image, or DigitalOcean (experimental), or a machine of your own (`openajar environments machine add NAME user@host` brings one in: [ENVIRONMENTS.md](ENVIRONMENTS.md#1-where-the-vms-come-from)) |
 | `openajar setup github` | your `gh` login, `gh auth login`, a pasted token, or none; and whether environments may use any repository the login reaches |
 | `openajar setup limits` | the monthly cap (10 EUR by default here), hours per VM, VMs at once |
 | `openajar setup agents` | starts the service, connects Claude Code and Codex, adds the skills |

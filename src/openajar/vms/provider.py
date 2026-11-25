@@ -343,4 +343,6 @@ def by_hand_words(rec: Any) -> str:
                 f"{container}` there.")
     if rec.provider == "docker":
         return f"Remove its container if openajar cannot: `docker rm -f {container}`."
-    return f"Delete it in the {rec.provider.capitalize()} console if openajar cannot."
+    from openajar.vms.models import provider_name
+
+    return f"Delete it in the {provider_name(rec.provider)} console if openajar cannot."

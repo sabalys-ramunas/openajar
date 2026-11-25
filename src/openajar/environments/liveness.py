@@ -30,6 +30,7 @@ from typing import Any
 from openajar.core import agent_names, clock
 from openajar.core.errors import MachineGone, NotFound
 from openajar.environments.models import Environment
+from openajar.vms.models import provider_name
 
 log = logging.getLogger("openajar.environments")
 
@@ -39,7 +40,6 @@ GONE_STATUSES = frozenset({"exited", "dead", "removing", "off", "stopping", "del
 RECHECK_S = 2.0         # the provider is asked again this long after it first said gone
 ALIVE_AGAIN_S = 10.0    # a machine the provider said runs is not asked about again for this long
 PROVIDER_S = 15.0       # one question to the provider, at most
-PROVIDERS = {"docker": "Docker", "hetzner": "Hetzner", "morph": "Morph", "own": "Your machine"}
 
 
 def ran_nothing(words: str) -> str:
@@ -97,7 +97,7 @@ class Liveness:
             return f"the node deleted it ({rec.delete_reason or rec.state})"
         if not rec.provider_id:
             return None
-        name = PROVIDERS.get(rec.provider, rec.provider or "the provider")
+        name = provider_name(rec.provider)
         what = "container" if rec.provider in ("docker", "own") else "server"
         try:
             server = await asyncio.wait_for(vms.provider().get_server(rec.provider_id), PROVIDER_S)

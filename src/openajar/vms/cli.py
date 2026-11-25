@@ -62,22 +62,26 @@ def _run(coro):
 
 @app.command()
 def setup(token_stdin: Annotated[bool, typer.Option("--token-stdin", help="Read the token from stdin.")] = False,
-          provider: Annotated[str, typer.Option("--provider", help="hetzner (default) or morph.")] = "hetzner",
+          provider: Annotated[str, typer.Option("--provider", help="hetzner (default), morph, or digitalocean "
+                                                "(experimental).")] = "hetzner",
           ) -> None:
-    """Store a cloud API token for this node and check it: a Hetzner Cloud token (read and write), or
-    with --provider morph a Morph Cloud API key.
+    """Store a cloud API token for this node and check it: a Hetzner Cloud token (read and write), with
+    --provider morph a Morph Cloud API key, or with --provider digitalocean a DigitalOcean API token
+    (experimental).
 
     Hetzner: make the token in the Hetzner Cloud console (your project, Security, API tokens). Use a
     project that holds nothing but these VMs: the token can delete any server in its project.
-    Morph: make an API key at cloud.morph.so (API keys). openajar rents instances in that account."""
+    Morph: make an API key at cloud.morph.so (API keys). openajar rents instances in that account.
+    DigitalOcean (experimental): make a token with write access at cloud.digitalocean.com (API, Tokens).
+    openajar deletes only what it tagged, but the token reaches every Droplet of its team."""
     from openajar.vms.hetzner import HetznerProvider
     from openajar.vms.models import TOKEN_FILE, load_settings
 
-    if provider not in ("hetzner", "morph"):
-        raise typer.BadParameter("the provider is hetzner or morph (docker needs no token: set provider = "
+    if provider not in ("hetzner", "morph", "digitalocean"):
+        raise typer.BadParameter("the provider is hetzner, morph or digitalocean (docker needs no token: set provider = "
                                  '"docker" in vms.toml; your own machine needs none either: `openajar environments '
                                  "machine add NAME user@host`)")
-    name = "Morph API key" if provider == "morph" else "Hetzner Cloud API token"
+    name = {"morph": "Morph API key", "digitalocean": "DigitalOcean API token"}.get(provider, "Hetzner Cloud API token")
     if token_stdin:
         token = sys.stdin.readline().strip()
     else:
@@ -87,6 +91,9 @@ def setup(token_stdin: Annotated[bool, typer.Option("--token-stdin", help="Read 
     settings = load_settings(_home())
     if provider == "morph":
         _setup_morph(token, settings)
+        return
+    if provider == "digitalocean":
+        _setup_digitalocean(token, settings)
         return
     _run(HetznerProvider(token, api_url=settings.api_url).check())
     path = _home() / TOKEN_FILE
@@ -115,6 +122,27 @@ def _setup_morph(token: str, settings) -> None:
                "(morph_usd_per_mcu, morph_eur_per_usd in vms.toml).")
     typer.echo("Next: `openajar vm image build dev` (a snapshot environments start from in seconds), then restart "
                "agentosd so its reaper picks the provider up.")
+
+
+def _setup_digitalocean(token: str, settings) -> None:
+    """Check the token, keep it, and make digitalocean vms.toml's provider. It says it is experimental."""
+    from openajar.vms.digitalocean import EXPERIMENTAL, DigitalOceanProvider
+    from openajar.vms.models import DIGITALOCEAN_TOKEN_FILE, load_settings
+
+    typer.echo(EXPERIMENTAL)
+    _run(DigitalOceanProvider(token, api_url=settings.digitalocean_api_url).check())
+    path = _home() / DIGITALOCEAN_TOKEN_FILE
+    write_private(path, token + "\n")
+    typer.echo(f"Saved to {path} (mode 600). The token works.")
+    use_provider(_home(), "digitalocean")
+    now = load_settings(_home())
+    typer.echo(f'vms.toml now says provider = "digitalocean". Machines are Droplets in {now.location} (`location` in '
+               "vms.toml names another region), and prices are estimates in EUR from DigitalOcean's USD prices "
+               "(digitalocean_eur_per_usd).")
+    typer.echo("A snapshot costs about USD 0.06 per GB a month there: set snapshot_eur_per_gb_month = 0.052 in "
+               "environments.toml so saves show what they cost.")
+    typer.echo("Next: `openajar vm types` to see what the profiles rent, then restart agentosd so its reaper picks "
+               "the provider up.")
 
 
 def use_provider(home: Path, provider: str) -> None:

@@ -19,7 +19,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from openajar.core.errors import InvalidRequest
-from openajar.vms.models import VmError
+from openajar.vms.models import VmError, provider_name
 
 log = logging.getLogger("openajar.vms")
 
@@ -109,7 +109,7 @@ def not_sold(types: list[dict] | None, server_type: str, location: str, provider
                 and o.get("architecture") == t.get("architecture")):
             here.append((o.get("cores") or 0, o.get("memory_gb") or 0, price, o))
     here.sort(key=lambda h: (h[0], h[1], h[2]))
-    name = provider.capitalize() or "The provider"
+    name = provider_name(provider)
     words = f"{name} does not sell {server_type} in {location} now"
     words += f" (it sells it in {_places(sold)})" if sold else ""
     if here:
@@ -193,7 +193,7 @@ def no_room_words(provider: str, tried: list[tuple[str, str]]) -> str:
     for t, locs in by_type.items():
         by_places.setdefault(tuple(locs), []).append(t)
     parts = [f"{_places(types)} in {_places(list(locs))}" for locs, types in by_places.items()]
-    name = provider.capitalize() if provider else "The provider"
+    name = provider_name(provider)
     head = f"{name} has no room for {parts[0]} now"
     if len(parts) > 1:
         head += ", nor for " + ", ".join(parts[1:])
@@ -228,7 +228,7 @@ async def create_first(provider: str, tries: list[tuple[str, str, float | None]]
     if not tried:
         raise VmError("no server type to try")
     if last is not None and DISK_WORDS in last.message and all(t in skip for t, _lc in tried):
-        raise VmError(f"{provider.capitalize() or 'The provider'}: the image does not fit the disk of "
+        raise VmError(f"{provider_name(provider)}: the image does not fit the disk of "
                       f"{', '.join(dict.fromkeys(t for t, _lc in tried))}; ask for a bigger size",
                       provider_code="image_too_big")
     raise NoRoom(no_room_words(provider, tried), tried)

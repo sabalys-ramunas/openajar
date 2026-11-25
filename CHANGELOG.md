@@ -48,6 +48,16 @@ All notable changes to openajar are recorded here. The format follows
   login to the `docker` group. `machine check NAME --install-docker` does it later. Docker stays on the
   machine when you remove the machine from openajar.
 
+- DigitalOcean as a provider, experimental. `openajar vm setup --provider digitalocean` (and `openajar setup
+  vms`) takes a DigitalOcean API token, and environments then open as Droplets in your account: a firewall
+  that lets SSH in from the node only, a closed firewall for a limited or none network, a save as a
+  snapshot that resumes in its own region, and the reaper deleting only what openajar tagged. Experimental
+  means it was written from DigitalOcean's API reference and tested against a fake of that API, and no
+  Droplet has been rented with it yet; setup, the CLI, `openajar environments setup` and the docs say so,
+  and the docs list what was and was not tried. Without a size an environment gets the cheapest Droplet with 2 vCPU and 4 GB (about EUR 0.03
+  an hour); prices are estimates in EUR from DigitalOcean's USD prices (`digitalocean_eur_per_usd`), and a
+  snapshot there costs about USD 0.06 per GB a month (`snapshot_eur_per_gb_month = 0.052` shows it).
+
 ### Fixed
 
 - A save on the docker provider no longer shows a monthly cost: its image is in your own Docker, so it

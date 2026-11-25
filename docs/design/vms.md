@@ -103,8 +103,9 @@ in under a minute instead of installing on every VM.
 ## Providers and what they can do
 
 `provider` in vms.toml picks one: `hetzner` (the default), `docker` (local containers,
-openajar.vms.docker), `morph` (Morph Cloud, openajar.vms.morph) or `own` (containers on the owner's
-own machines over SSH, openajar.vms.own). Each declares `capabilities`, and
+openajar.vms.docker), `morph` (Morph Cloud, openajar.vms.morph), `digitalocean` (Droplets,
+openajar.vms.digitalocean, experimental: the same capabilities as Hetzner but `update_labels`) or
+`own` (containers on the owner's own machines over SSH, openajar.vms.own). Each declares `capabilities`, and
 callers check a name (`openajar.vms.provider.capable`) before they use what it stands for:
 
 | Capability | Meaning | Hetzner | Docker | Morph | Own machine (containers; a whole machine has neither `snapshot` nor `network_policy`) |
@@ -124,6 +125,17 @@ network itself, openajar.vms.netwall), `size_type(size)` (an environment's size 
 and on a `Server` `via` (the SSH host it is reached through: a container on an own machine listens on
 that machine's loopback). `openajar.vms.providers.FREE` names the providers that rent nothing, so
 costs read "free" there.
+
+### DigitalOcean (experimental)
+
+`openajar.vms.digitalocean` is the second rented cloud, beside `hetzner.py`, and it needed no special
+case in the callers: the same capabilities (`firewall`, `snapshot`, `network_policy`, `cloud_init`),
+`ensure_closed_firewall` for a closed network, and `place(image)` because a snapshot lives in one
+region. What it bridges inside itself: labels are tags (`<key>:<value>`, a `.` written `:`), the
+firewall covers Droplets by a tag they are created with, a snapshot is a Droplet action whose image
+is found by its name and then tagged, and SSH keys carry the home id in their names. Its `experimental
+= True` is what `openajar environments setup` reads to say so. Tests: tests/unit/test_vms_digitalocean.py,
+against a fake of the API behind a mock transport.
 
 ### Your own machine
 

@@ -723,10 +723,15 @@ def setup(build: Annotated[bool, typer.Option("--build", help="Build the docker 
         _own_image(home, build=build)
     problem = asyncio.run(check_provider()) if vms.configured else (
         "no machine of yours is set up: `openajar environments machine add NAME user@host`" if s.provider == "own"
+        else "no DigitalOcean token: run `openajar vm setup --provider digitalocean`" if s.provider == "digitalocean"
         else "no Hetzner token: run `openajar vm setup`, or set provider = \"docker\" in vms.toml to use Docker "
              "here, or bring a machine of your own with `openajar environments machine add NAME user@host`")
     if problem is None:
         lines.append(("ok", f"provider {s.provider}", "answers"))
+        if getattr(vms.provider(), "experimental", False):
+            from openajar.vms.digitalocean import EXPERIMENTAL
+
+            lines.append(("note", "experimental", EXPERIMENTAL))
     else:
         lines.append(("missing", f"provider {s.provider}", problem))
     if problem is None:
