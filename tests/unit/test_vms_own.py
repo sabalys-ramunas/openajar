@@ -586,12 +586,12 @@ async def test_a_container_or_an_image_without_this_homes_label_is_never_deleted
         with pytest.raises(VmError, match="does not delete it") as e:
             await prov.delete_image(f"homebox//{image}")
         assert e.value.provider_code == NOT_OURS
-    # a record that names the person's container (a vms.db from another home's backup): refused, kept to retry
+    # a record that names the person's container (a vms.db from another home's backup): refused, ended as lost
     rec = await vms.create("dev/a", ttl_minutes=60)
     rec.provider_id = f"homebox:{pg}"
     vms.store.put(rec)
     after = await vms._delete(rec, "time limit")
-    assert after.state == "deleting" and "not openajar's" in (after.error or "")
+    assert after.state == "deleted" and after.lost and "not openajar's" in (after.delete_reason or "")
     assert {c["name"] for c in box.containers.values()} >= {"postgres", "agentos-vm-other"}
     assert {"postgres:16", "agentos-env:save-theirs"} <= set(box.images)
     assert not any(c[0] in ("rm", "rmi") and (pg in c or other in c) for c in box.calls)

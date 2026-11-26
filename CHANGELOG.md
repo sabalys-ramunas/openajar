@@ -171,10 +171,13 @@ No setting of an existing setup changes.
   deleted. (U5-03)
 - A save made while `openajar environments adopt` moves its environment is kept under the family and title the
   environment has when the save is written.
-- On Docker, a container or an image is removed only once Docker reads this home's label back on it. Deletes
-  went by bare id, so an id from a damaged or restored `vms.db`, or a save imported from another node, could
-  remove a container or an image of yours or of another openajar home. Now the delete is refused, the record
-  waits, and you are told it is overdue. (S5b-05, S5b-06)
+- A server, a snapshot, an SSH key, a container or an image is deleted only once its provider reads this
+  home's label back on it: Hetzner, Morph, DigitalOcean and Docker (this computer or your own machine).
+  Hetzner also changes a firewall's rules or a server's labels only on one of this home's. Deletes went by
+  bare id, and a Hetzner project can hold your production servers, so an id from a damaged or restored
+  `vms.db`, or a save imported from another node, could delete one of yours or another openajar home's. Now
+  it is refused with an error that names it and says whose it is, nothing is deleted, the VM record ends as
+  lost (it holds no machine slot and books no budget), and you are told once. (S5b-05, S5b-06)
 - A save on the docker provider no longer shows a monthly cost: its image is in your own Docker, so it
   costs nothing.
 

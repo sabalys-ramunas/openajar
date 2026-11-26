@@ -351,13 +351,14 @@ async def server_state(prov: Any, provider_id: str | None) -> str:
 NOT_OURS = "not_this_home"  # VmError.provider_code: a delete refused, since what the id names is not this home's
 
 
-def check_ours(labels: dict[str, str] | None, home_id: str | None, what: str) -> None:
-    """Before a delete by id: what the provider read back carries this openajar home's label (agentos-home),
-    or the delete is refused with a VmError (NOT_OURS). An id from a damaged or restored record, or a save
-    imported from another node, must never reach a machine or an image this home did not make (the 0.7.0
-    audit, S5b-05 and S5b-06: deletes went by bare id, and a provider account can hold the owner's other
-    servers)."""
-    have = (labels or {}).get("agentos-home") or ""
+def check_ours(labels: dict[str, str] | None, home_id: str | None, what: str, *, act: str = "delete it",
+               then: str = "remove it yourself if it is yours to remove") -> None:
+    """Before a delete by id (or a change: `act` says which): what the provider read back carries this openajar
+    home's label (agentos-home), or it is refused with a VmError (NOT_OURS). An id from a damaged or restored
+    record, or a save imported from another node, must never reach a machine or an image this home did not
+    make (the 0.7.0 audit, S5b-05 and S5b-06: deletes went by bare id, and a provider account can hold the
+    owner's other servers, production ones among them)."""
+    have = str(labels.get("agentos-home") or "") if isinstance(labels, dict) else ""
     if home_id and have == home_id:
         return
     if not home_id:
@@ -366,8 +367,7 @@ def check_ours(labels: dict[str, str] | None, home_id: str | None, what: str) ->
         whose = f"another openajar home's (agentos-home {have}, this one is {home_id})"
     else:
         whose = "not openajar's (it has no agentos-home label)"
-    raise VmError(f"{what} is {whose}, so openajar does not delete it; remove it yourself if it is yours to remove",
-                  provider_code=NOT_OURS)
+    raise VmError(f"{what} is {whose}, so openajar does not {act}; {then}", provider_code=NOT_OURS)
 
 
 def by_hand_words(rec: Any) -> str:

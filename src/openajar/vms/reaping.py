@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from openajar.core.errors import NotFound
-from openajar.vms.models import VmRecord, provider_name
+from openajar.vms.models import VmError, VmRecord, provider_name
 from openajar.vms.provider import by_hand_words
 
 log = logging.getLogger("openajar.vms")
@@ -146,6 +146,23 @@ async def lost(vms: Any, rec: VmRecord, current: str) -> None:
                       f"Lane {rec.lane_id} ran {where} ({rec.provider_id or 'no id'}, {rec.server_type}), and "
                       f"this node now uses {now_on} (vms.toml provider). openajar did not delete it and cannot: "
                       f"{_where_words(rec, was)}", urgent=True)
+
+
+async def not_ours(vms: Any, rec: VmRecord, refused: VmError) -> None:
+    """A record whose server the provider reads back as not this home's (a damaged or restored record): ended as
+    lost, and that server is never deleted. A machine of this home the record lost track of still carries this
+    home's labels, so the orphan sweep finds it."""
+    rec.state, rec.lost, rec.deleted_at = "deleted", True, vms._clock()
+    rec.delete_reason = f"lost: {refused.message}"
+    vms.store.put(rec)
+    vms._expired_seen.pop(rec.id, None)
+    vms._next_delete.pop(rec.id, None)
+    vms._publish(rec, "lost")
+    log.warning("VM %s (server %s): %s", rec.id, rec.provider_id, rec.delete_reason)
+    await vms._notify(f"VM {rec.id} named a server that is not this openajar's",
+                      f"Lane {rec.lane_id}'s record names server {rec.provider_id}, and {provider_name(rec.provider)} "
+                      f"reads it back as not this openajar's ({refused.message}). openajar did not delete it, and "
+                      "no longer tracks it.", urgent=True)
 
 
 def _where_words(rec: VmRecord, was: str) -> str:

@@ -112,7 +112,11 @@ What a docker machine is kept from, and what it is not:
 `openajar environments setup` says the same.
 
 **Hetzner Cloud**: make a project that holds nothing but these VMs (the token can delete any
-server in it), make a read-write API token in it, and give it to the node:
+server in it), make a read-write API token in it, and give it to the node. openajar itself deletes a
+server, a snapshot or an SSH key by its id only once Hetzner reads it back with this home's
+`agentos-home` label, and changes a firewall's rules or a server's labels only on one of this home's:
+anything else is refused with an error that names it. That guards against a damaged record or a save
+imported from another node, not against the token, so a project of its own is still the careful choice.
 
 ```
 openajar vm setup              # asks for the token, keeps it in $OPENAJAR_HOME/secrets/hetzner.token (0600)
@@ -143,6 +147,8 @@ Setup also pins the host key of Morph's SSH gateway (it prints its fingerprint) 
   done already).
 - Every machine has a time limit at Morph too (its own limit plus a margin), so one the node forgot
   stops billing by itself.
+- An instance or a snapshot is deleted by its id only once Morph reads it back with this home's
+  `agentos-home` label in its metadata; one without it is refused and stays.
 
 **DigitalOcean (experimental)**: each environment is a Droplet in your DigitalOcean account, with a
 firewall that lets SSH in from the node only, and a save is a snapshot there, as on Hetzner.

@@ -545,13 +545,17 @@ async def test_a_droplet_or_a_snapshot_without_this_homes_tag_is_never_deleted(n
     rec = vms.store.get(rec.id)
     rec.provider_id = blog.id
     vms.store.put(rec)
-    after = await vms._delete(rec, "time limit")
-    assert after.state == "deleting" and "not openajar's" in (after.error or "")
+    after = await vms._delete(rec, "time limit")  # never retried: no try turns another's Droplet into this home's
+    assert after.state == "deleted" and after.lost and "not openajar's" in (after.delete_reason or "")
+    assert rec.id not in [r.id for r in vms.store.live()]  # it holds no slot of max_live and books no budget
     assert {int(blog.id), int(other.id)} <= set(do.droplets) and int(shot) in do.images
     assert not any(m == "DELETE" and p in (f"/droplets/{blog.id}", f"/droplets/{other.id}", f"/images/{shot}")
                    for m, p in do.calls)
     # one of this home's goes, and one DigitalOcean says is not there is done
-    mine = await vms.snapshot(rec.id, description="s", labels={"agentos-save": "s1"})
+    two = await vms.create("dev/b", ttl_minutes=60, wait_s=0)
+    do.boot(two.provider_id)
+    await vms._boots[two.id]
+    mine = await vms.snapshot(two.id, description="s", labels={"agentos-save": "s1"})
     await prov.delete_image(mine["id"])
     assert int(mine["id"]) not in do.images
     await prov.delete_server("99999")

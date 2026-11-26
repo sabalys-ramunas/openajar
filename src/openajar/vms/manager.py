@@ -50,7 +50,7 @@ from openajar.vms.models import (
     load_settings,
 )
 from openajar.vms.pausing import Pausing
-from openajar.vms.provider import Provider, ServerSpec, boot_error_words, server_state
+from openajar.vms.provider import NOT_OURS, Provider, ServerSpec, boot_error_words, server_state
 from openajar.vms.reaping import ENV_SAVE_GRACE  # noqa: F401 - its home was here (environments.saving, tests)
 from openajar.vms.store import VmStore
 
@@ -662,14 +662,13 @@ class VmManager(Pausing):
         try:
             if rec.provider_id:
                 await self.provider().delete_server(rec.provider_id)
-        except Exception as e:  # noqa: BLE001
-            rec.delete_attempts += 1
-            rec.error = f"delete failed: {getattr(e, 'message', e)}"
-            self.store.put(rec)
-            backoff = min(MAX_DELETE_BACKOFF_S, 15 * 2 ** min(rec.delete_attempts, 6))
-            self._next_delete[rec.id] = self._clock() + timedelta(seconds=backoff)
-            log.warning("VM %s: %s (retrying in %d s)", rec.id, rec.error, backoff)
+        except VmError as e:
+            if e.provider_code != NOT_OURS:
+                return self._delete_failed(rec, e)
+            await reaping.not_ours(self, rec, e)  # its id names a server this home did not make: never deleted
             return rec
+        except Exception as e:  # noqa: BLE001
+            return self._delete_failed(rec, e)
         rec.state = final_state  # type: ignore[assignment]
         rec.deleted_at = self._clock()
         rec.delete_reason = rec.delete_reason or reason
@@ -679,6 +678,16 @@ class VmManager(Pausing):
         vmkeys.forget(self.dir, rec.id)
         self._publish(rec, "deleted")
         log.info("VM %s for lane %s deleted (%s)", rec.id, rec.lane_id, reason)
+        return rec
+
+    def _delete_failed(self, rec: VmRecord, e: BaseException) -> VmRecord:
+        """A delete the provider did not do: the record stays deleting, tried again with a growing wait."""
+        rec.delete_attempts += 1
+        rec.error = f"delete failed: {getattr(e, 'message', e)}"
+        self.store.put(rec)
+        backoff = min(MAX_DELETE_BACKOFF_S, 15 * 2 ** min(rec.delete_attempts, 6))
+        self._next_delete[rec.id] = self._clock() + timedelta(seconds=backoff)
+        log.warning("VM %s: %s (retrying in %d s)", rec.id, rec.error, backoff)
         return rec
 
     async def extend(self, ref: str, minutes: int) -> VmRecord:

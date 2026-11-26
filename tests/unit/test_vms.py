@@ -412,7 +412,7 @@ async def test_hetzner_create_sends_the_key_firewall_labels_and_never_the_token_
 
 async def test_hetzner_401_says_how_to_fix_and_404_delete_is_fine():
     def handler(req):
-        if req.method == "DELETE":
+        if req.url.path.endswith("/servers/1"):  # the read back before a delete, then the delete: gone
             return httpx.Response(404, json={"error": {"code": "not_found", "message": "gone"}})
         return httpx.Response(401, json={"error": {"code": "unauthorized", "message": "unable to authenticate"}})
 
