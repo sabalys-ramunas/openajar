@@ -185,9 +185,12 @@ class TaintMixin:
     are set by PolicyService.__init__)."""
 
     def _inherit_taint(self, parent: Grant, child: Grant) -> None:
+        """What `parent`'s family read goes to `child`'s: a grant narrowed from it, or a local agent grant that
+        continues its family (openajar.policy.families), which reaches the same computers."""
         if family_key(child) != family_key(parent):
+            how = "continues" if len(child.chain_ids) == 1 else "narrowed from"
             self.taint.inherit(family_key(parent), self.taint.context_of(parent), family_key(child),
-                               source=f"narrowed from {parent.root_id}")
+                               source=f"{how} {parent.root_id}")
 
     def mint_turn_token(self, token: str, *, seed: Iterable[str] = (), origin: dict | None = None,
                         by: str = "agents", **narrow: Any) -> tuple[Grant, str]:

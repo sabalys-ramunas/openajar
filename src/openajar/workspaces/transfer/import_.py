@@ -49,6 +49,7 @@ from openajar.core.aio import maybe_await
 from openajar.core.config import load_proxies, save_proxies
 from openajar.core.errors import InvalidRequest, OpenajarError
 from openajar.core.models import LaneSpec, ProxyConfig
+from openajar.policy.families import LOCAL_AGENT_NOTE
 from openajar.workspaces.models import Readiness, check_workspace_id, unique_workspace_id
 from openajar.workspaces.transfer.export import endpoint_digest, workspace_of
 from openajar.workspaces.transfer.format import ExportError, ExportRefused
@@ -423,7 +424,8 @@ def _plan_grants(plan: ImportPlan, contents: ExportContents, src: Sources, now: 
             "ceiling": g.get("ceiling") or "read", "specials": _rename_specials(g.get("specials"), old, new),
             "budget": g.get("budget"), "ttl_s": left, "not_before": g.get("nbf"), "depth": g.get("depth"),
             "fanout": g.get("fanout"), "pins": g.get("pins"), "egress": g.get("egress"),
-            "admin": bool(g.get("admin")), "note": g.get("note")}
+            # the note that marks this computer's own agent grant (openajar.policy.families) never comes from a file
+            "admin": bool(g.get("admin")), "note": None if g.get("note") == LOCAL_AGENT_NOTE else g.get("note")}
         if action == "reissue" and max_ttl and left and left > max_ttl:
             definition["ttl_s"] = max_ttl
             plan.notes.append(f"grant {g['id']} had more time left than this node allows; it is re-issued for "

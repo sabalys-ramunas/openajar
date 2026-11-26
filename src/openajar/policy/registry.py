@@ -159,14 +159,17 @@ class GrantRegistryMixin:
               fanout: int | None = None, pins: dict[str, str] | None = None, egress: list[str] | None = None,
               admin: bool = False, note: str | None = None, by: str = "owner",
               audience: list[str] | None = None, owner: str | None = None, within: Grant | None = None,
-              _member: bool = False, _reserved: bool = False) -> tuple[Grant, str]:
+              continues: str | None = None, _member: bool = False, _reserved: bool = False) -> tuple[Grant, str]:
         """Mint a root grant (token v2, for `audience`: this node by default). The token is
         returned once; only its hash is stored. `owner` is the member an agent grant belongs to
         (its `sub.owner`: the person behind the agent, for routing and four-eyes). A person's
         grant (subject kind human) is made only by issue_member_grant. `within`: the grant of the
         caller who asks (an admin grant on the panel API): the new grant is never wider than it, in
         lanes, domains, egress, ceiling, specials, budget, expiry, admin or depth, and is refused
-        with the fields named otherwise. The owner token, and a person, issue without it."""
+        with the fields named otherwise. The owner token, and a person, issue without it.
+        `continues`: the root grant this one replaces for the same subject, whose environments, saves
+        and title-bound logins it keeps reaching (openajar.policy.families; only `openajar local`
+        passes it, and no API route does)."""
         now = int(self.clock())
         if within is not None and within.owner_token:
             within = None
@@ -177,6 +180,7 @@ class GrantRegistryMixin:
         if ttl <= 0 or ttl > self.cfg.max_grant_ttl_s:
             raise InvalidRequest(f"ttl must be between 1 second and {self.cfg.max_grant_ttl_s // 86400} days")
         sub = _root_subject(subject, owner=owner, member=_member, reserved=_reserved)
+        family = self.continued_family(continues, sub) if continues else None  # type: ignore[attr-defined]
         self.ring.refresh()
         block = self._block(
             parent=None, version=tokens.VERSION, iss=self.issuer, aud=list(audience or [self.issuer]),
@@ -194,8 +198,24 @@ class GrantRegistryMixin:
         token = tokens.mint(self.key, block.to_data())
         g = self._built(token)
         g.check_structure()
-        self._register(g, source="issued", by=by)
+        if family is not None:
+            g.extra["env_family"] = family
+        self._register(g, source="issued", by=by, env_family=family)
+        if family is not None:
+            # it reaches the computers that hold what the grant it continues read: it never starts clean (R1 #4)
+            self._inherit_taint(self._stored_chain(continues), g)  # type: ignore[attr-defined]
+            self._trace_family(g, continues, family, by)
         return g, token
+
+    def _trace_family(self, g: Grant, continues: str | None, family: str, by: str) -> None:
+        """The action log's row for a grant that continues a family (openajar.policy.families)."""
+        from openajar.policy.trace_models import TraceEvent
+
+        self.traces.write(TraceEvent(  # type: ignore[attr-defined]
+            kind="grant_family", tool="grants.continue", principal=by, principal_kind="owner", grant_id=g.id,
+            grant_path=g.path, status="ok",
+            summary=f"grant {g.id} for {g.subject.id} keeps the environments, saves and logins of {continues}",
+            args={"continues": continues, "family": family, "subject": g.subject.id}))
 
     def _root_widening(self, within: Grant, block: GrantBlock) -> list[str]:
         """What a new root grant would hold beyond the grant asking for it, sorted."""
@@ -288,17 +308,18 @@ class GrantRegistryMixin:
         except ValueError as e:
             raise InvalidRequest(f"invalid grant: {e}") from None
 
-    def _register(self, g: Grant, *, source: str, by: str | None) -> None:
+    def _register(self, g: Grant, *, source: str, by: str | None, env_family: str | None = None) -> None:
         b = g.blocks[-1]
         with self.db.tx() as conn:
             if b.parent is not None:
                 self._check_fanout(conn, Grant(g.blocks[:-1]))
             conn.execute(
                 "INSERT INTO grants (id, parent_id, root_id, path, depth, rid, token_sha256, source, subject, block, "
-                "issued_at, expires_at, issued_by, v, block_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "issued_at, expires_at, issued_by, v, block_sha256, env_family) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (b.id, b.parent, g.root_id, g.path, g.depth, b.rid or "", g.token_hash, source,
                  json.dumps(g.subject.model_dump()), json.dumps(b.to_data()), float(b.iat),
-                 g.expires_at, by, b.v, b.digest()))
+                 g.expires_at, by, b.v, b.digest(), env_family))
         self.bus.publish("grant", {"id": b.id, "state": source})
 
     @staticmethod
@@ -416,10 +437,12 @@ class GrantRegistryMixin:
 
     def _check_registered(self, g: Grant) -> None:
         rows = {r["id"]: r for r in self.db.all(
-            f"SELECT id, parent_id, block, block_sha256 FROM grants WHERE id IN ({','.join('?' * len(g.blocks))})",
-            g.chain_ids)}
+            f"SELECT id, parent_id, block, block_sha256, env_family FROM grants "
+            f"WHERE id IN ({','.join('?' * len(g.blocks))})", g.chain_ids)}
         if g.root_id not in rows:
             raise Denied("unregistered", "this grant was not issued by this node")
+        if rows[g.root_id]["env_family"]:  # it continues an earlier grant's family (openajar.policy.families)
+            g.extra["env_family"] = rows[g.root_id]["env_family"]
         for i, b in enumerate(g.blocks):
             row = rows.get(b.id)
             if row is not None:
@@ -567,7 +590,11 @@ class GrantRegistryMixin:
             except (ValueError, Denied):  # a row this version no longer accepts (an Infinity budget)
                 break
         projection = Grant(blocks).projection() if len(blocks) == len(path_ids) else None
+        family = row["env_family"] if row["parent_id"] is None else (
+            (self.db.one("SELECT env_family FROM grants WHERE id = ?", (row["root_id"],)) or {"env_family": None})
+            ["env_family"])
         return {"id": row["id"], "parent_id": row["parent_id"], "root_id": row["root_id"], "depth": row["depth"],
+                "env_family": family or row["root_id"],
                 "subject": json.loads(row["subject"]), "source": row["source"], "state": state,
                 "revoked": via is not None, "revoked_via": via, "revoked_at": iso(revoked.get(via)) if via else None,
                 "issued_at": iso(row["issued_at"]), "expires_at": iso(row["expires_at"]),

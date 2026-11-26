@@ -25,6 +25,7 @@ public address (VmManager.follow_ip): it is read again for every new VM and afte
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import tomllib
@@ -176,10 +177,31 @@ def providers() -> list:
     return tool_providers(LOCAL_TOOLS)
 
 
+RENEW_EVERY_S = 6 * 3600.0  # how often the service looks at whether the agent grant is due for renewal
+
+
+async def renew_grant(home: Path, *, every_s: float = RENEW_EVERY_S) -> None:
+    """Renew this computer's agent grant before it ends (openajar.local.register.renew_due): at the start,
+    then every `every_s`. A failure is logged and tried again at the next look; the grant keeps working
+    until it ends, and `openajar local start` issues the next one (in the same family) after that."""
+    from openajar.local.register import renew_due
+
+    while True:
+        try:
+            for line in await asyncio.to_thread(renew_due, home):
+                log.info("%s", line)
+        except Exception:  # the Keychain, a busy database: the next look tries again
+            log.warning("could not renew the agent grant of this computer; trying again in %d hours",
+                        int(every_s // 3600), exc_info=True)
+        await asyncio.sleep(every_s)
+
+
 async def run(config: NodeConfig, *, stop: asyncio.Event | None = None,
-              on_started: Callable[[int], None] | None = None, runtime: Runtime | None = None) -> None:
+              on_started: Callable[[int], None] | None = None, runtime: Runtime | None = None,
+              renew: bool = False) -> None:
     """Serve the local node until SIGTERM or Ctrl-C (or `stop`). OPENAJAR_HOME is set to its home first,
-    so every part of openajar reads this home's files."""
+    so every part of openajar reads this home's files. `renew`: keep this computer's agent grant renewed
+    (only for the home `openajar local start` registered the clients for)."""
     os.environ["OPENAJAR_HOME"] = str(config.home)
     from openajar.local.service import throttled_note
 
@@ -187,5 +209,12 @@ async def run(config: NodeConfig, *, stop: asyncio.Event | None = None,
     if note:
         log.warning("%s", note)
     runtime = runtime or build_runtime(config)
-    await serve(config, runtime, stop=stop, on_started=on_started, providers=providers(), panel=True,
-                instructions=INSTRUCTIONS)
+    renewing = asyncio.create_task(renew_grant(Path(config.home))) if renew else None
+    try:
+        await serve(config, runtime, stop=stop, on_started=on_started, providers=providers(), panel=True,
+                    instructions=INSTRUCTIONS)
+    finally:
+        if renewing is not None:
+            renewing.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await renewing

@@ -164,6 +164,7 @@ carries one of these codes:
 | [`sandbox_error`](#sandbox_error) | A terminal's or service's sandbox could not be set up or failed. | no |
 | [`save_failed`](#save_failed) | Saving the environment did not finish: its machine did not answer, its disk was full, or the snapshot failed. Nothing was deleted: the machine is kept and still bills, and the owner was told. | no |
 | [`save_limit`](#save_limit) | The save would pass this node's limit for saves (max_saves_gb, 5 GB of file parts by default), even after the oldest saves of the title were removed. | no |
+| [`saved_by_earlier_grant`](#saved_by_earlier_grant) | This agent saved this title (or has it open) under an earlier agent grant of this computer, which ended. openajar 0.7.0 and before did not pass it on, so this grant does not reach it yet. Nothing was opened. | no |
 | [`secret_in_memory`](#secret_in_memory) | The memory entry looks like it holds a secret, so it was not stored. | no |
 | [`secret_in_profile`](#secret_in_profile) | A value in the profile looks like a secret (a key, a token, a password), so nothing was saved. Profiles name vault entries; they never hold secrets. | no |
 | [`see_whole_card`](#see_whole_card) | This send card's preview shows only part of the messages it sends, and whoever approved it was not shown every one of them, so it was not approved. | yes, once the cause is fixed |
@@ -1641,6 +1642,15 @@ The save would pass this node's limit for saves (max_saves_gb, 5 GB of file part
 - **You:** Forget saves you no longer need with `openajar environments forget TITLE`, or raise max_saves_gb in environments.toml.
 - **Retry:** no
 - **Raised by:** `openajar.environments.errors.SaveLimit`
+
+## saved_by_earlier_grant
+
+This agent saved this title (or has it open) under an earlier agent grant of this computer, which ended. openajar 0.7.0 and before did not pass it on, so this grant does not reach it yet. Nothing was opened.
+
+- **Agent:** Do not open it under another title or start over on an empty machine. Tell the user to run `openajar environments adopt --yes` on this computer, then open the same title again: it resumes.
+- **You:** Run `openajar environments adopt` to list what earlier agent grants of this computer left, then `openajar environments adopt --yes` to give it to the current one. Nothing is deleted.
+- **Retry:** no
+- **Raised by:** `openajar.environments.errors.SavedByEarlierGrant`
 
 ## secret_in_memory
 

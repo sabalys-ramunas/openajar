@@ -300,6 +300,31 @@ class SaveStore:
                 return m, path
         raise NotFound(f"no save {save_id}")
 
+    def sharing(self, m: SaveManifest) -> list[str]:
+        """The other saves that name m's disk snapshot (an import on this node shares the original's)."""
+        if m.snapshot is None:
+            return []
+        return [o.id for o in self.all() if o.id != m.id and o.snapshot is not None and o.snapshot.id == m.snapshot.id]
+
+    def move(self, save_id: str, *, family: str, title: str | None = None) -> SaveManifest:
+        """Give a save to another grant family, under another title when one is given (openajar.environments.adopt):
+        its folder moves first, then its manifest says so, so a move that stops halfway is found and finished by
+        the next one (the payload's sealing names the save id, never its family or title)."""
+        m, path = self.find(save_id)
+        moved = m.model_copy(update={"family": family, "title": title or m.title})
+        dest = self.folder(moved.family, moved.title, moved.id)
+        if dest != path:
+            self._mkdir(dest.parent)
+            os.rename(path, dest)
+            fs.fsync_dir(dest.parent)
+            for parent in (path.parent, path.parent.parent):  # an empty title, then an empty family
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+        self.write_manifest(moved)
+        return moved
+
     def remove(self, save_id: str) -> SaveManifest:
         m, path = self.find(save_id)
         shutil.rmtree(path, ignore_errors=True)

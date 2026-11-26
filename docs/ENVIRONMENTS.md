@@ -1848,6 +1848,36 @@ snapshot and the files, after asking; an agent that opens that title again start
 machine. Agents forget finished work themselves with `environment_forget(title)`.
 `environment()` always lists the agent's `open` and `saved` ones.
 
+**Whose they are.** A save, an open environment and a login bound by title belong to the agent's grant
+family: the grant that opened it and every grant narrowed from it. On a laptop the agent grant of
+`openajar local` lives 90 days; it is renewed before then (the service does it after 72 days, and
+`openajar local start` or `setup agents` do it too), and a grant that replaces it after an expiry or for
+new default terms keeps the same family, so the agent keeps its computers. A renewal leaves the old grant
+working until it ends, for the chats open at the time. After you revoked the grant (a leaked token, say)
+or a freeze did, the next one starts a family of its own and `start` says so: the computers stay the
+revoked grant's until you give them over with `adopt` below, after a look. Only this computer's own agent
+grant carries its family on: one `openajar connect` issued for another computer never takes it. The new
+grant also keeps the old one's taint (what it read), since it reaches the same computers. openajar 0.7.0
+and before gave each new grant a family of its own; computers left that way are named to the agent (`environment_open` with their title answers `saved_by_earlier_grant`
+instead of opening an empty machine, and `environment()` lists them as `earlier`). Give them to the
+current grant on that computer:
+
+```
+openajar environments adopt          # lists the saves, open environments and logins it would move
+openajar environments adopt --yes    # moves them, once; nothing is deleted
+```
+
+It takes only what earlier grants of the same agent left (revoked or expired, never another agent's;
+the list names those it leaves alone). An open machine it moves is let go, so its title takes it back at
+once. A title the current grant also has stays the current one's, and the moved one is named
+"<title> (earlier)". The move is written to the action log.
+
+**Moving a save.** `openajar environments save-export ID FILE` writes one save to a file (unsealed:
+keep it private), and `save-import FILE` adds it on another node (or this one), for this computer's
+agent (its agent grant now); `--family <grant id>` gives it to another grant's agent, and the command
+says which agent resumes it. A copy imported on the node that made it shares the original's disk
+snapshot: forgetting one keeps the snapshot while another save names it, and the last one deletes it.
+
 **You resume one yourself.** Without a chat: **Resume** on a save in the web app's Saved list, `openajar
 environments resume <title or save id>` on the node, or the Resume button on the saved environment's
 live-view link. It resumes the save as `environment_open` with its title does (a disk snapshot, or on
@@ -2005,6 +2035,7 @@ Not on it:
 | `which_environment` | a call without the machine's handle: no `on` from a client with no session id, or a title or an id in `on` | the agent passes the `on` its environment_open gave, or opens its own |
 | `environment_already_open` | the title names an open environment with another repository | the agent picks another title |
 | `environment_in_use` | another chat of the agent holds the live machine with this title | the agent opens its own with another title; `take_over=true` once the holder has been quiet for `take_over_minutes` |
+| `saved_by_earlier_grant` | the title is a computer the agent had under an earlier agent grant of this computer (openajar 0.7.0 and before) | `openajar environments adopt`, then `--yes`; the agent then opens the same title |
 | `environment_not_ready` | the environment is starting, or its link is down (a restart, a dropped connection, this computer's address moved) and the node is bringing it back | wait a minute; `openajar environments show ID`, and `openajar logs --level warn --since 10m` if it does not come back |
 | `machine_gone`, or `state: "gone"` | the machine stopped for good: the provider says its container or server is off or no longer exists ("Costs and the reaper"). On your own machine: it restarted, or the container was removed there | the agent opens the same title again and gets a new machine; if it happens often, `docker ps -a` or the Hetzner console, and `openajar logs --level warn --since 30m` |
 | "your machine box is handed over whole, so it holds one environment at a time" | a whole machine has an environment open ([The whole machine](#the-whole-machine)) | close that one (`environment_close`: its work is saved), or add a second machine, or bring this one in with containers |

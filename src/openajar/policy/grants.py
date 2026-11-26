@@ -476,6 +476,14 @@ class Grant:
         return self.blocks[0].id
 
     @property
+    def env_family(self) -> str:
+        """The family whose environments, saves and title-bound logins this grant reaches
+        (openajar.environments): its root grant's id, or, for a local agent grant that replaced an
+        earlier one of this computer, the family that one had (openajar.policy.families). Only for
+        environments: the checks of who asked (self-approval, a task's owner, taint) key on root_id."""
+        return str(self.extra.get("env_family") or self.root_id)
+
+    @property
     def chain_ids(self) -> list[str]:
         return [b.id for b in self.blocks]
 

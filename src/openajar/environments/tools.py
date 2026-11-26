@@ -19,7 +19,7 @@ from openajar.core.errors import NotFound, OpenajarError, PolicyDenied
 from openajar.core.models import Effect
 from openajar.core.progress import StillWorking
 from openajar.core.tools import ToolContext, ToolSpec, current_elicitor, frozen_off, refuse_frozen
-from openajar.environments import caller
+from openajar.environments import adopt, caller
 from openajar.environments.errors import EnvironmentFull, NoEnvironment, RepoNotConnected
 from openajar.environments.manager import EnvironmentManager, check_ref, check_title, is_session
 from openajar.environments.models import ID_RE, SIZES, WORKSPACE, Environment
@@ -446,6 +446,8 @@ async def _open_locked(ctx: ToolContext, mgr: EnvironmentManager, binding: str, 
         return env, how, handle
     env_id = mgr.planned_id(binding, title)
     saved = mgr.save_to_resume(family or caller.grant_id(ctx), title, repo)
+    if saved is None:  # one an earlier grant of this computer has: named, not a second, empty machine
+        adopt.refuse_earlier(ctx, mgr, title)
     if saved is not None:  # this family saved this title: resume it (its repository, branch and machine)
         keep = mgr.check_keep(keep if keep is not None else saved.keep)
         repo, ref = saved.repo, saved.ref
@@ -504,7 +506,7 @@ async def _open_locked(ctx: ToolContext, mgr: EnvironmentManager, binding: str, 
     g = caller.grant_of(ctx)
     handle = new_handle(env_id)  # this chat's lease: only calls that carry it reach the machine
     env = await mgr.create(env_id, plan, binding=binding, title=title, grant_id=caller.grant_id(ctx),
-                           lease=lease_of(handle), grant_root=getattr(g, "root_id", None), agent=_agent(ctx), client=_client(),
+                           lease=lease_of(handle), grant_root=caller.grant_family(g), agent=_agent(ctx), client=_client(),
                            repo=repo, ref=ref, subject=getattr(_subject(ctx), "id", None), member=_member(ctx),
                            keep=keep, resumed=mgr.resuming(saved, plan) if saved is not None else None,
                            prepared=prepared)
@@ -559,6 +561,8 @@ def _family_lists(ctx: ToolContext, mgr: EnvironmentManager, here: Environment |
     failed = failed_rows(mgr, caller.family(ctx), lambda e: _mine(ctx, e))
     if failed:
         out["failed"] = failed  # opens that did not start in the last hour, with why (environment_open raised it)
+    if earlier := adopt.earlier_listing(ctx, mgr):  # what an earlier grant of this computer left (0.7.0)
+        out["earlier"] = earlier
     return out
 
 

@@ -130,10 +130,14 @@ class Pausing:
         await self._working_again(env)
 
     # ================================================================ costs, retention, forgetting
-    async def _drop(self, m: SaveManifest) -> bool:
-        """Saving's drop, the paused machine first: one the provider did not delete keeps its save."""
-        if m.paused is not None and not await self.vms().forget_paused(m.paused.vm_id, why=f"save {m.id} removed"):
-            return False
+    async def _drop(self, m: SaveManifest) -> tuple[bool, list[str]]:
+        """Saving's drop, the paused machine first: one the provider did not delete keeps its save. One
+        another save names too (an import on this node) stays for that save."""
+        shared = m.paused is not None and any(o.id != m.id and o.paused is not None and o.paused.vm_id == m.paused.vm_id
+                                              for o in self.saves().all())
+        if m.paused is not None and not shared and \
+                not await self.vms().forget_paused(m.paused.vm_id, why=f"save {m.id} removed"):
+            return False, []
         return await super()._drop(m)
 
     def snapshots_eur_month(self) -> float:

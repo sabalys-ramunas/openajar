@@ -55,6 +55,20 @@ A grant's subject id is a name, not an identity: two grants may share one. Every
 something (self-approval, a brain task's owner) is keyed on the grant family (the
 root grant id), and the subject ids the node's own issuers use (`site-key:...`) are refused to every other.
 
+Which computers (environments, saves, logins bound by title) a grant reaches is keyed on its environment
+family: its root grant id, or, for the agent grant `openajar local` issues on a laptop, the family of the
+grant it replaced (`grants.env_family`, openajar.policy.families). Only `issue(continues=...)` sets it, only
+for a root agent grant this node issued for the same subject, and only `openajar local` passes it (no API
+route takes it), so a grant `openajar connect` issued for another computer, or another subject's, never
+inherits one; each continuation is a row of the action log (`grant_family`). `openajar local` continues a
+family only across an expiry, its own renewal or replacement and new default terms: after the owner revoked
+the grant (a leaked token) or a freeze did, the next grant starts a family of its own, and the earlier
+computers move only by the owner's `openajar environments adopt` after a dry run. A continued grant starts
+with the taint of the one it continues, since it reaches the same computers. It never touches the checks of
+who asked above, which stay on the root id. Moving computers an older release left with an ended grant of
+the same agent to the current one is the owner's command at the node (`openajar environments adopt`),
+logged as `environments_adopted`.
+
 The device credential is routed exactly as the node token that made it: its actions go through the policy like a
 token's (pacing, taint, the trifecta, Ask me first), never as the owner in person. `openajar node rotate-token` ends
 every device credential, since whoever held the old token could have made one.
@@ -558,8 +572,8 @@ An environment saves when idle unless the agent asks for single use (`keep="none
 | Where a save lives | the disk snapshot (or, on Morph, the paused machine) in the owner's own provider account, or an image in the Docker of this computer or of the owner's own machine; the file part on the node, sealed with the saves key the vault holds (`encrypt_saves`) |
 | What it holds | the machine's disk as the agent left it (code, installs, anything the agent wrote, a secret the app printed included), and the browser's storage state: cookies and local storage of the environment's own browser, never an account lane's or the vault's (`signins=false` or `save_signins = false`: none) |
 | What it never holds | the git gateway's token and `~/.git-credentials` (removed before the snapshot; a resume mints a new token), the machine's SSH keys, process memory, swap |
-| Who brings it back | an agent of the same grant family by its title, or the owner (`openajar environments resume`); within the node's limits |
-| How it ends | `environment_forget`, `environment_close(forget=true)`, the owner, or retention (`saved_days`, `keep_last`), which deletes the snapshot or the paused machine too |
+| Who brings it back | an agent of the same grant family by its title (on a laptop, also the agent grant that replaced the one that saved it), or the owner (`openajar environments resume`); within the node's limits |
+| How it ends | `environment_forget`, `environment_close(forget=true)`, the owner, or retention (`saved_days`, `keep_last`), which deletes the snapshot or the paused machine too, unless another save of this node names it (a copy `save-import` made here): the last one deletes it |
 
 A sign-in kept in a save is a session on that site: anyone who can read the owner's provider account can
 read the snapshot. Single use keeps nothing once the work is pushed (a rescue save only for unpushed work).

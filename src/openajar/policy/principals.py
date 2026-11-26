@@ -170,11 +170,13 @@ class PrincipalsMixin:
             raise Denied("unknown_grant", "the grant this was started under is not known on this node")
         ids = [p for p in row["path"].split("/") if p]
         rows = {r["id"]: r for r in self.db.all(
-            f"SELECT id, block, rid FROM grants WHERE id IN ({','.join('?' * len(ids))})", ids)}
+            f"SELECT id, block, rid, env_family FROM grants WHERE id IN ({','.join('?' * len(ids))})", ids)}
         if not ids or any(i not in rows for i in ids):
             raise Denied("unknown_grant", "the grant this was started under is not fully known on this node")
         g = Grant([_stored_block(rows[i]) for i in ids], token_hash=row["token_sha256"])
         g.check_structure()
+        if rows[ids[0]]["env_family"]:  # its root continues an earlier grant's family (openajar.policy.families)
+            g.extra["env_family"] = rows[ids[0]]["env_family"]
         return g
 
     # ================================================================ stored grants (the runner)

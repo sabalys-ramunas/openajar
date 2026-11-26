@@ -472,9 +472,10 @@ class Saving:
         main = next((r for r in repos if r.dir == env.workdir), repos[0] if repos else None)
         now = self._clock()
         rec = self.vms().store.get(env.vm_id) if env.vm_id else None
+        stored = self.store.get(env.id) if self.store.has(env.id) else env  # `adopt` may have moved it meanwhile
         m = SaveManifest(
-            id=sid, kind=kind, reason=reason[:200], family=env.family, title=env.title, env_id=env.id, agent=env.agent,
-            member=env.member, grant_id=env.grant_id, repo=env.repo, ref=env.ref,
+            id=sid, kind=kind, reason=reason[:200], family=stored.family, title=stored.title, env_id=env.id,
+            agent=env.agent, member=env.member, grant_id=env.grant_id, repo=env.repo, ref=env.ref,
             branch=(main.branch if main else None) or env.branch, head=main.head if main else None,
             workdir=env.workdir, keep=env.keep, saved_at=now, snapshot=snap, paused=found.get("paused"),
             server_type=rec.server_type if rec else env.machine.server_type, size=env.machine.size,
@@ -599,22 +600,19 @@ class Saving:
             log.warning("could not delete snapshot %s: %s", image_id, getattr(e, "message", e))
             return False
 
-    async def _drop(self, m: SaveManifest) -> bool:
-        """Remove one save and its snapshot. A snapshot the provider did not delete keeps its save (so
-        nothing billed is lost track of; the next forget or prune tries again): False then."""
-        if m.snapshot is not None and not await self._forget_snapshot(m.snapshot.id):
-            return False
+    async def _drop(self, m: SaveManifest) -> tuple[bool, list[str]]:
+        """Remove one save and its snapshot: (removed, the other saves that name the snapshot and keep it, U5-03).
+        A snapshot the provider did not delete keeps its save (the next try deletes it): removed is False then."""
+        sharing = self.saves().sharing(m)
+        if m.snapshot is not None and not sharing and not await self._forget_snapshot(m.snapshot.id):
+            return False, []
         with contextlib.suppress(NotFound):
             await asyncio.to_thread(self.saves().remove, m.id)
-        return True
+        return True, sharing
 
     async def _prune_title(self, family: str, title: str) -> list[str]:
-        saves = self.saves()
-        out = []
-        for m in SaveStore.pruned(saves.of_title(family, title), self.settings.keep_last):
-            if await self._drop(m):
-                out.append(m.id)
-        return out
+        pruned = SaveStore.pruned(self.saves().of_title(family, title), self.settings.keep_last)
+        return [m.id for m in pruned if (await self._drop(m))[0]]
 
     async def forget(self, family: str | None, title: str | None, save_id: str | None = None) -> dict:
         """Forget saves (and their snapshots): one by id, or every save of a title. `family` None: the
@@ -629,15 +627,18 @@ class Saving:
             targets = [m for m in saves.all(family) if title and m.title_key == " ".join(title.split()).lower()]
             if not targets:
                 raise NotFound(f"no save titled \"{title}\"")
-        snaps, forgot, kept = 0, [], []
+        snaps, forgot, kept, shared = 0, [], [], []
         for m in targets:
-            if await self._drop(m):
+            dropped, sharing = await self._drop(m)
+            if dropped:
                 forgot.append(m.id)
-                snaps += m.snapshot is not None
+                snaps += m.snapshot is not None and not sharing
+                if m.snapshot is not None and sharing:
+                    shared.append({"id": m.snapshot.id, "save": m.id, "used_by": sharing})
             else:
                 kept.append({"id": m.id, "why": f"the provider did not delete its snapshot {m.snapshot.id if m.snapshot else ''}; "
                                                 "the save stays until it does (try again)"})
-        out: dict = {"forgot": forgot, "snapshots_deleted": snaps}
+        out: dict = {"forgot": forgot, "snapshots_deleted": snaps, **({"snapshots_kept": shared} if shared else {})}
         if kept:
             out["kept"] = kept
         return out
@@ -652,7 +653,7 @@ class Saving:
         age = timedelta(days=self.settings.saved_days)
         for m in saves.all():
             if now - m.saved_at >= age and m.warned_at is not None:
-                if await self._drop(m):
+                if (await self._drop(m))[0]:
                     out["removed"].append(m.id)
             elif now - m.saved_at >= age - SAVED_NOTICE and m.warned_at is None:
                 await self._notify(f"Saved environment \"{m.title}\" is removed tomorrow",

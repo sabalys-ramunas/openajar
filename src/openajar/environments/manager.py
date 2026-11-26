@@ -39,7 +39,7 @@ from openajar.core.models import ProxyConfig, utcnow
 from openajar.environments.activity import Activity
 from openajar.environments.bringup import BringUp
 from openajar.environments.browserproxy import BrowserProxies
-from openajar.environments.caller import binding_of
+from openajar.environments.caller import binding_of, grant_family
 from openajar.environments.checkpoints import Checkpoints
 from openajar.environments.downloads import Downloads
 from openajar.environments.errors import (
@@ -318,7 +318,7 @@ class EnvironmentManager(Picking, Sizing, BringUp, Views, Proofs, Uploads, Downl
         token or an admin grant over the API), or the member whose agent opened it."""
         if grant is None:
             return True  # no policy on this node: every caller is the owner
-        if getattr(grant, "root_id", None) == env.family or env.grant_id in (getattr(grant, "chain_ids", None) or ()):
+        if grant_family(grant) == env.family or env.grant_id in (getattr(grant, "chain_ids", None) or ()):
             return True
         if mcp:
             return False

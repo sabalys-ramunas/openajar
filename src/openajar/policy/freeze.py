@@ -16,7 +16,9 @@ is remembered by openajar.policy.issuers, and the highest block of it whose reac
 scope is revoked there (a revocation by block id ends every token narrowed from it). A root seen
 before chains were remembered is revoked whatever the scope, toward frozen.
 
-Nothing is ever restored by an unfreeze: a revoked agent must be granted again.
+Nothing is ever restored by an unfreeze: a revoked agent must be granted again, and the grant `openajar local`
+issues it then starts without the revoked one's computers (saves, open environments, title-bound logins) until
+the owner gives them with `openajar environments adopt` (openajar.policy.families).
 """
 
 from __future__ import annotations

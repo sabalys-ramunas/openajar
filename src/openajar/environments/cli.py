@@ -370,11 +370,15 @@ def saves(json_out: Annotated[bool, typer.Option("--json")] = False) -> None:
 
     An agent resumes one with environment_open and the same title. Saves older than saved_days
     (environments.toml) are removed, and you are told the day before."""
+    from openajar.environments.adopt import left_behind, node_policy
     from openajar.environments.models import load_settings
     from openajar.environments.saves import SaveStore, public
 
     s = load_settings(_home())
-    rows = [public(m, s.snapshot_eur_per_gb_month) | {"family": m.family, "commits": m.commits, "files": m.files}
+    with node_policy(_home()) as policy:
+        earlier = left_behind(policy)
+    rows = [public(m, s.snapshot_eur_per_gb_month) | {"family": m.family, "commits": m.commits, "files": m.files,
+                                                      "earlier": m.family in earlier}
             for m in SaveStore(_home()).all()]
     if json_out:
         typer.echo(json.dumps({"saved": rows}, indent=2))
@@ -387,10 +391,14 @@ def saves(json_out: Annotated[bool, typer.Option("--json")] = False) -> None:
         snap = f"snapshot {_gb(r['snapshot_gb'])}, EUR {r['cost_eur_month']:.2f} a month" if r["snapshot_gb"] else \
             f"paused machine, about EUR {r['cost_eur_month']:.2f} a month" if r.get("paused") else "files only"
         typer.echo(f"{r['id']}  \"{r['title']}\"  {r['repo'] or 'no repository'}  {r['branch'] or '-'}  "
-                   f"{r['saved_at']}  {r['kind']}  {snap}  {r['files']} files, {r['commits']} commits")
+                   f"{r['saved_at']}  {r['kind']}  {snap}  {r['files']} files, {r['commits']} commits"
+                   + ("  (earlier grant)" if r["earlier"] else ""))
     total = sum(r["cost_eur_month"] for r in rows)
     typer.echo(f"Snapshots and paused machines together: EUR {total:.2f} a month (snapshots at EUR "
                f"{s.snapshot_eur_per_gb_month:g} per GB, snapshot_eur_per_gb_month in environments.toml).")
+    if any(r["earlier"] for r in rows):
+        typer.echo("Saves marked (earlier grant) are this computer's agent's under an earlier agent grant, which it "
+                   "no longer reaches: `openajar environments adopt` gives them to its current grant.")
 
 
 def _forget_now(mgr: Any, title: str | None, save_id: str | None) -> dict:
@@ -409,6 +417,8 @@ def forget(title: Annotated[str, typer.Argument(metavar="TITLE", help="The envir
     typer.echo(f"Forgot {len(out['forgot'])} save{'s' if len(out['forgot']) != 1 else ''} "
                f"({', '.join(out['forgot']) or 'none'}); deleted {out['snapshots_deleted']} snapshot"
                f"{'s' if out['snapshots_deleted'] != 1 else ''}.")
+    for k in out.get("snapshots_kept") or []:
+        typer.echo(f"Kept snapshot {k['id']}: save {', '.join(k['used_by'])} still resumes from it.")
     for k in out.get("kept") or []:
         typer.echo(f"Kept {k['id']}: {k['why']}.")
 
@@ -443,19 +453,51 @@ def save_export(save_id: Annotated[str, typer.Argument(metavar="ID", help="A sav
                "sealed: keep it private.")
 
 
+def _import_family(policy: Any, given: str | None) -> str | None:
+    """The family an imported save goes to: the one of the grant --family names, else this computer's agent's
+    now (its local agent grant), else (no such grant) the one in the file."""
+    if given:
+        if policy is None:
+            return given
+        try:
+            return str(policy.grant_record(given)["env_family"])
+        except NotFound:
+            raise NotFound(f"there is no grant {given} on this node: `openajar grants list` shows them") from None
+    current = policy.local_agent_grant() if policy is not None else None
+    return current["family"] if current is not None else None
+
+
 @app.command("save-import")
 def save_import(file: Annotated[Path, typer.Argument(metavar="FILE", help="A file from save-export.")],
-                family: Annotated[str | None, typer.Option("--family", help="The grant family (root grant id) "
-                                                          "whose agents may resume it; default: the one it had.")]
+                family: Annotated[str | None, typer.Option("--family", help="A grant (its id, as `openajar grants "
+                                                          "list` shows it) whose agent may resume it; default: this "
+                                                          "computer's agent.")]
                 = None) -> None:
-    """Add a save from another node's `save-export`; an agent resumes it with its title."""
+    """Add a save from another node's `save-export`; an agent resumes it with its title.
+
+    It goes to this computer's agent (its agent grant now), or with --family to the agent of that grant."""
+    from openajar.environments.adopt import node_policy
     from openajar.environments.saves import SaveStore, import_save
 
-    try:
-        m = import_save(SaveStore(_home()), file, _saves_key(create=True), family=family)
-    except OpenajarError as e:
-        raise _fail(e) from None
-    typer.echo(f"Imported save {m.id} (\"{m.title}\"). environment_open(title=\"{m.title}\") resumes it.")
+    store = SaveStore(_home())
+    with node_policy(_home()) as policy:
+        try:
+            m = import_save(store, file, _saves_key(create=True), family=_import_family(policy, family))
+        except OpenajarError as e:
+            raise _fail(e) from None
+        live = policy.live_family(m.family) if policy is not None else {}  # no grants: every caller is the owner
+    if live is not None:
+        whose = f" for {live['subject']}: its" if live else "."
+        typer.echo(f"Imported save {m.id} (\"{m.title}\"){whose} environment_open(title=\"{m.title}\") resumes it.")
+    else:
+        typer.echo(f"Imported save {m.id} (\"{m.title}\") under grant family {m.family}, which no live agent grant of "
+                   "this node has, so no agent can resume it yet. Import it again with --family <grant id> "
+                   "(`openajar grants list` shows them).")
+    sharing = [o.id for o in store.all() if m.snapshot is not None and o.id != m.id and o.snapshot is not None
+               and o.snapshot.id == m.snapshot.id]
+    if sharing:
+        typer.echo(f"It shares its disk snapshot with save {', '.join(sharing)}: forgetting one keeps the snapshot "
+                   "while another save names it.")
 
 
 repo_app = typer.Typer(no_args_is_help=True, help=(

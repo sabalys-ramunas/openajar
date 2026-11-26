@@ -63,6 +63,29 @@ class EnvironmentStore(SqliteStore):
                 return env
             return Environment.model_validate_json(rows[0][0])
 
+    def adopt(self, moves: dict[str, str], *, sources: set[str], family: str) -> list[Environment]:
+        """Give open environments to another grant family in one write transaction
+        (openajar.environments.adopt): `moves` maps each id to its title there. Each is let go (binding
+        "kept:<id>", no lease), so the title takes it back at once; one no longer open or no longer in
+        `sources` is left as it is. Returns the ones moved."""
+        out = []
+        marks = ",".join("?" for _ in OPEN_STATES)
+        with self._tx() as db:
+            for env_id, title in moves.items():
+                rows = db.execute(f"SELECT record FROM environments WHERE id = ? AND state IN ({marks})",
+                                  (env_id, *OPEN_STATES)).fetchall()
+                if not rows:
+                    continue
+                env = Environment.model_validate_json(rows[0][0])
+                if env.family not in sources:
+                    continue
+                env.grant_root, env.title = family, title
+                env.binding, env.lease = f"kept:{env.id}", None
+                db.execute("UPDATE environments SET binding = ?, title = ?, record = ? WHERE id = ?",
+                           (env.binding, env.title, env.model_dump_json(), env.id))
+                out.append(env)
+        return out
+
     def has(self, env_id: str) -> bool:
         return bool(self._q("SELECT 1 FROM environments WHERE id = ?", (env_id,)))
 

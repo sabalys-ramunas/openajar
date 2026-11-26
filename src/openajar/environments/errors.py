@@ -80,6 +80,15 @@ class EnvironmentInUse(OpenajarError):
     code = "environment_in_use"
 
 
+class SavedByEarlierGrant(OpenajarError):
+    """environment_open named a title this agent's computer has under an earlier agent grant of this
+    computer (revoked, expired or frozen), whose family this grant does not reach: openajar 0.7.0 and
+    before gave each new local grant a family of its own (openajar.policy.families). Nothing was opened,
+    since a new machine would start empty; the owner gives them to this grant with `openajar
+    environments adopt` (openajar.environments.adopt)."""
+    code = "saved_by_earlier_grant"
+
+
 class EnvironmentAlreadyOpen(OpenajarError):
     """environment_open named the title of an open environment of the same agent, with another
     repository than the one it has. The title names one computer; nothing was opened."""
