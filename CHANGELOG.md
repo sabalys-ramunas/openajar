@@ -184,6 +184,18 @@ No setting of an existing setup changes.
   (`snapshots_left`). A prune of such a save does the same and tells you.
 - A save on the docker provider no longer shows a monthly cost: its image is in your own Docker, so it
   costs nothing.
+- Downloads work in an environment's browser that runs on its machine (`browser = "vm"`, openajar on a
+  Mac). Every one used to fail while the click said ok and "no change". A downloaded file is now in two
+  places: the browser's outbox on the node (`browser_files`), and a plain file on the machine in
+  `/work/downloads` for the terminal, with " (1)" added when a name is taken. Its record names both
+  (`machine_path`) and says how to give it to the person (`environment_download`). The bytes cross the
+  network once: the file on the machine is the browser's own. The click's result says "a download
+  started: <name>" (and how it ended, when that was within 3 s) or "the download failed: <why>". The
+  size limit and the stall check hold while it runs, not only at the end. The PDF viewer's Save button and
+  Ctrl+S still open Firefox's Save As window (Firefox always asks there), now on `/work/downloads`: the
+  click's result and `browser_tabs` name that window and the `screen_act` call that answers it (on the
+  desktop), where before nothing said it was open, and a file saved there is brought into the outbox too. A
+  browser on the node downloads as before.
 
 ## [0.7.0] - 2026-11-26
 
