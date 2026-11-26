@@ -35,12 +35,12 @@ import httpx
 from openajar.core.aio import maybe_await
 from openajar.core.errors import InvalidRequest, LaneExists, NotFound, OpenajarError
 from openajar.core.models import LaneState, parse_lane_id, utcnow
-from openajar.env.models import RemoteHost
+from openajar.env.models import RemoteHost, RemoteVia
 from openajar.vms import capacity, following, netwall, providers, repos, ssh
 from openajar.vms import keys as vmkeys
 from openajar.vms.models import Size, VmError, VmFull, VmLimit, VmRecord, VmSettings, load_settings
 from openajar.vms.pausing import Pausing
-from openajar.vms.provider import Provider, ServerSpec, boot_error_words, server_state
+from openajar.vms.provider import Provider, ServerSpec, boot_error_words, by_hand_words, server_state
 from openajar.vms.store import VmStore
 
 log = logging.getLogger("openajar.vms")
@@ -429,6 +429,9 @@ class VmManager(Pausing):
         location = p.location or self.settings.location
         ttl = self._ttl(ttl_minutes, kept=kept)
         prov = self.provider()
+        place = getattr(prov, "place", None)  # a provider whose images each live in one place (openajar.vms.own:
+        if callable(place):                   # a person's machines): the machine made where its image is
+            location = await maybe_await(place(p.image)) or location
         out = {"lane": lane_id, "profile": label, "size": p.words(), "image": p.image, "location": location,
                "ttl_minutes": ttl, "fallbacks": []}
         if p.server_type:
@@ -536,7 +539,7 @@ class VmManager(Pausing):
         rec.server_type, rec.location, rec.price_hourly_eur, rec.no_room = server_type, location, price, tried
         vmkeys.adopt(self.dir, rec.id, server)  # a provider's own login (Morph), in place of openajar's
         rec.provider_id, rec.host, rec.state = server.id, server.ipv4, "booting"
-        rec.port, rec.ssh_user = server.ssh_port, server.ssh_user
+        rec.port, rec.ssh_user, rec.via = server.ssh_port, server.ssh_user, getattr(server, "via", None)
         self.store.put(rec)
         return rec
 
@@ -545,7 +548,7 @@ class VmManager(Pausing):
         return RemoteHost(vm_id=rec.id, host=rec.host or "", port=rec.port, user=rec.ssh_user,
                           key_path=str(d / "id_ed25519"), known_hosts=str(d / "known_hosts"), host_alias=f"agentos-{rec.id}",
                           provider=rec.provider, label=f"{rec.provider} {rec.server_type} in {rec.location}",
-                          environment=rec.environment)
+                          environment=rec.environment, via=RemoteVia(**rec.via) if rec.via else None)
 
     def remote(self, rec: VmRecord) -> RemoteHost:
         """How to reach the VM over SSH (its pinned key and host key), for a node service that holds
@@ -568,7 +571,7 @@ class VmManager(Pausing):
                     if s is None:
                         raise VmError("the server disappeared while booting")
                     if s.ipv4:
-                        rec.host, rec.port = s.ipv4, s.ssh_port
+                        rec.host, rec.port, rec.via = s.ipv4, s.ssh_port, getattr(s, "via", None)
                         self.store.put(rec)
                 if rec.host:
                     ok, last = await self._probe(self._remote(rec), timeout_s=15)
@@ -919,7 +922,7 @@ class VmManager(Pausing):
                     await self._notify(f"VM {fresh.id} is still running past its time limit",
                                        f"Lane {fresh.lane_id} ({fresh.server_type}, {fresh.host or 'no IP'}) should "
                                        f"have been deleted at {fresh.expires_at:%H:%M} UTC: {fresh.error or 'no error'}. "
-                                       "Delete it in the Hetzner console if openajar cannot.", urgent=True)
+                                       + by_hand_words(fresh), urgent=True)
         await self._reconcile(now, out)
         return out
 

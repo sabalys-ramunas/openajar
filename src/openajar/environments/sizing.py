@@ -37,8 +37,9 @@ class Sizing:
         vms = self.vms()
         if size in SIZES:
             self._check_size(size)
-            if getattr(vms.provider(), "name", "") == "docker":
-                return self.settings.profile, {"server_type": f"docker-{size}"}
+            named = getattr(vms.provider(), "size_type", None)  # containers (docker, a person's own machine)
+            if callable(named):
+                return self.settings.profile, {"server_type": named(size)}
             cpu, memory = SIZES[size]
             return self.settings.profile, {"min_cpu": cpu, "min_memory_gb": memory}
         if size in vms.settings.profiles:
@@ -67,7 +68,7 @@ class Sizing:
         except OpenajarError:
             return
         if types and name not in types:
-            example = next((t for t in types if not t.startswith("docker")), types[0])
+            example = next((t for t in types if not t.startswith(("docker", "own"))), types[0])
             raise InvalidRequest(f"size {name!r} is not one this node knows. size is one of {self._size_names()}, "
                                  f"or a server type the provider rents, like {example}; leave it out for the "
                                  "default. Nothing was rented")
@@ -152,6 +153,9 @@ class Sizing:
                     (t for t in await self.vms().offers(plan["location"]) if t["name"] == server_type), {})
             except OpenajarError:
                 continue
+            if ((specs.get("cores") or cpu) <= (env.machine.cpu or 0)
+                    and (specs.get("memory_gb") or memory) <= (env.machine.memory_gb or 0)):
+                continue  # no bigger here: a machine of the owner's handed over whole is the same at every size
             row = {"size": name, "server_type": server_type, "cpu": specs.get("cores"),
                    "memory_gb": specs.get("memory_gb"), "price_hourly_eur": price}
             if running and price is not None and price < running:
@@ -375,6 +379,34 @@ class Sizing:
             if r.expires_at is not None and (best is None or r.expires_at < best[0]):
                 best = (max(r.expires_at, now), None, "another VM of the node, at its time limit")
         return best
+
+    def snapshots_for(self, env: Environment) -> bool:
+        """Does a save of this environment take a disk snapshot: environments.toml allows it, and its
+        machine has one (a machine of the owner's handed over whole has none: its saves hold the files)."""
+        if not self.settings.snapshots:
+            return False
+        from openajar.vms.provider import capable_at
+
+        try:
+            vms = self.vms()
+            return capable_at(vms.provider(), "snapshot", vms.store.get(env.vm_id).location if env.vm_id else None)
+        except OpenajarError:
+            return True
+
+    async def check_room(self, plan: dict) -> None:
+        """A machine of the owner's handed over whole holds one environment at a time (openajar.vms.whole):
+        said here, by the title of the one that is open, before anything is opened."""
+        busy = getattr(self.vms().provider(), "busy", None)
+        lane = await busy(plan.get("location")) if callable(busy) else None
+        if lane is None:
+            return
+        held = next((e for e in self.store.open() if e.terminal_lane.replace("/", ".") == lane), None)  # its label
+        who = f"\"{held.title}\" ({held.id})" if held is not None else (lane or "one this node does not know")
+        raise EnvironmentFull(
+            f"your machine {plan.get('location')} is handed over whole, so it holds one environment at a time, and "
+            f"{who} is open on it. Close that one first (environment_close: its work is saved), or tell the user: a "
+            "second machine (`openajar environments machine add`), or this one brought in with containers, holds "
+            "several. Nothing was opened")
 
     def check_limits(self, plan: dict) -> None:
         self.check_count()

@@ -39,6 +39,8 @@
 │ secret       API keys the app in an environment uses: the machine holds a    │
 │              placeholder, and the node puts the value in for the bound host  │
 │              only.                                                           │
+│ machine      Bring your own machine: environments open on a Linux box of     │
+│              yours over ssh, as containers or whole.                         │
 │ env          The app's local env files on an environment's machine: plain    │
 │              settings copied, secrets bound as placeholders, and the rest    │
 │              never sent.                                                     │

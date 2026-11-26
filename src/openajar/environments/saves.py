@@ -469,12 +469,23 @@ def import_save(store: SaveStore, src: Path, key: bytes | None, *, family: str |
         raise
 
 
+def snapshot_eur_month(snapshot: Any, eur_per_gb_month: float) -> float:
+    """What a save's snapshot costs a month: its size at the rate, and nothing where nothing is rented (an
+    image in Docker on this computer or on the person's own machine)."""
+    from openajar.vms.providers import FREE
+
+    gb = getattr(snapshot, "gb", None) if snapshot is not None else None
+    if not gb or getattr(snapshot, "provider", "") in FREE:
+        return 0.0
+    return round(gb * eur_per_gb_month, 4)
+
+
 def public(m: SaveManifest, eur_per_gb_month: float) -> dict[str, Any]:
     """A save as environment() and the web data show it."""
     from openajar.core import clock
 
     gb = m.snapshot.gb if m.snapshot is not None else None
-    cost = round(gb * eur_per_gb_month, 4) if gb else 0.0
+    cost = snapshot_eur_month(m.snapshot, eur_per_gb_month)
     if m.paused is not None:  # the machine itself, paused: what its provider says that costs
         cost = m.paused.eur_month or 0.0
     return {"id": m.id, "title": m.title, "repo": m.repo, "branch": m.branch, "head": (m.head or "")[:12] or None,

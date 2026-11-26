@@ -103,18 +103,60 @@ in under a minute instead of installing on every VM.
 ## Providers and what they can do
 
 `provider` in vms.toml picks one: `hetzner` (the default), `docker` (local containers,
-openajar.vms.docker) or `morph` (Morph Cloud, openajar.vms.morph). Each declares `capabilities`, and
+openajar.vms.docker), `morph` (Morph Cloud, openajar.vms.morph), `digitalocean` (Droplets,
+openajar.vms.digitalocean, experimental: the same capabilities as Hetzner but `update_labels`) or
+`own` (containers on the owner's own machines over SSH, openajar.vms.own). Each declares `capabilities`, and
 callers check a name (`openajar.vms.provider.capable`) before they use what it stands for:
 
-| Capability | Meaning | Hetzner | Docker | Morph |
-|---|---|---|---|---|
-| `firewall` | a provider firewall lets SSH in from the node only | yes | no (loopback) | no (its gateway) |
-| `snapshot` | a disk snapshot that new machines boot from | yes | yes (`docker commit`) | yes |
-| `pause` | pause and resume with memory: processes keep running | no | no | yes |
-| `branch` | copy a running machine, memory included (not used yet) | no | no | yes |
-| `wake_on_http` | a paused machine wakes on an HTTP request (not used yet) | no | no | yes |
-| `network_policy` | openajar can limit a machine's outbound traffic | yes | yes | no |
-| `cloud_init` | first-boot user data runs | yes | no | no |
+| Capability | Meaning | Hetzner | Docker | Morph | Own machine (containers; a whole machine has neither `snapshot` nor `network_policy`) |
+|---|---|---|---|---|---|
+| `firewall` | a provider firewall lets SSH in from the node only | yes | no (loopback) | no (its gateway) | no (the machine's loopback) |
+| `snapshot` | a disk snapshot that new machines boot from | yes | yes (`docker commit`) | yes | yes (`docker commit` there) |
+| `pause` | pause and resume with memory: processes keep running | no | no | yes | no |
+| `branch` | copy a running machine, memory included (not used yet) | no | no | yes | no |
+| `wake_on_http` | a paused machine wakes on an HTTP request (not used yet) | no | no | yes | no |
+| `network_policy` | openajar can limit a machine's outbound traffic | yes | yes | no | yes |
+| `cloud_init` | first-boot user data runs | yes | no | no | no |
+
+Beside the capabilities a provider says what it is with plain attributes, so no caller asks for it by
+name: `firewall` (False: no provider firewall to make), `closes_network` (it closes a limited or none
+network itself, openajar.vms.netwall), `size_type(size)` (an environment's size is a server type of its own there, for containers),
+`place(image)` (where a new machine goes when an image lives in one place: an own machine's saves),
+and on a `Server` `via` (the SSH host it is reached through: a container on an own machine listens on
+that machine's loopback). `openajar.vms.providers.FREE` names the providers that rent nothing, so
+costs read "free" there.
+
+### DigitalOcean (experimental)
+
+`openajar.vms.digitalocean` is the second rented cloud, beside `hetzner.py`, and it needed no special
+case in the callers: the same capabilities (`firewall`, `snapshot`, `network_policy`, `cloud_init`),
+`ensure_closed_firewall` for a closed network, and `place(image)` because a snapshot lives in one
+region. What it bridges inside itself: labels are tags (`<key>:<value>`, a `.` written `:`), the
+firewall covers Droplets by a tag they are created with, a snapshot is a Droplet action whose image
+is found by its name and then tagged, and SSH keys carry the home id in their names. Its `experimental
+= True` is what `openajar environments setup` reads to say so. Tests: tests/unit/test_vms_digitalocean.py,
+against a fake of the API behind a mock transport.
+
+### Your own machine
+
+`openajar.vms.own` is the docker provider with every docker call run as `ssh <machine> docker ...`
+(`MachineDocker`), behind `OwnProvider`, which holds every registered machine
+(`vms/machines/<name>/`: a record, a key, a pinned host key). A server's id is `<machine>:<container
+id>` and an image's `<machine>//<docker image>`, so each later call finds its machine. A machine that
+does not answer raises from `list_servers` and `get_server`: the reaper and the liveness check read
+"no answer" as nothing, never as "deleted". The user guide is docs/ENVIRONMENTS.md "Your own
+machine"; what an environment there can and cannot reach is in docs/THREAT-MODEL.md.
+
+A machine can also be handed over whole (`Machine.mode = "whole"`, `openajar.vms.whole.WholeMachine`):
+`OwnProvider.on(name)` returns either side, and both answer the same calls. A whole machine is its own
+one server: `create_server` writes who holds it to `/var/lib/openajar-machine/server.json` there (made
+with noclobber, so of two opens one gets it) and adds the VM's key to root's `authorized_keys`;
+`get_server` and `list_servers` read that file; `delete_server` runs the release (the key's line, the
+processes the environment left, `/work`, the file). The `Server` it returns carries the machine's
+pinned host keys (`host_keys`, as Morph does), no `via`, and `ssh_user` root. It has no snapshot and no
+wall, and a provider's places may differ, so callers ask `openajar.vms.provider.capable_at(provider,
+name, location)` where the answer depends on the machine (a save's disk snapshot, a closed network);
+`OwnProvider.busy(location)` says who holds a whole machine, for the refusal before anything is opened.
 
 Without `cloud_init` the node runs the environment's setup over SSH as soon as the machine answers
 (openajar.environments.bringup), and the image a snapshot is built from needs none.

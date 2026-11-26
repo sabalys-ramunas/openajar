@@ -20,6 +20,8 @@ import typer
 from openajar.core import catalog
 from openajar.core.config import home_from_env
 from openajar.core.errors import InvalidRequest, NotFound, OpenajarError
+from openajar.environments.machines_cli import machine_app
+from openajar.environments.machines_cli import set_home as _machines_home
 from openajar.environments.models import SIZES, WORKSPACE
 from openajar.environments.secrets_cli import secret_app
 
@@ -33,6 +35,7 @@ _state: dict = {"home": None}
 def main(home: Annotated[Path | None, typer.Option(help="OPENAJAR_HOME (default: $OPENAJAR_HOME)")] = None) -> None:
     """Your agents' cloud computers: list, show, download, close, allow, set up, connect repositories."""
     _state["home"] = home
+    _machines_home(home)
 
 
 def _home() -> Path:
@@ -459,6 +462,7 @@ repo_app = typer.Typer(no_args_is_help=True, help=(
     "Connect private repositories: a key or token in the vault, and the declaration for env."))
 app.add_typer(repo_app, name="repo")
 app.add_typer(secret_app, name="secret")
+app.add_typer(machine_app, name="machine")
 
 
 def _remote_or_fail(remote: str) -> Any:
@@ -715,10 +719,19 @@ def setup(build: Annotated[bool, typer.Option("--build", help="Build the docker 
         _build_image(s.docker_image, s.docker_bin)
     elif s.provider == "docker" and pull:
         _get_image(s.docker_image, s.docker_bin, s.docker_pull)
+    elif s.provider == "own" and (build or pull) and vms.configured:
+        _own_image(home, build=build)
     problem = asyncio.run(check_provider()) if vms.configured else (
-        "no Hetzner token: run `openajar vm setup`, or set provider = \"docker\" in vms.toml to use Docker here")
+        "no machine of yours is set up: `openajar environments machine add NAME user@host`" if s.provider == "own"
+        else "no DigitalOcean token: run `openajar vm setup --provider digitalocean`" if s.provider == "digitalocean"
+        else "no Hetzner token: run `openajar vm setup`, or set provider = \"docker\" in vms.toml to use Docker "
+             "here, or bring a machine of your own with `openajar environments machine add NAME user@host`")
     if problem is None:
         lines.append(("ok", f"provider {s.provider}", "answers"))
+        if getattr(vms.provider(), "experimental", False):
+            from openajar.vms.digitalocean import EXPERIMENTAL
+
+            lines.append(("note", "experimental", EXPERIMENTAL))
     else:
         lines.append(("missing", f"provider {s.provider}", problem))
     if problem is None:
@@ -728,7 +741,8 @@ def setup(build: Annotated[bool, typer.Option("--build", help="Build the docker 
         except OpenajarError:
             lines.append(("ok", "image", "Ubuntu 24.04, set up by cloud-init on each boot (a few minutes); "
                                         "`openajar vm image build dev` makes them boot ready"
-                          if s.provider != "docker" else s.docker_image))
+                          if s.provider not in ("docker", "own") else
+                          "none: the machine itself, set up by `machine add`" if _whole(home, s) else s.docker_image))
     from openajar.git.remotes import Remotes
 
     declared = [r for r in Remotes(home / "git" / "remotes.json").list() if r.scope.split("/")[0] == "env"]
@@ -748,6 +762,10 @@ def setup(build: Annotated[bool, typer.Option("--build", help="Build the docker 
                                          "github.com/<owner>/<name>`")))
     if s.provider == "docker":
         lines.append(("note", "isolation", docker_isolation_words()))
+    if s.provider == "own":
+        from openajar.environments.machines_cli import ISOLATION, WHOLE
+
+        lines.append(("note", "isolation", WHOLE if _whole(home, s) else ISOLATION))
     lines.append(("note", "grants", ("agents connected with `openajar connect` or `openajar dev up` may open one (the "
                                      "environments special: vm, exec and the owner's bound logins on env/* lanes "
                                      "only). Nothing in one asks you, opening and pushing included; the limits bound "
@@ -756,11 +774,37 @@ def setup(build: Annotated[bool, typer.Option("--build", help="Build the docker 
 
     env_settings = load_settings(home)
     refused, where = _local_browser(home, env_settings.browser)
-    lines.append(refused or _browser_line(where, s.provider, s.docker_image, s.docker_bin))
+    lines.append(refused or _browser_line(where, "whole" if _whole(home, s) else s.provider, s.docker_image,
+                                          s.docker_bin))
     lines.append(("note", "limits", _limit_words(env_settings) + " (`openajar environments allow` changes them)"))
     for status, what, words in lines:
         typer.echo(f"{status:<8} {what:<18} {words}")
     if any(st == "missing" for st, _w, _x in lines if _w.startswith("provider")):
+        raise typer.Exit(1)
+
+
+def _whole(home: Path, s: Any) -> bool:
+    """Do new environments open on a machine of the owner's handed over whole (openajar.vms.whole)?"""
+    if s.provider != "own":
+        return False
+    from openajar.vms import own
+
+    return own.is_whole(home, own.default_name(home, s))
+
+
+def _own_image(home: Path, *, build: bool) -> None:
+    """`setup --pull` and `--build` with provider = "own": the image on the machine new environments open on
+    (a machine handed over whole has none: its setup runs again)."""
+    from openajar.environments import machines_cli
+    from openajar.vms import own
+
+    name = own.default_name(home)
+    if name is None:
+        typer.echo("No machine is the default: openajar environments machine use NAME")
+        return
+    machines_cli.set_home(home)
+    m = own.load(home, name)
+    if not (machines_cli._set_up(m) if m.mode == "whole" else machines_cli._get_image(m, build=build)):
         raise typer.Exit(1)
 
 
@@ -792,6 +836,10 @@ def _browser_line(where: str, provider: str, image: str, docker: str) -> tuple[s
     if where != "vm":
         return ("ok", "browser", "on this node, with its traffic through the machine (browser = \"node\")")
     words = "on each machine (browser = \"vm\"), driven over its SSH connection"
+    if provider == "whole":
+        return ("ok", "browser", words + "; your machine's setup installed it")
+    if provider == "own":
+        return ("ok", "browser", words + "; the environments image on your machine has it")
     if provider != "docker":
         return ("ok", "browser", words + "; the dev snapshot has it, any other image installs it on the first open")
     import subprocess

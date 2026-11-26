@@ -29,6 +29,10 @@ class Server:
     # of its SSH gateway, pinned when the provider was set up): openajar.vms.keys.adopt writes them 0600.
     ssh_key: str | None = field(default=None, repr=False)
     host_keys: list[str] = field(default_factory=list)
+    # A machine that listens on another SSH host's loopback (openajar.vms.own: a container on a person's own
+    # machine): how the node reaches that host, as openajar.env.models.RemoteVia's fields. `ipv4` and
+    # `ssh_port` are then an address on that host.
+    via: dict | None = None
 
 
 @dataclass
@@ -60,6 +64,13 @@ DEFAULT_CAPABILITIES = frozenset({"firewall", "snapshot", "network_policy", "clo
 def capable(provider: Any, name: str) -> bool:
     """Does the provider declare this capability (CAPABILITIES)?"""
     return name in getattr(provider, "capabilities", DEFAULT_CAPABILITIES)
+
+
+def capable_at(provider: Any, name: str, location: str | None) -> bool:
+    """capable(), for one place of a provider whose places differ (openajar.vms.own: a machine handed over
+    whole has no disk snapshot and no wall around it, a machine that holds containers has both)."""
+    at = getattr(provider, "capable_at", None)
+    return bool(at(name, location)) if callable(at) else capable(provider, name)
 
 
 class Provider(Protocol):
@@ -318,3 +329,20 @@ async def server_state(prov: Any, provider_id: str | None) -> str:
     if s is None:
         return "the provider has no such server any more"
     return f"the provider says the server is {s.status or 'in no state'}" + ("" if s.ipv4 else ", with no address yet")
+
+
+def by_hand_words(rec: Any) -> str:
+    """Where a person deletes a machine openajar could not (a VM record), for the overdue notification."""
+    container = f"agentos-{rec.id.replace('_', '-')}"
+    if rec.provider == "own":
+        name, _, rest = (rec.provider_id or "").partition(":")
+        if rest == container:  # a machine handed over whole: its server is the machine, named as the VM is
+            return (f"Free your machine {name or rec.location} if openajar cannot: `openajar environments machine "
+                    f"check {name or rec.location} --free`.")
+        return (f"Remove its container on your machine {name or rec.location} if openajar cannot: `docker rm -f "
+                f"{container}` there.")
+    if rec.provider == "docker":
+        return f"Remove its container if openajar cannot: `docker rm -f {container}`."
+    from openajar.vms.models import provider_name
+
+    return f"Delete it in the {provider_name(rec.provider)} console if openajar cannot."

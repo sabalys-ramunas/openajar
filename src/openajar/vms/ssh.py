@@ -16,7 +16,7 @@ import shlex
 from pathlib import Path
 
 from openajar.env import oom
-from openajar.env.models import EnvLane, RemoteHost
+from openajar.env.models import EnvLane, RemoteHost, RemoteVia
 from openajar.env.sandbox import Command, LanePlan, Workload
 
 SSH = "ssh"
@@ -24,10 +24,42 @@ CONNECT_TIMEOUT_S = 10
 JOB_STATUS_TIMEOUT_S = 20.0
 
 
+def via_command(via: RemoteVia) -> str:
+    """The ProxyCommand of a machine reached through another SSH host: an ssh to that host, as strict as
+    ssh_base (its own key, its pinned host key, no config file, no agent, no password), that only carries
+    the connection (`-W`). ssh runs it with /bin/sh, so every word is quoted; a `%` of a path is doubled,
+    since ssh expands `%h` and `%p` in it."""
+    argv = [
+        SSH, "-F", "/dev/null",
+        "-i", via.key_path,
+        "-p", str(via.port),
+        "-o", "IdentitiesOnly=yes",
+        "-o", "IdentityAgent=none",
+        "-o", "BatchMode=yes",
+        "-o", "PasswordAuthentication=no",
+        "-o", "KbdInteractiveAuthentication=no",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", f"UserKnownHostsFile={via.known_hosts}",
+        "-o", "GlobalKnownHostsFile=/dev/null",
+        "-o", f"HostKeyAlias={via.host_alias}",
+        "-o", "UpdateHostKeys=no",
+        "-o", f"ConnectTimeout={CONNECT_TIMEOUT_S}",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=4",
+        "-o", "ForwardAgent=no",
+        "-o", "ForwardX11=no",
+        "-o", "LogLevel=ERROR",
+    ]
+    target = shlex.quote(f"{via.user}@{via.host}")
+    return f"{shlex.join(argv)} -W %h:%p {target}".replace("%", "%%").replace("%%h:%%p", "%h:%p")
+
+
 def ssh_base(remote: RemoteHost, *, tty: bool = False, quiet: bool = False) -> list[str]:
     """The ssh argv up to (not including) the remote command. No config file, no agent, no
     password, no forwarding of anything. `quiet`: ssh says nothing of its own on stderr (a job's
-    follower, whose stderr is the job's: a word of ssh's there would shift the offsets)."""
+    follower, whose stderr is the job's: a word of ssh's there would shift the offsets). A machine
+    reached through another SSH host (`remote.via`) gets that hop as its ProxyCommand."""
+    hop = ["-o", f"ProxyCommand={via_command(remote.via)}"] if remote.via is not None else []
     return [
         SSH, "-F", "/dev/null",
         "-i", remote.key_path,
@@ -49,6 +81,7 @@ def ssh_base(remote: RemoteHost, *, tty: bool = False, quiet: bool = False) -> l
         "-o", "ForwardX11=no",
         "-o", "ClearAllForwardings=yes",
         "-o", f"LogLevel={'QUIET' if quiet else 'ERROR'}",
+        *hop,
         "-tt" if tty else "-T",
         f"{remote.user}@{remote.host}",
     ]

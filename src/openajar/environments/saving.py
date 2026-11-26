@@ -278,7 +278,7 @@ class Saving:
         and git are not set up again after the snapshot. Raises SaveFailed or SaveLimit; the machine is
         never touched beyond that."""
         if snapshot is None:
-            snapshot = env.keep == "save" and self.settings.snapshots
+            snapshot = env.keep == "save" and self.snapshots_for(env)
         async with self._lock(f"save:{env.id}"):
             env = self.store.get(env.id)
             if not env.open or env.state not in ("ready", "closing") or not env.vm_id:
@@ -686,8 +686,10 @@ class Saving:
 
     def snapshots_eur_month(self) -> float:
         """What the kept snapshots cost a month, at snapshot_eur_per_gb_month."""
-        gb = sum(m.snapshot.gb or 0 for m in self.saves().all() if m.snapshot is not None)
-        return round(gb * self.settings.snapshot_eur_per_gb_month, 4)
+        from openajar.environments.saves import snapshot_eur_month
+
+        rate = self.settings.snapshot_eur_per_gb_month
+        return round(sum(snapshot_eur_month(m.snapshot, rate) for m in self.saves().all()), 4)
 
     # ================================================================ resume
     def save_to_resume(self, family: str, title: str, repo: str | None) -> SaveManifest | None:

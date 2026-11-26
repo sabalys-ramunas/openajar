@@ -291,8 +291,10 @@ def vms(ctx: Ctx) -> None:
         options.append(("keep", "Keep the saved Hetzner token"))
     options.append(("hetzner", f"Hetzner Cloud: a real VM for each chat, {HETZNER_HOURLY} while one is open"))
     options.append(("morph", "Morph Cloud: starts in seconds, and a save pauses it with its memory"))
+    options.append(("digitalocean", "DigitalOcean (experimental, not thoroughly tested): a Droplet for each chat"))
     if running:
         options.append(("docker", "Docker on this computer: free, but less isolated than a cloud VM"))
+    options.append(("own", "Your own machine: a Linux box you reach over ssh (at home, or a server elsewhere); free"))
     options.append(("skip", "Skip for now (openajar setup vms later)"))
     if installed and not running:
         ui.say("Docker is installed but not running. Start it and run `openajar setup vms` to use it.")
@@ -305,6 +307,12 @@ def vms(ctx: Ctx) -> None:
         use_morph(ctx, settings)
     elif choice in ("hetzner", "keep"):
         _use_hetzner(ctx, settings, keep=choice == "keep")
+    elif choice == "own":
+        _use_own(ctx, settings)
+    elif choice == "digitalocean":
+        from openajar.setup.digitalocean import use_digitalocean
+
+        use_digitalocean(ctx, settings)
     else:
         ui.say("No VMs for now. Agents cannot open an environment until you run `openajar setup vms`.")
         ctx.todo.append("VMs")
@@ -320,9 +328,37 @@ def _vm_default(ctx: Ctx, settings: Any, has_token: bool, running: bool) -> str:
         return "docker"
     if settings.provider == "morph":
         return "morph"
+    if settings.provider in ("own", "digitalocean"):
+        return settings.provider
     if has_token:
         return "keep"
     return "skip" if ctx.ui.yes else "hetzner"
+
+
+def _use_own(ctx: Ctx, settings: Any) -> None:
+    """Your own machine (openajar.vms.own). A machine is brought in with its own command, which asks what
+    setup cannot (its address, its host key); here the one already set up becomes where environments open."""
+    from openajar.vms import own
+
+    ui = ctx.ui
+    add = "openajar environments machine add NAME user@host"
+    names = [m.name for m in own.every(ctx.home)]
+    if not names:
+        ui.say("Bring your machine in with one command (it checks the machine over ssh and puts the environments "
+               f"image in its Docker), then run `openajar setup vms` again: {add}. A fresh Ubuntu 24.04 server can "
+               "be handed over as a whole instead, with no Docker: add --whole.")
+        ctx.todo.append(f"your machine ({add})")
+        return
+    name = own.default_name(ctx.home, settings) if settings.provider == "own" else None
+    name = name or names[0]
+    write_vm_settings(ctx.home, {"provider": "own", "location": name})
+    if own.is_whole(ctx.home, name):
+        ui.say(f"Environments open on your machine {name}, handed over as a whole: one at a time, the agent root "
+               "on it. It is free.")
+    else:
+        ui.say(f"Environments open as containers on your machine {name}. They are free, and share that machine's "
+               "kernel.")
+    ctx.vms = f"your own machine {name} (free)"
 
 
 def _use_docker(ctx: Ctx, settings: Any, built: bool) -> None:
@@ -779,6 +815,26 @@ def _check_vms(ctx: Ctx) -> tuple[bool, str]:
             return False, "Docker is not running"
         return (True, "Docker answers, and the image is there") if built else (
             False, "Docker answers, but the image is not there: openajar environments setup --pull")
+    if s.provider == "own":
+        from openajar.vms import own
+
+        name = own.default_name(ctx.home, s)
+        if name is None:
+            return False, "no machine of yours is set up: openajar environments machine add NAME user@host"
+        try:
+            asyncio.run(own.OwnProvider(ctx.home, s).check())
+        except OpenajarError as e:
+            return False, e.message
+        return True, f"your machine {name} answers" + ("" if own.is_whole(ctx.home, name)
+                                                       else ", and the image is there")
+    if s.provider == "digitalocean":
+        from openajar.setup.digitalocean import digitalocean_check
+        from openajar.vms.models import DIGITALOCEAN_TOKEN_FILE
+
+        key = ctx.home / DIGITALOCEAN_TOKEN_FILE
+        problem = digitalocean_check(key.read_text().strip(), s.digitalocean_api_url) if key.exists() else "no API token"
+        return (True, "DigitalOcean answers (experimental)") if problem is None else (
+            False, f"DigitalOcean: {problem} (openajar setup vms)")
     if s.provider == "morph":
         from openajar.setup.morph import morph_check
         from openajar.vms.models import MORPH_TOKEN_FILE
@@ -841,7 +897,8 @@ def test_vm(ctx: Ctx) -> None:
     if not configured(ctx.home, s):
         ui.say("No VMs are set up, so there is nothing to test yet.")
         return
-    cost = {"docker": "free on Docker", "morph": "about EUR 0.01 on Morph"}.get(s.provider, "about EUR 0.01")
+    cost = {"docker": "free on Docker", "own": "free on your own machine", "morph": "about EUR 0.01 on Morph",
+            "digitalocean": "a few cents on DigitalOcean"}.get(s.provider, "about EUR 0.01")
     if not ui.confirm(f"Open a test VM now? It starts one, runs `uname -a` and closes it ({cost}).",
                       default=False):
         ui.say("No test VM. `openajar setup test-vm` runs one later.")

@@ -632,3 +632,45 @@ def test_no_network_says_so_and_setup_goes_on(no_build):
     assert r.exit_code == 0, r.output
     assert "Could not add the web app: could not reach the release" in r.output
     assert "The node works without it" in r.output and "the web app" in r.output.split("Still to do:")[1]
+
+
+def test_your_own_machine_is_offered_and_says_the_one_command(world):
+    """No machine yet: setup names the command that brings one in, and changes nothing."""
+    r = run("vms", input="own\n")
+    assert r.exit_code == 0, r.output
+    assert "Your own machine: a Linux box you reach over ssh" in r.output
+    assert "openajar environments machine add NAME user@host" in r.output
+    assert not (world.home / "vms.toml").exists()
+    _no_secrets(r.output)
+
+
+def test_a_machine_already_brought_in_becomes_where_environments_open(world):
+    from openajar.vms import own
+
+    world.home.mkdir(mode=0o700, exist_ok=True)
+    own.save(world.home, own.Machine(name="homebox", host="192.168.1.20", user="me"))
+    r = run("vms", input="own\n")
+    assert r.exit_code == 0, r.output
+    assert "Environments open as containers on your machine homebox" in r.output
+    vms = tomllib.loads((world.home / "vms.toml").read_text())
+    assert (vms["provider"], vms["location"]) == ("own", "homebox")
+    again = run("vms", input="\n")  # asked again: your own machine is the default now
+    assert again.exit_code == 0 and "your machine homebox" in again.output
+
+
+def test_digitalocean_is_offered_as_experimental_and_says_so_before_it_asks(world, monkeypatch):
+    from openajar.setup import digitalocean as step
+
+    seen = []
+    monkeypatch.setattr(step, "digitalocean_check", lambda token, api_url: seen.append(token) or None)
+    made_up = "dop_v1_" + "x" * 24  # put together here: not a real token
+    r = run("vms", input=f"digitalocean\n{made_up}\nn\n")
+    assert r.exit_code == 0, r.output
+    assert "DigitalOcean (experimental, not thoroughly tested)" in r.output
+    assert "DigitalOcean is experimental in this version" in r.output
+    assert r.output.index("DigitalOcean is experimental in this version") < r.output.index("Paste the DigitalOcean token")
+    assert seen == [made_up] and made_up not in r.output
+    assert tomllib.loads((world.home / "vms.toml").read_text())["provider"] == "digitalocean"
+    path = world.home / "secrets" / "digitalocean.token"
+    assert path.read_text().strip() == made_up and oct(path.stat().st_mode & 0o777) == "0o600"
+    _no_secrets(r.output)

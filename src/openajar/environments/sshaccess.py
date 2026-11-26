@@ -164,11 +164,17 @@ def _q(value: str) -> str:
 
 def entry(env_id: str, remote: Any, key: Path, known_hosts: Path) -> str:
     name = alias(env_id)
+    via = []
+    if getattr(remote, "via", None) is not None:  # a container on the person's own machine: through that machine
+        from openajar.vms.ssh import via_command
+
+        via = [f"  ProxyCommand {via_command(remote.via)}"]
     lines = [f"{BEGIN}{env_id} (openajar writes this and removes it when the environment closes)",
              f"Host {name}",
              f"  HostName {remote.host}",
              f"  Port {remote.port}",
              f"  User {remote.user}",
+             *via,
              f"  IdentityFile {_q(str(key))}",
              "  IdentitiesOnly yes",
              "  IdentityAgent none",
