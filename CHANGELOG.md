@@ -6,6 +6,12 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-26
+
+This version adds two more places an environment can run: a machine you already have (`openajar environments
+machine`, as containers on it or as a fresh server handed over whole) and DigitalOcean, which is experimental
+and has not rented a real Droplet yet. No tool or setting of an existing setup changes.
+
 ### Added
 
 - Bring your own machine. A Linux machine you already have (a box at home, a server you rent elsewhere, a VM
@@ -47,7 +53,6 @@ All notable changes to openajar are recorded here. The format follows
   `--install-docker`; never on `--yes` alone) it runs Docker's own install script as root there and adds the
   login to the `docker` group. `machine check NAME --install-docker` does it later. Docker stays on the
   machine when you remove the machine from openajar.
-
 - DigitalOcean as a provider, experimental. `openajar vm setup --provider digitalocean` (and `openajar setup
   vms`) takes a DigitalOcean API token, and environments then open as Droplets in your account: a firewall
   that lets SSH in from the node only, a closed firewall for a limited or none network, a save as a

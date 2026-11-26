@@ -651,10 +651,11 @@ title replaces it with a fresh one. The skill that teaches an agent the loop:
 ## Status
 
 > [!NOTE]
-> **Alpha, at 0.7.0.** 0.5 gave the agent's computer a desktop you can watch and work with, and the
+> **Alpha, at 0.8.0.** 0.5 gave the agent's computer a desktop you can watch and work with, and the
 > new name. 0.6 gave its browser an address of your own: a static residential proxy or this computer's
-> connection, with the proxy's credentials kept off the machine. 0.7 adds your own captcha-solving
-> service, off until you add one.
+> connection, with the proxy's credentials kept off the machine. 0.7 added your own captcha-solving
+> service, off until you add one. 0.8 adds a machine of your own in place of a rented VM, and
+> DigitalOcean as an experimental provider.
 > Computers that stay and their logins are new, and the tools may still change between minor versions:
 > see the [changelog](CHANGELOG.md) and the [releases](https://github.com/sabalys-ramunas/openajar/releases).
 > On a laptop there is no `ui_check` yet (it needs a server), and the laptop must be awake while a VM works.
