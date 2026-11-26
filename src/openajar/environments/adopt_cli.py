@@ -61,7 +61,7 @@ def adopt(yes: Annotated[bool, typer.Option("--yes", help="Move them. Without it
           json_out: Annotated[bool, typer.Option("--json")] = False) -> None:
     """Give the computers of this computer's earlier agent grants to its current one.
 
-    openajar 0.7.0 and before gave each new local agent grant (after its 90 days, a freeze, or new default
+    openajar 0.8.0 and before gave each new local agent grant (after its 90 days, a freeze, or new default
     terms) computers of its own, so the agent no longer saw its saves and open environments. This lists those
     of this computer's agent under its earlier grants (revoked or expired), and with --yes gives them to its
     current grant, once: the saves, the open environments and the logins bound to them by title. A title both

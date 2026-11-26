@@ -561,7 +561,7 @@ def _family_lists(ctx: ToolContext, mgr: EnvironmentManager, here: Environment |
     failed = failed_rows(mgr, caller.family(ctx), lambda e: _mine(ctx, e))
     if failed:
         out["failed"] = failed  # opens that did not start in the last hour, with why (environment_open raised it)
-    if earlier := adopt.earlier_listing(ctx, mgr):  # what an earlier grant of this computer left (0.7.0)
+    if earlier := adopt.earlier_listing(ctx, mgr):  # what an earlier grant of this computer left (0.8.0 and before)
         out["earlier"] = earlier
     return out
 

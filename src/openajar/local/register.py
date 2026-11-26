@@ -232,7 +232,7 @@ def _renew(home: Path, client: Client, cfg) -> list[str]:
 
 def _left_behind(home: Path, policy, record: dict) -> list[str]:
     """A line when earlier agent grants of this computer left saves or open environments no live grant reaches
-    (openajar 0.7.0 and before gave each new grant a family of its own): the command that gives them back."""
+    (openajar 0.8.0 and before gave each new grant a family of its own): the command that gives them back."""
     subject = (record.get("subject") or {}).get("id")
     if not subject:
         return []

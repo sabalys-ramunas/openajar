@@ -229,11 +229,11 @@ class VmRecord(BaseModel):
     ssh_user: str = "root"                    # who the node signs in as (Morph: the instance id, at its gateway)
     via: dict | None = None                   # the SSH host it is reached through (openajar.vms.own), RemoteVia's fields
     # made with another provider than vms.toml names now, so openajar cannot reach it (openajar.vms.reaping): ended
-    # as "deleted" though nothing was deleted, so 0.7.0 (which ignores this field) reads the row too
+    # as "deleted" though nothing was deleted, so 0.8.0 and 0.7.0 (which ignore this field) read the row too
     lost: bool = False
     # an environment's machine past its limit: the awake seconds the VM reaper has kept it for its save so far, and
     # whether the owner was told it is overdue. On the record, so a node that restarts every few minutes still lets
-    # it go after the grace and tells the owner once (R1 #2). 0.7.0 ignores both.
+    # it go after the grace and tells the owner once (R1 #2). 0.8.0 and 0.7.0 ignore both.
     held_s: float = 0.0
     overdue_told: bool = False
 

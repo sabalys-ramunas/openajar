@@ -6,9 +6,7 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-11-26
-
-This version stops openajar from losing your work, and adds two more places an environment can run.
+This version stops openajar from losing your work, and makes downloads work in an environment's browser.
 
 What was lost before, and is not now. An environment's machine could be deleted before its work was saved:
 when your computer was off or asleep through the environment's time limit (the usual overnight case), when a
@@ -17,72 +15,25 @@ at a start, and when one server list missed a machine. Staged work was missing f
 rule now: a delete needs positive evidence, and silence (not listed, not readable, not answering, past its
 time) is never permission. The list is under Fixed.
 
-Saves you may have lost track of. Up to 0.7.0, a new local agent grant (after its 90 days, a freeze, a revoke,
+Saves you may have lost track of. Up to 0.8.0, a new local agent grant (after its 90 days, a freeze, a revoke,
 or new default terms) could not see the saves, open environments and title-bound logins of the one before: the
 agent got `saved: []`, and its title opened a new, empty machine while the old one kept billing. The grant is
 now renewed before it ends, and a replacement keeps the computers. If it already happened to you, run
 `openajar environments adopt` once after updating: it lists what earlier grants of this computer left behind,
 and `openajar environments adopt --yes` gives it to the agent you use now. Nothing is deleted.
 
-The two new places: a machine you already have (`openajar environments machine`, as containers on it or as a
-fresh server handed over whole) and DigitalOcean, which is experimental and has not rented a real Droplet yet.
-No setting of an existing setup changes.
+Deletes by id read the object back first. 0.8.0, its new providers for your own machine and DigitalOcean
+included, deleted a server, a container, a snapshot or an image by its bare id. 0.8.1 reads each one back first
+and deletes only what carries this home's label, on Hetzner, Morph, DigitalOcean, Docker and your own machine:
+a Hetzner project can hold your production servers too.
+
+Downloads work now in an environment's browser that runs on its machine: a file lands in the browser's outbox
+and in `/work/downloads` there, where every download failed before.
+
+Nothing you set up needs to change.
 
 ### Added
 
-- Bring your own machine. A Linux machine you already have (a box at home, a server you rent elsewhere, a VM
-  at any cloud) can be the computer of your environments, in place of a rented VM: `openajar environments
-  machine add homebox me@192.168.1.20` reads and pins its SSH host key (you confirm the fingerprint), makes a
-  key for it and adds it with your own ssh (openajar never sees or keeps a password), checks the machine
-  (Linux on x86-64 or arm64, Docker, a login that may use it, an sshd that allows forwarding) and puts the
-  environments image in its Docker. From then on each environment is a container there, with the same
-  terminal, browser, live view, ports, git, saves and tools, at no cost: the tools and the CLI say "free"
-  where they said a price, and a save there costs nothing. `machine list`, `check` (`--image` after an
-  upgrade), `use` and `remove` manage them, `openajar setup vms` offers it, and `vms.toml` says `provider =
-  "own"` with `location` naming the machine new environments open on. Several machines can be brought in;
-  environments and saves stay on the machine they were made on.
-  What openajar puts on the machine is one `authorized_keys` line (none with `--key`), the image, and per
-  environment a container and a network, per save an image. It changes no firewall, opens no port (a
-  container's sshd listens on the machine's loopback and is reached through the node's ssh connection to the
-  machine), never stops, restarts or wipes the machine, and deletes only what carries its own label: a
-  container or an image goes only once the machine's Docker reads this home's label back on it. A machine that
-  is off or out of reach is waited for, never taken for deleted, and so is one whose record on this computer
-  does not read. `machine remove` deletes no saved image there while a save on this computer does not read
-  (`--force` does).
-  Said plainly: an environment there is a container, so it shares the machine's kernel and is less isolated
-  than a rented VM, though it reaches neither the machine, your network nor another environment. When the
-  machine restarts, its open environments' containers stop with their disks whole, and openajar starts them
-  again (it tells you when one does not start). Not in this version: macOS
-  and Windows machines, rootless Docker and Podman, a machine behind a jump host, and renting VMs and using
-  your own machine on one node at once. Tried against a container with its own sshd and Docker that plays
-  the machine over ssh; not yet tried against a real remote server.
-- A whole machine. `openajar environments machine add box root@203.0.113.7 --whole` hands a server over
-  entirely, with no Docker: the machine itself is the environment's computer and the agent is root on it, as
-  on a rented VM. It is for a fresh Ubuntu 24.04 server with nothing of yours on it. The command checks the
-  system and the login (root, or passwordless sudo), names the signs that the machine is in use (containers,
-  open ports, several accounts, files in `/work`, `/var/www`, `/srv` or a home folder) and then hands it over
-  only when you say so at a terminal (`--yes` never answers that), and runs the setup a rented VM gets (git,
-  Node, Python, the browser and the desktop). One environment is open on it at a time; a second open is
-  refused by the title of the first. A save holds the files (no disk snapshot) and resumes onto the same
-  machine. A close takes that environment's key away, ends what it left running, and empties `/work`; what
-  the agent installed or started outside `/work` stays, and openajar never restarts, powers off or reinstalls
-  the machine. Said plainly: nothing walls the agent in there. It is root on a machine that is on your network
-  as itself, and `network` `limited` and `none` are refused. Tried against a container that plays a fresh
-  Ubuntu 24.04 server with systemd and sshd; not yet tried against a real server.
-- `machine add` offers to install Docker when the machine has none: on your yes (asked at a terminal, or
-  `--install-docker`; never on `--yes` alone) it runs Docker's own install script as root there and adds the
-  login to the `docker` group. `machine check NAME --install-docker` does it later. Docker stays on the
-  machine when you remove the machine from openajar.
-- DigitalOcean as a provider, experimental. `openajar vm setup --provider digitalocean` (and `openajar setup
-  vms`) takes a DigitalOcean API token, and environments then open as Droplets in your account: a firewall
-  that lets SSH in from the node only, a closed firewall for a limited or none network, a save as a
-  snapshot that resumes in its own region, and the reaper deleting only what openajar tagged: every delete
-  reads the Droplet or the snapshot back first and refuses one without this home's tag, and a Droplet that is
-  off is powered on again, never deleted. Experimental means it was written from DigitalOcean's API reference
-  and tested against a fake of that API, and no Droplet has been rented with it yet; setup, the CLI, `openajar
-  environments setup` and the docs say so, and the docs list what was and was not tried. Without a size an
-  environment gets the cheapest Droplet with 2 vCPU and 4 GB (about EUR 0.03 an hour); prices are estimates in EUR from DigitalOcean's USD prices (`digitalocean_eur_per_usd`), and a
-  snapshot there costs about USD 0.06 per GB a month (`snapshot_eur_per_gb_month = 0.052` shows it).
 - `openajar environments adopt` lists the saves, open environments and title-bound logins that earlier agent
   grants of this computer left behind (revoked or expired, same agent), and `--yes` gives them to the current
   grant, once. Nothing is deleted; an open machine it moves is let go, so its title takes it back at once; a
@@ -97,13 +48,6 @@ No setting of an existing setup changes.
   and every 6 hours) and stores the new token where Claude Code and Codex read it. The old grant is not revoked,
   so chats open at the time keep working until it ends. `openajar local start` and `setup agents` renew it too,
   one at a time with the service, so one grant is issued and the token and the connection name the same one.
-
-### Changed
-
-- The README shows the browser from two addresses in a recorded clip (a datacenter address and a static
-  residential one, same browser), says what eBay answered from a datacenter address on 26 November (403 on
-  the home page, a search link loaded), shows Computers where it showed Home, and its status note names
-  0.7.0.
 
 ### Fixed
 
@@ -134,7 +78,7 @@ No setting of an existing setup changes.
 - One server list that missed a machine (an empty `docker ps`, a renamed node, a provider hiccup) no longer
   deletes it: the reaper asks the provider for that server by its id, and only its own "no such server" marks
   the record deleted outside openajar, without a delete. A record made with another provider than `vms.toml`
-  names now is ended as lost (state `deleted` with `lost: true`, which 0.7.0 still reads) and you are told
+  names now is ended as lost (state `deleted` with `lost: true`, which 0.8.0 and 0.7.0 still read) and you are told
   where to look, where its id went to the new provider's delete and the server billed on. `vms/home-id` is
   never written over after an error other than a missing file.
 - One environment's error no longer stops the reaper's pass for every other environment. Each one's step is
@@ -182,8 +126,6 @@ No setting of an existing setup changes.
   so the delete is refused, and the save stayed for ever ("try again"). Now the save is forgotten, the snapshot
   stays where it is, and `forget` says where it is and that openajar no longer tracks it
   (`snapshots_left`). A prune of such a save does the same and tells you.
-- A save on the docker provider no longer shows a monthly cost: its image is in your own Docker, so it
-  costs nothing.
 - Downloads work in an environment's browser that runs on its machine (`browser = "vm"`, openajar on a
   Mac). Every one used to fail while the click said ok and "no change". A downloaded file is now in two
   places: the browser's outbox on the node (`browser_files`), and a plain file on the machine in
@@ -196,6 +138,84 @@ No setting of an existing setup changes.
   click's result and `browser_tabs` name that window and the `screen_act` call that answers it (on the
   desktop), where before nothing said it was open, and a file saved there is brought into the outbox too. A
   browser on the node downloads as before.
+- Your own machine (new in 0.8.0): a container or an image goes only once the machine's Docker reads this
+  home's label back on it, and `machine remove` counts only what Docker removed (any failure but its "no such
+  ..." is an error). A machine whose record on this computer does not read is waited for, never taken for
+  removed, and `machine remove` deletes no saved image there while a save on this computer does not read
+  (`--force` does). When the machine restarts, its open environments' containers stop with their disks whole,
+  and openajar starts them again (it tells you when one does not start), where 0.8.0 lost them until their
+  last save.
+- DigitalOcean (new in 0.8.0, experimental): every delete reads the Droplet or the snapshot back first and
+  refuses one without this home's tag, and a Droplet that is off is powered on again, never deleted.
+
+## [0.8.0] - 2026-11-26
+
+This version adds two more places an environment can run: a machine you already have (`openajar environments
+machine`, as containers on it or as a fresh server handed over whole) and DigitalOcean, which is experimental
+and has not rented a real Droplet yet. No tool or setting of an existing setup changes.
+
+### Added
+
+- Bring your own machine. A Linux machine you already have (a box at home, a server you rent elsewhere, a VM
+  at any cloud) can be the computer of your environments, in place of a rented VM: `openajar environments
+  machine add homebox me@192.168.1.20` reads and pins its SSH host key (you confirm the fingerprint), makes a
+  key for it and adds it with your own ssh (openajar never sees or keeps a password), checks the machine
+  (Linux on x86-64 or arm64, Docker, a login that may use it, an sshd that allows forwarding) and puts the
+  environments image in its Docker. From then on each environment is a container there, with the same
+  terminal, browser, live view, ports, git, saves and tools, at no cost: the tools and the CLI say "free"
+  where they said a price, and a save there costs nothing. `machine list`, `check` (`--image` after an
+  upgrade), `use` and `remove` manage them, `openajar setup vms` offers it, and `vms.toml` says `provider =
+  "own"` with `location` naming the machine new environments open on. Several machines can be brought in;
+  environments and saves stay on the machine they were made on.
+  What openajar puts on the machine is one `authorized_keys` line (none with `--key`), the image, and per
+  environment a container and a network, per save an image. It changes no firewall, opens no port (a
+  container's sshd listens on the machine's loopback and is reached through the node's ssh connection to the
+  machine), never stops, restarts or wipes the machine, and deletes only what carries its own label. A machine
+  that is off or out of reach is waited for, never taken for deleted.
+  Said plainly: an environment there is a container, so it shares the machine's kernel and is less isolated
+  than a rented VM, though it reaches neither the machine, your network nor another environment. A machine
+  that restarts loses its open environments (they come back from their last save). Not in this version: macOS
+  and Windows machines, rootless Docker and Podman, a machine behind a jump host, and renting VMs and using
+  your own machine on one node at once. Tried against a container with its own sshd and Docker that plays
+  the machine over ssh; not yet tried against a real remote server.
+- A whole machine. `openajar environments machine add box root@203.0.113.7 --whole` hands a server over
+  entirely, with no Docker: the machine itself is the environment's computer and the agent is root on it, as
+  on a rented VM. It is for a fresh Ubuntu 24.04 server with nothing of yours on it. The command checks the
+  system and the login (root, or passwordless sudo), names the signs that the machine is in use (containers,
+  open ports, several accounts, files in `/work`, `/var/www`, `/srv` or a home folder) and then hands it over
+  only when you say so at a terminal (`--yes` never answers that), and runs the setup a rented VM gets (git,
+  Node, Python, the browser and the desktop). One environment is open on it at a time; a second open is
+  refused by the title of the first. A save holds the files (no disk snapshot) and resumes onto the same
+  machine. A close takes that environment's key away, ends what it left running, and empties `/work`; what
+  the agent installed or started outside `/work` stays, and openajar never restarts, powers off or reinstalls
+  the machine. Said plainly: nothing walls the agent in there. It is root on a machine that is on your network
+  as itself, and `network` `limited` and `none` are refused. Tried against a container that plays a fresh
+  Ubuntu 24.04 server with systemd and sshd; not yet tried against a real server.
+- `machine add` offers to install Docker when the machine has none: on your yes (asked at a terminal, or
+  `--install-docker`; never on `--yes` alone) it runs Docker's own install script as root there and adds the
+  login to the `docker` group. `machine check NAME --install-docker` does it later. Docker stays on the
+  machine when you remove the machine from openajar.
+- DigitalOcean as a provider, experimental. `openajar vm setup --provider digitalocean` (and `openajar setup
+  vms`) takes a DigitalOcean API token, and environments then open as Droplets in your account: a firewall
+  that lets SSH in from the node only, a closed firewall for a limited or none network, a save as a
+  snapshot that resumes in its own region, and the reaper deleting only what openajar tagged. Experimental
+  means it was written from DigitalOcean's API reference and tested against a fake of that API, and no
+  Droplet has been rented with it yet; setup, the CLI, `openajar environments setup` and the docs say so,
+  and the docs list what was and was not tried. Without a size an environment gets the cheapest Droplet with 2 vCPU and 4 GB (about EUR 0.03
+  an hour); prices are estimates in EUR from DigitalOcean's USD prices (`digitalocean_eur_per_usd`), and a
+  snapshot there costs about USD 0.06 per GB a month (`snapshot_eur_per_gb_month = 0.052` shows it).
+
+### Changed
+
+- The README shows the browser from two addresses in a recorded clip (a datacenter address and a static
+  residential one, same browser), says what eBay answered from a datacenter address on 26 November (403 on
+  the home page, a search link loaded), shows Computers where it showed Home, and its status note names
+  0.7.0.
+
+### Fixed
+
+- A save on the docker provider no longer shows a monthly cost: its image is in your own Docker, so it
+  costs nothing.
 
 ## [0.7.0] - 2026-11-26
 

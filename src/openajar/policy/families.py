@@ -18,7 +18,7 @@ continued: the new grant starts a family of its own, and the owner gives the ear
 `openajar environments adopt` after a look (openajar.local.register). Each continuation is a row of the
 action log (`grant_family`).
 
-The rest of this module finds the families 0.7.0 and before left behind: the root grants `openajar local`
+The rest of this module finds the families 0.8.0 and before left behind: the root grants `openajar local`
 issued here (LOCAL_AGENT_NOTE), and, for the current one, its subject's earlier grants that are revoked or
 expired and whose family no live grant has. `openajar environments adopt` gives those computers to the
 current grant (openajar.environments.adopt), and an agent that opens such a title is told so.

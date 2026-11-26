@@ -132,7 +132,7 @@ def _parse_time(text: str) -> datetime | None:
 
 async def lost(vms: Any, rec: VmRecord, current: str) -> None:
     """A record of another provider than vms.toml's: ended as lost (never deleted through this one). Its state is
-    "deleted" with `lost` set, never a state of its own: 0.7.0 cannot read a state it does not know (R1 #3)."""
+    "deleted" with `lost` set, never a state of its own: 0.8.0 and 0.7.0 cannot read a state they do not know (R1 #3)."""
     rec.state, rec.lost, rec.deleted_at = "deleted", True, vms._clock()
     was = f"your own machine {rec.location}" if rec.provider == "own" else provider_name(rec.provider)
     now_on = "your own machines" if current == "own" else provider_name(current)

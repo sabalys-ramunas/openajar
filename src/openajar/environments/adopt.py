@@ -85,7 +85,7 @@ EARLIER_WORDS = ("the owner runs `openajar environments adopt --yes` on this com
 
 def earlier_of(ctx: Any) -> list[dict]:
     """The families this agent had under earlier grants of this computer that its grant does not reach
-    (openajar.policy.families): what openajar 0.7.0 and before left behind. None for any other caller."""
+    (openajar.policy.families): what openajar 0.8.0 and before left behind. None for any other caller."""
     from openajar.environments.caller import grant_of
 
     found = getattr(ctx.runtime.get("policy"), "earlier_families_of", None)

@@ -834,7 +834,7 @@ agent = "Leave build output and large files out of the work (or gitignore them),
 fix = "Forget saves you no longer need with `openajar environments forget TITLE`, or raise max_saves_gb in environments.toml."
 
 [saved_by_earlier_grant]
-meaning = "This agent saved this title (or has it open) under an earlier agent grant of this computer, which ended. openajar 0.7.0 and before did not pass it on, so this grant does not reach it yet. Nothing was opened."
+meaning = "This agent saved this title (or has it open) under an earlier agent grant of this computer, which ended. openajar 0.8.0 and before did not pass it on, so this grant does not reach it yet. Nothing was opened."
 agent = "Do not open it under another title or start over on an empty machine. Tell the user to run `openajar environments adopt --yes` on this computer, then open the same title again: it resumes."
 fix = "Run `openajar environments adopt` to list what earlier agent grants of this computer left, then `openajar environments adopt --yes` to give it to the current one. Nothing is deleted."
 
