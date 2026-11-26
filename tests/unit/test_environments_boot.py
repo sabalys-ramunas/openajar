@@ -15,6 +15,7 @@ machine's folders moved under tmp_path."""
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -103,9 +104,8 @@ def _setup_here(tmp_path: Path, installed: set[str]) -> tuple[subprocess.Complet
     stub(bin_dir, "node", "echo v22.11.0")
     stub(bin_dir, "pnpm", "exit 0")
     stub(bin_dir, "uv", "exit 0")
-    text = machine.setup_script()
-    for path in ("/etc/", "/var/lib/", "/work"):
-        text = text.replace(path, str(root) + path)
+    # one pass: a root under any ".../worktrees/..." must not have its own "/work" moved again
+    text = re.sub(r"/etc/|/var/lib/|/work", lambda m: str(root) + m.group(0), machine.setup_script())
     out = sh(text, bin_dir, INSTALLED=" ".join(sorted(installed)))
     return out, log
 
