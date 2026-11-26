@@ -133,6 +133,31 @@ def _saves_on(name: str) -> list[Any]:
     return [m for m in saves if m.snapshot is not None and m.snapshot.id.startswith(f"{name}{IMAGE_SEP}")]
 
 
+def whole_default(home: Path, s: Any) -> bool:
+    """Do new environments open on a machine of the owner's handed over whole (openajar.vms.whole)? For
+    `openajar environments setup`."""
+    if s.provider != "own":
+        return False
+    from openajar.vms import own
+
+    return own.is_whole(home, own.default_name(home, s))
+
+
+def own_image(home: Path, *, build: bool) -> None:
+    """`openajar environments setup --pull` and `--build` with provider = "own": the image on the machine new
+    environments open on (a machine handed over whole has none: its setup runs again)."""
+    from openajar.vms import own
+
+    name = own.default_name(home)
+    if name is None:
+        typer.echo("No machine is the default: openajar environments machine use NAME")
+        return
+    set_home(home)
+    m = own.load(home, name)
+    if not (_set_up(m) if m.mode == "whole" else _get_image(m, build=build)):
+        raise typer.Exit(1)
+
+
 def use_machine(home: Path, name: str) -> None:
     """vms.toml: provider = "own" and location = the machine, keeping the rest of the file."""
     import tomllib
