@@ -59,6 +59,7 @@ MB = 1024 * 1024
 INBOX, OUTBOX = "inbox", "outbox"
 BOXES = (INBOX, OUTBOX)
 META = ".meta.json"
+BROWSER_COPY = ".browser-copy"  # a download streamed from a browser that runs elsewhere, before it takes its name
 SNIFF_BYTES = 64 * 1024
 EARLY_SNIFF_BYTES = 8 * 1024
 ID_RE = re.compile(r"^(in|out)_[0-9a-f]{12}$")
@@ -332,11 +333,14 @@ class StoredFile(BaseModel):
     created_at: datetime
     finished_at: datetime | None = None
     error: str | None = None
+    machine_path: str | None = None  # a download of an environment's browser: the copy on its machine, too
     owner_pid: int | None = None  # the daemon process writing a download; internal
 
     def public(self) -> dict[str, Any]:
         out = self.model_dump(mode="json", exclude={"owner_pid"}, exclude_none=True)
         out["size_text"] = human_size(self.size)
+        if self.machine_path and self.status is not FileStatus.DOWNLOADING:
+            out["to_human"] = f'environment_download(path="{self.machine_path}") gives the human a link to it'
         return out
 
 
@@ -626,55 +630,78 @@ class LaneFiles:
             raise _refuse(f"{meta.id}: its directory is a symlink; refusing")
         return entry
 
-    def finish_download(self, file_id: str, src: Path, *, expected_size: int | None = None) -> StoredFile:
+    def browser_copy(self, file_id: str) -> Path:
+        """Where a browser that runs elsewhere (an environment's, on its machine) streams a finished
+        download to: a private name inside the file's own outbox folder, which finish_download takes."""
+        return self._entry_dir(self.get(file_id)) / BROWSER_COPY
+
+    def finish_download(self, file_id: str, src: Path, *, expected_size: int | None = None,
+                        machine_path: str | None = None) -> StoredFile:
         """Copy a finished download (the browser's temporary file) into the outbox. With the size the
-        server announced, a shorter file is kept as partial, never as complete."""
+        server announced, a shorter file is kept as partial, never as complete. A `src` that is the
+        file's browser_copy is moved into place, not copied, and is gone afterwards either way."""
         meta = self.get(file_id)
         entry = self._entry_dir(meta)
+        update = {"machine_path": machine_path} if machine_path else {}
+        try:
+            return self._finish(meta, entry, Path(src), expected_size, update)
+        finally:
+            if Path(src) == entry / BROWSER_COPY:
+                Path(src).unlink(missing_ok=True)
+
+    def _finish(self, meta: StoredFile, entry: Path, src: Path, expected_size: int | None,
+                update: dict[str, Any]) -> StoredFile:
+        file_id = meta.id
         size = os.stat(src).st_size
         if size > self.config.download_max_bytes:
             return self.fail_download(file_id, FileStatus.FAILED,
                                       f"larger than the {human_size(self.config.download_max_bytes)} download limit",
-                                      size=size)
+                                      size=size, **update)
         incoming = entry / ".incoming"
         digest = hashlib.sha256()
         head = b""
         written = 0
+        in_place = src == entry / BROWSER_COPY and not src.is_symlink()  # in its own folder: moved, not copied
         try:
-            with open(src, "rb") as source, os.fdopen(_open_private(incoming), "wb") as out:
+            with open(src, "rb") as source, (open(os.devnull, "wb") if in_place
+                                             else os.fdopen(_open_private(incoming), "wb")) as out:
                 while chunk := source.read(MB):
-                    if not head:
-                        head = chunk[:SNIFF_BYTES]
+                    head = head or chunk[:SNIFF_BYTES]
                     digest.update(chunk)
                     out.write(chunk)
                     written += len(chunk)
                     if written > self.config.download_max_bytes:
                         raise InvalidRequest("over the download limit")
+            if in_place:
+                os.chmod(src, 0o600)
+            os.replace(src if in_place else incoming, entry / meta.name)
             ftype = sniff(head, meta.name) or OTHER
-            os.replace(incoming, entry / meta.name)
         except BaseException as e:
             incoming.unlink(missing_ok=True)
             if isinstance(e, InvalidRequest):
                 return self.fail_download(file_id, FileStatus.FAILED, f"larger than the "
-                                          f"{human_size(self.config.download_max_bytes)} download limit", size=written)
+                                          f"{human_size(self.config.download_max_bytes)} download limit", size=written,
+                                          **update)
             raise
         short = expected_size is not None and written < expected_size
         done = meta.model_copy(update={
             "status": FileStatus.PARTIAL if short else FileStatus.COMPLETE, "size": written, "kind": ftype.kind,
             "mime": ftype.mime, "sha256": digest.hexdigest(), "finished_at": utcnow(), "owner_pid": None,
-            "error": f"the server announced {expected_size} bytes but only {written} arrived" if short else None})
+            "error": f"the server announced {expected_size} bytes but only {written} arrived" if short else None,
+            **update})
         self._write_meta(entry, done)
         log.info("download %s %s: %s (%s)", file_id, done.status.value, meta.name, human_size(written))
         return done
 
-    def fail_download(self, file_id: str, status: FileStatus, error: str, *, size: int = 0) -> StoredFile:
+    def fail_download(self, file_id: str, status: FileStatus, error: str, *, size: int = 0,
+                      machine_path: str | None = None) -> StoredFile:
         meta = self.get(file_id)
         entry = self._entry_dir(meta)
-        for leftover in (entry / ".incoming", entry / meta.name):
+        for leftover in (entry / ".incoming", entry / BROWSER_COPY, entry / meta.name):
             if leftover.is_file() and not leftover.is_symlink():
                 leftover.unlink()
         failed = meta.model_copy(update={"status": status, "error": error, "size": size, "finished_at": utcnow(),
-                                         "owner_pid": None})
+                                         "owner_pid": None, **({"machine_path": machine_path} if machine_path else {})})
         self._write_meta(entry, failed)
         log.info("download %s %s: %s", file_id, status.value, error)
         return failed

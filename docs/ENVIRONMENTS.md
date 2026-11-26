@@ -425,6 +425,36 @@ after the open returns: the first `browser_navigate` finds it running (or waits 
 start) instead of starting it then. A start that fails is only logged, and the first browser call
 starts it again.
 
+#### Downloads
+
+With `"vm"` a file the browser downloads is in two places: in the browser's outbox on the node, as on
+every browser (`browser_files` in the `browser` group lists it with its status, size, type and sha256),
+and as a plain file on the VM in `/work/downloads`, for the terminal. The outbox record's `machine_path`
+names that file, and its `to_human` is the call that gives the person a link to it
+(`environment_download(path="/work/downloads/report.pdf")`). The click that started it says so in its
+result: "a download started: report.pdf; it finished (182.4 KB): out_... in browser_files and on the
+machine at /work/downloads/report.pdf", or "the download failed: <why>".
+
+The bytes cross the network once. The file on the VM is the browser's own (a hard link, or a copy on
+the VM when the folders are on two file systems), and only the outbox copy is streamed to the node. A
+name that is taken gets " (1)", " (2)" before its extension, so nothing in the folder is replaced, and a
+site's name is cut to its last part with no leading dots, so a download never lands outside the
+folder. The size limit (`downloads_max_mb`, 200 MB) and the stall check (no data for 60 s) hold while a
+download runs: the node asks the VM how far it is, once a second, from the second second on.
+
+The browser's own saves go to the same folder, and its PDF viewer stays on. The PDF viewer's Save
+button and Ctrl+S are not downloads: Firefox carries them out itself and always asks where, whatever its
+prefs say, in a Save As window on the VM's screen that opens on `/work/downloads`. After a click on a
+page the viewer shows, or Ctrl+S, the node looks in the folder and, when nothing new is there, at the
+screen's windows (one command on the VM each; any other click costs none). The click's result, and
+`browser_tabs` (its `windows`), then name a window of the browser that shows none of its tabs, with the
+call that answers it: `screen_act` with `keys` "Return" saves into `/work/downloads`, "Escape" closes it.
+Reading the windows needs the desktop (below); on a bare screen the result says nothing of it. A file
+saved into the folder this way is brought into the outbox once (when the click's result is read, or
+when `browser_files` lists the outbox), as a download whose `url` is not known.
+
+With `"node"` (the default on a Linux node) downloads land in the outbox only, as on an account browser.
+
 #### The desktop
 
 With `"vm"` the VM's screen is a desktop, not a bare browser: a wallpaper (a sunrise over foggy ridges), a
@@ -2063,7 +2093,8 @@ Not on it:
   their calls name one with `on`. `environment()`'s calls show which client made each.
 - Files go in through git, `environment_upload` (a tarball of a local checkout, at most 512 MB), or
   `terminal_upload` and a job's `sync` (above); they come out through git, or
-  `environment_download(path)` (a one-use link to a file or folder in `/work`).
+  `environment_download(path)` (a one-use link to a file or folder in `/work`). What the browser
+  downloads is in `/work/downloads` when it runs on the VM ([Downloads](#downloads)).
 - The node checks where a push goes (declared repository, protected branch), not what the commits
   contain. Review a branch before you merge it.
 - On the dev node (`openajar dev up`), account browsers are simulated. The environment's machine,

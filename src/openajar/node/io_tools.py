@@ -35,6 +35,7 @@ from openajar.core.pauses import paused_words
 from openajar.core.tools import ToolContext, ToolImage, ToolSpec, in_person
 from openajar.node import egress
 from openajar.node.camoufox.engine import tracker_for
+from openajar.node.camoufox.pages import pick_up_saves
 from openajar.node.files import (
     INBOX,
     INLINE_IMAGES,
@@ -189,17 +190,24 @@ async def files_put(ctx: ToolContext, *, on: str, name: str, content_base64: str
 async def files_list(ctx: ToolContext, *, on: str) -> dict:
     """The browser's files: the inbox (what you stored with browser_file_put, the only files
     browser_upload can attach) and the outbox (everything the browser downloaded, with a
-    status: complete, downloading, partial or failed), and the size limits. Does not start the
+    status: complete, downloading, partial or failed), and the size limits. In an environment a
+    download is also a file on its machine (machine_path, in /work/downloads), and what the
+    browser saved there itself (a PDF viewer's Save) is in the outbox too. Does not start the
     browser. Cheap. Effect: read. Errors: invalid (not a browser)."""
     _lane(ctx, on)
     await ctx.authorize(Effect.READ, lane_id=on)
     files = lane_files(ctx.runtime, on)
+    await pick_up_saves(files.root)  # an environment's browser: what it saved on its machine by itself
     listed = files.list()
-    return {"on": on,
-            "inbox": [f.public() for f in listed if f.box == INBOX],
-            "outbox": [f.public() for f in listed if f.box != INBOX],
-            "limits": {"put": human_size(files.config.max_bytes),
-                       "download": human_size(files.config.download_max_bytes)}}
+    out = {"on": on,
+           "inbox": [f.public() for f in listed if f.box == INBOX],
+           "outbox": [f.public() for f in listed if f.box != INBOX],
+           "limits": {"put": human_size(files.config.max_bytes),
+                      "download": human_size(files.config.download_max_bytes)}}
+    if any(f.machine_path for f in listed):
+        out["note"] = ("a download with machine_path is also a plain file on the environment's machine, for "
+                       "terminal_exec; its to_human is the call that gives the human a link to it")
+    return out
 
 
 async def files_get(ctx: ToolContext, *, on: str, file_id: str) -> Any:
@@ -321,8 +329,11 @@ async def browser_tabs(ctx: ToolContext, *, on: str, select: int | None = None) 
         async with _session(ctx, on, read=True) as page:  # a read: it shares the browser
             await ctx.authorize(Effect.READ, lane_id=on, domain=_host(page.url))
             signal = await _page_signal(ctx, page)
-            tabs = await _tracker(page).tabs()
-        return {"on": on, "tabs": tabs, **({"signal": signal} if signal else {})}
+            tracker = _tracker(page)
+            tabs = await tracker.tabs()
+            windows = await tracker.window_notes({t.get("title") or "" for t in tabs})
+        return {"on": on, "tabs": tabs, **({"signal": signal} if signal else {}),
+                **({"windows": windows} if windows else {})}
     async with _session(ctx, on) as page:
         await ctx.authorize(Effect.READ, lane_id=on, domain=_host(page.url))
         tracker = _tracker(page)

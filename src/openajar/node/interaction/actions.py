@@ -39,6 +39,20 @@ READBACK_SETTLE_MS = 300
 NEW_TAB_SETTLE_MS = 3_000
 
 
+def _download_mark(page: Page, kind: ActionKind, text: str | None) -> tuple[Any, Any] | None:
+    """(the page's tracker, where its downloads stand) before an action, for the notes after it; a
+    click in a PDF viewer or Ctrl+S may make the browser save a file by itself, so those look on its
+    machine too."""
+    from openajar.node.camoufox.pages import tracker_for
+
+    tracker = tracker_for(page)
+    if tracker is None:
+        return None
+    saves = (kind is ActionKind.CLICK and tracker.may_save(page, None)) or \
+        (kind is ActionKind.PRESS and tracker.may_save(page, text or ""))
+    return tracker, tracker.mark(saves=saves)
+
+
 class ActMixin:
     """act: one human action on a ref, and the read-back of what it changed."""
 
@@ -61,6 +75,7 @@ class ActMixin:
             raise _pending_error(open_dialog, f"{kind.value} on {ref}")
         pages_before = set(_open_pages(page))
         choosers_before = guard.chooser_count(page) if guard is not None else 0
+        marks = _download_mark(page, kind, text)
         target = await self._resolve(page, ref)
         url_before = page.url
         before = await _state(target)
@@ -71,7 +86,8 @@ class ActMixin:
         try:
             in_view = await self._race(page, self._perform(page, target, kind, text), guard)
         except _DialogOpened as opened:
-            return await self._after(page, kind, ref, pages_before, choosers_before, guard, opened=opened.dialog)
+            return await self._after(page, kind, ref, pages_before, choosers_before, guard, opened=opened.dialog,
+                                     marks=marks)
         except human.TargetCovered as e:  # say what covers it, with its ref (interaction.covered)
             from openajar.node.interaction.covered import explain
 
@@ -80,12 +96,12 @@ class ActMixin:
             raise
         except Exception as e:
             if page.is_closed():
-                return await self._after(page, kind, ref, pages_before, choosers_before, guard)
+                return await self._after(page, kind, ref, pages_before, choosers_before, guard, marks=marks)
             if await _state(target) is None:
                 raise RefNotFound(f"ref {ref} left the page during {kind.value}. Take a new snapshot.") from e
             raise EngineError(f"{kind.value} on {ref} failed: {first_line(e, 300)}") from e
         if page.is_closed():
-            return await self._after(page, kind, ref, pages_before, choosers_before, guard)
+            return await self._after(page, kind, ref, pages_before, choosers_before, guard, marks=marks)
 
         ok = True
         try:
@@ -103,10 +119,11 @@ class ActMixin:
             if _strip_fragment(page.url) != _strip_fragment(url_before):
                 await self._race(page, quietly(page.wait_for_load_state("domcontentloaded", timeout=10_000)), guard)
         except _DialogOpened as opened:
-            return await self._after(page, kind, ref, pages_before, choosers_before, guard, opened=opened.dialog)
+            return await self._after(page, kind, ref, pages_before, choosers_before, guard, opened=opened.dialog,
+                                     marks=marks)
         if page.is_closed():
-            return await self._after(page, kind, ref, pages_before, choosers_before, guard)
-        notes = await self._side_effects(page, pages_before, choosers_before, guard, ref)
+            return await self._after(page, kind, ref, pages_before, choosers_before, guard, marks=marks)
+        notes = await self._side_effects(page, pages_before, choosers_before, guard, ref, marks)
         report = await self.report(page)
         if _strip_fragment(page.url) != _strip_fragment(url_before):  # it led to Cloudflare's check: as navigate
             report = await past_automatic_check(page, report, self.report)
@@ -115,7 +132,8 @@ class ActMixin:
                             detail="; ".join([detail, *notes]), **report.public())
 
     async def _after(self, page: Page, kind: ActionKind, ref: str, pages_before: set[Any], choosers_before: int,
-                     guard: DialogGuard | None, *, opened: PageDialog | None = None) -> ActionResult:
+                     guard: DialogGuard | None, *, opened: PageDialog | None = None,
+                     marks: Any = None) -> ActionResult:
         """The result of an action that opened a dialog or closed its own tab (a popup finishing)."""
         if opened is not None:
             detail = (f"the {kind.value} opened {_a(opened.type)} {opened.type} dialog: "
@@ -129,13 +147,13 @@ class ActMixin:
                 raise EngineError(f"the browser closed during the {kind.value} on {ref}, so it may be half "
                                   "done. Take a snapshot to see what reached the page before you go on")
             detail = f"the tab closed during the {kind.value} (a popup or sign-in window finishing)"
-        notes = await self._side_effects(page, pages_before, choosers_before, guard, ref)
+        notes = await self._side_effects(page, pages_before, choosers_before, guard, ref, marks)
         why = _DIALOG_OPEN if opened is not None else "the tab closed; take a snapshot of the tab the browser acts in now"
         return ActionResult(ok=True, action=kind, ref=ref, url=_url_of(page), signal=Signal.UNKNOWN, changed=None,
                             detail="; ".join([detail, *notes]), signal_detail=why)
 
     async def _side_effects(self, page: Page, pages_before: set[Any], choosers_before: int,
-                            guard: DialogGuard | None, ref: str) -> list[str]:
+                            guard: DialogGuard | None, ref: str, marks: Any = None) -> list[str]:
         notes: list[str] = []
         new = [p for p in _open_pages(page) if p not in pages_before]
         if new:
@@ -151,6 +169,9 @@ class ActMixin:
         if guard is not None and guard.chooser_count(page) > choosers_before:
             notes.append(f"it opened a file chooser (not shown on screen): attach files with "
                          f"browser_upload on ref {ref} and file ids from browser_files")
+        if marks is not None:  # a download it started, or a file the browser saved on its machine
+            tracker, mark = marks
+            notes.extend(await tracker.notes_since(mark))
         return notes
 
     # ---- act internals -----------------------------------------------------------------

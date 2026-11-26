@@ -622,7 +622,7 @@ Store a file in the browser's inbox, ready for browser_upload or a connector too
 
 Toolset: `browser`. Effect: `read`. Needs the `lanes` service.
 
-The browser's files: the inbox (what you stored with browser_file_put, the only files browser_upload can attach) and the outbox (everything the browser downloaded, with a status: complete, downloading, partial or failed), and the size limits. Does not start the browser. Cheap. Effect: read. Errors: invalid (not a browser).
+The browser's files: the inbox (what you stored with browser_file_put, the only files browser_upload can attach) and the outbox (everything the browser downloaded, with a status: complete, downloading, partial or failed), and the size limits. In an environment a download is also a file on its machine (machine_path, in /work/downloads), and what the browser saved there itself (a PDF viewer's Save) is in the outbox too. Does not start the browser. Cheap. Effect: read. Errors: invalid (not a browser).
 
 | Argument | Type | Required | Description |
 |---|---|---|---|
