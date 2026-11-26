@@ -353,20 +353,30 @@ async def test_a_machine_that_stops_answering_is_waited_for_not_ended(node):
     assert out.stdout.strip() == "back"
 
 
-async def test_a_container_that_stopped_on_the_machine_is_gone_and_said_so(node):
-    """What a restart of the machine does to an open environment: its container no longer runs. The node
-    asks the machine's Docker, says so in plain words, and the environment closes without a save."""
+async def test_a_container_that_stopped_on_the_machine_is_started_again_with_its_files(node):
+    """What a restart of the machine does to an open environment: its container stops with its disk whole.
+    It was called gone and the environment closed without a save (the 0.7.0 audit, S1-04); now the node
+    starts it again through the machine's Docker, on the port Docker gives it there, and the files are where
+    they were. A container removed there is gone, said in plain words, and closes without a save."""
     mgr, envs, vms, box = node["mgr"], node["envs"], node["vms"], node["box"]
     env = await _open(node, "s1", "Short lived")
     started = time.monotonic()
     for _ in range(5):
         assert (await envs.exec(env.terminal_lane, "true", timeout_s=30)).exit_code == 0
     print(f"one command through the machine and into the container: {(time.monotonic() - started) / 5:.2f} s")
-    _name, cid = own.split_server(vms.store.get(env.vm_id).provider_id)
+    assert (await envs.exec(env.terminal_lane, "echo kept > /work/a.txt", timeout_s=30)).exit_code == 0
+    rec = vms.store.get(env.vm_id)
+    _name, cid = own.split_server(rec.provider_id)
     box.sh(f"docker stop -t 1 {cid}")
     mgr.gone_recheck_s = 0.1
+    assert await mgr.machine_gone(mgr.get(env.id), cause="a test") is None
+    assert (await vms.provider().get_server(rec.provider_id)).status == "running"
+    out = await envs.exec(env.terminal_lane, "cat /work/a.txt", timeout_s=60)
+    assert out.stdout.strip() == "kept" and mgr.get(env.id).gone_at is None
+    box.sh(f"docker rm -f {cid}")
+    mgr._alive_seen().clear()
     why = await mgr.machine_gone(mgr.get(env.id), cause="a test")
-    assert why == "Your machine says its container is exited", why
+    assert why is not None and "Your machine no longer has its container" in why, why
     closed = await mgr.close(env.id, discard=True)
     assert closed.state == "closed" and box.containers(f"agentos-home={vms.home_id}") == []
 

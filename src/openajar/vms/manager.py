@@ -25,6 +25,7 @@ import logging
 import re
 import secrets
 import shutil
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -36,20 +37,19 @@ from openajar.core.aio import maybe_await
 from openajar.core.errors import InvalidRequest, LaneExists, NotFound, OpenajarError
 from openajar.core.models import LaneState, parse_lane_id, utcnow
 from openajar.env.models import RemoteHost, RemoteVia
-from openajar.vms import capacity, following, netwall, providers, repos, ssh
+from openajar.vms import capacity, following, netwall, providers, reaping, repos, ssh
 from openajar.vms import keys as vmkeys
 from openajar.vms.models import Size, VmError, VmFull, VmLimit, VmRecord, VmSettings, load_settings
 from openajar.vms.pausing import Pausing
-from openajar.vms.provider import Provider, ServerSpec, boot_error_words, by_hand_words, server_state
+from openajar.vms.provider import Provider, ServerSpec, boot_error_words, server_state
+from openajar.vms.reaping import ENV_SAVE_GRACE  # noqa: F401 - its home was here (environments.saving, tests)
 from openajar.vms.store import VmStore
 
 log = logging.getLogger("openajar.vms")
 
 OVERDUE_ALERT = timedelta(minutes=10)     # a live VM this far past its limit pushes a notification
-ENV_SAVE_GRACE = timedelta(minutes=15)    # an environment's VM past its limit: the environments save it first
 SNAPSHOT_WAIT_S = 1200.0  # how long a snapshot the provider still makes is waited for
 SNAPSHOT_POLL_S = 5.0
-ORPHAN_GRACE = timedelta(minutes=10)      # an unknown server younger than this may still be ours, being made
 EXIT_IP_URLS = ("https://api.ipify.org", "https://ipinfo.io/ip")
 EXIT_IP6_URLS = ("https://api6.ipify.org", "https://v6.ipinfo.io/ip")
 MAX_DELETE_BACKOFF_S = 600
@@ -129,7 +129,7 @@ class VmManager(Pausing):
     def __init__(self, home: Path, *, runtime: Any = None, provider: Provider | None = None,
                  settings: VmSettings | None = None, node_name: str | None = None, probe=None,
                  public_ip: str | None = None, clock=utcnow, follow_ip: bool = False,
-                 ip_lookup: Callable[[], Awaitable[list[str]]] | None = None):
+                 ip_lookup: Callable[[], Awaitable[list[str]]] | None = None, awake: Callable[[], float] = time.monotonic):
         self.home = Path(home)
         self.runtime = runtime
         if runtime is not None and runtime.get("envs") is not None:
@@ -143,6 +143,9 @@ class VmManager(Pausing):
         self._probe = probe or ssh.probe
         self._public_ip = public_ip
         self._clock = clock
+        self._awake = awake  # this process's awake time: an environment's grace past its limit (openajar.vms.reaping)
+        self._expired_seen: dict[str, float] = {}
+        self._env_mark = 0  # the environments' passes begun at the start or the last wake
         self._lock = asyncio.Lock()
         self._boots: dict[str, asyncio.Task] = {}
         self._reaper: asyncio.Task | None = None
@@ -198,8 +201,8 @@ class VmManager(Pausing):
             path = self.dir / HOME_ID_FILE
             try:
                 found = path.read_text().strip()
-            except OSError:
-                found = ""
+            except FileNotFoundError:
+                found = ""  # any other error raises: an id written over the old one makes every machine an orphan
             if not re.match(r"^[a-z0-9]{8,32}$", found):
                 found = secrets.token_hex(6)
                 self.dir.mkdir(parents=True, exist_ok=True)
@@ -234,8 +237,14 @@ class VmManager(Pausing):
 
     # ================================================================ lifecycle
     async def start(self) -> None:
+        self._env_mark = reaping.env_mark(self)
         if self._reaper is None:
             self._reaper = asyncio.create_task(self._reap_loop(), name="vm-reaper")
+
+    def note_wake(self) -> None:
+        """The computer woke (openajar.local.wake): an environment's machine past its limit waits for a whole
+        environments' pass that began after now before this reaper may delete it."""
+        self._env_mark = reaping.env_mark(self)
 
     async def shutdown(self) -> None:
         """Stop the reaper and any boot waits. VMs are not deleted: agentosd restarts (an upgrade)
@@ -619,7 +628,18 @@ class VmManager(Pausing):
             rec = self.store.get(rec.id)
         return await self._delete(rec, reason)
 
+    def _foreign(self, rec: VmRecord) -> str | None:
+        """The provider vms.toml names now, when `rec` was made with another (its id means nothing to this one)."""
+        try:
+            current = str(getattr(self.provider(), "name", "hetzner"))
+        except Exception:  # noqa: BLE001 - no provider to ask: nothing is told apart, and nothing is marked lost
+            return None
+        return current if rec.provider_id and rec.provider != current else None
+
     async def _delete(self, rec: VmRecord, reason: str, *, final_state: str = "deleted") -> VmRecord:
+        if (current := self._foreign(rec)) is not None:
+            await reaping.lost(self, rec, current)
+            return rec
         if rec.state != "deleting":
             rec.state, rec.delete_reason = "deleting", reason
             self.store.put(rec)
@@ -809,11 +829,9 @@ class VmManager(Pausing):
         return now - last >= timedelta(minutes=self.settings.idle_minutes)
 
     def _saving_first(self, rec: VmRecord, now: datetime) -> bool:
-        """An environment's machine past its time limit gets ENV_SAVE_GRACE more: the environments'
-        reaper saves its work (or tells the owner it could not) before it deletes it. Past the grace,
-        this reaper deletes it whatever happened."""
-        envs = self.runtime.get("environments") if self.runtime is not None else None
-        return rec.environment is not None and envs is not None and now < rec.expires_at + ENV_SAVE_GRACE
+        """An environment's machine past its time limit is the environments' reaper's to save first (or to tell
+        the owner it could not): openajar.vms.reaping.env_hold says how long. After that this reaper deletes it."""
+        return reaping.env_hold(self, rec) is not None
 
     # ================================================================ snapshots of environments
     async def snapshot(self, vm_id: str, *, description: str, labels: dict[str, str]) -> dict:
@@ -884,8 +902,15 @@ class VmManager(Pausing):
 
     async def _reap(self, now: datetime | None) -> dict:
         now = now or self._clock()
-        out: dict[str, Any] = {"at": now.isoformat(), "deleted": [], "orphans": [], "gone": [], "overdue": []}
+        out: dict[str, Any] = {"at": now.isoformat(), "deleted": [], "orphans": [], "gone": [], "overdue": [],
+                               "lost": []}
         for rec in self.store.live():
+            if (current := self._foreign(rec)) is not None:  # never deleted or listed through another provider
+                await reaping.lost(self, rec, current)
+                out["lost"].append(rec.id)
+                continue
+            if rec.state == "ready" and now < rec.expires_at:
+                reaping.not_expired(self, rec)  # extended, or not expired yet: its grace starts afresh
             if rec.state == "deleting":
                 if self._next_delete.get(rec.id, now) <= now:
                     r = await self._delete(rec, rec.delete_reason or "retry")
@@ -913,56 +938,9 @@ class VmManager(Pausing):
                     # an environment's VM is closed for idleness by openajar.environments, which knows unsaved work
                     await self._delete(rec, f"idle {self.settings.idle_minutes}+ min at the end of a paid hour")
                     out["deleted"].append(rec.id)
-            fresh = self.store.get(rec.id)
-            late = OVERDUE_ALERT + (ENV_SAVE_GRACE if fresh.environment is not None else timedelta(0))
-            if fresh.live and now - fresh.expires_at > late:
-                out["overdue"].append(fresh.id)
-                if fresh.id not in self._alerted:
-                    self._alerted.add(fresh.id)
-                    await self._notify(f"VM {fresh.id} is still running past its time limit",
-                                       f"Lane {fresh.lane_id} ({fresh.server_type}, {fresh.host or 'no IP'}) should "
-                                       f"have been deleted at {fresh.expires_at:%H:%M} UTC: {fresh.error or 'no error'}. "
-                                       + by_hand_words(fresh), urgent=True)
-        await self._reconcile(now, out)
+            await reaping.alert_overdue(self, self.store.get(rec.id), now, out, OVERDUE_ALERT)
+        await reaping.reconcile(self, now, out)
         return out
-
-    async def _reconcile(self, now: datetime, out: dict) -> None:
-        """Compare the provider's servers of this node with the records, both ways."""
-        prov = self.provider()
-        servers = await prov.list_servers(self._labels())
-        by_id = {s.id: s for s in servers}
-        live = {r.provider_id: r for r in self.store.live() if r.provider_id}
-        creating = any(r.state == "creating" for r in self.store.live())
-        for s in servers:
-            if s.id in live:
-                continue
-            vm_id = s.labels.get("agentos-vm", "")
-            with contextlib.suppress(NotFound):
-                rec = self.store.get(vm_id) if vm_id else None
-                if rec is not None and (rec.live or rec.state == "paused"):  # a paused one is a save's
-                    continue
-            created = _parse_time(s.created)
-            if creating and (created is None or now - created < ORPHAN_GRACE):
-                continue  # maybe the server a create is making right now
-            log.warning("VM reaper: deleting server %s (%s): no live openajar record", s.id, s.name)
-            try:
-                await prov.delete_server(s.id)
-                out["orphans"].append(s.id)
-            except Exception as e:  # noqa: BLE001
-                log.warning("VM reaper: could not delete orphan %s: %s", s.id, getattr(e, "message", e))
-        for pid, rec in live.items():
-            if rec.state == "ready" and pid not in by_id:
-                rec.delete_reason = "deleted outside openajar"
-                await self._delete(rec, "deleted outside openajar")
-                out["gone"].append(rec.id)
-        if not creating:
-            for kid, _name in await prov.list_ssh_keys(self._labels()):
-                with contextlib.suppress(Exception):
-                    await prov.delete_ssh_key(kid)
-            sweep = getattr(prov, "sweep", None)  # the docker provider: networks no machine uses any more
-            if callable(sweep):
-                with contextlib.suppress(Exception):
-                    await sweep(self._labels())
 
     # ================================================================ read
     def brief(self, rec: VmRecord) -> dict:
@@ -974,7 +952,7 @@ class VmManager(Pausing):
                 "expires_at": _iso(rec.expires_at), "minutes_left": None if left is None else max(0, int(left // 60)),
                 "deleted_at": _iso(rec.deleted_at), "delete_reason": rec.delete_reason, "purpose": rec.purpose,
                 "created_by": rec.created_by, "price_hourly_eur": rec.price_hourly_eur,
-                "cost_eur_so_far": rec.cost_eur(now), "error": rec.error,
+                "cost_eur_so_far": rec.cost_eur(now), "error": rec.error, **({"lost": True} if rec.lost else {}),
                 **({"fell_back": capacity.fell_back_words(rec.asked, rec.server_type, rec.price_hourly_eur, rec.no_room)}
                    if rec.asked else {})}
 
@@ -988,12 +966,3 @@ class VmManager(Pausing):
                 "monthly_budget_eur": self.settings.monthly_budget_eur, "last_reap": self.last_reap,
                 "profiles": {n: p.model_dump() for n, p in self.settings.profiles.items()}}
 
-
-def _parse_time(text: str) -> datetime | None:
-    if not text:
-        return None
-    try:
-        dt = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)

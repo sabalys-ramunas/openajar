@@ -66,7 +66,7 @@ from openajar.core.config import write_private
 from openajar.core.errors import InvalidRequest, NotFound
 from openajar.core.models import utcnow
 from openajar.env.models import RemoteHost
-from openajar.vms.docker import CALL_TIMEOUT_S, DockerProvider
+from openajar.vms.docker import ABSENT, CALL_TIMEOUT_S, DockerProvider
 from openajar.vms.models import VmError, VmSettings, load_settings
 from openajar.vms.provider import Server, ServerSpec
 from openajar.vms.ssh import ssh_base
@@ -664,12 +664,17 @@ class MachineDocker(DockerProvider):
         return f"MachineDocker({self.machine.name}, {self.image})"
 
     async def _run(self, *args: str, stdin: bytes | None = None, ok_codes: tuple[int, ...] = (0,),
-                   timeout_s: float = CALL_TIMEOUT_S) -> str:
+                   timeout_s: float = CALL_TIMEOUT_S, absent_ok: bool = False) -> str:
+        """docker's output there. A machine that does not answer raises (never "it has none"); `absent_ok`:
+        docker's own "No such ..." is no error, as on this computer (DockerProvider._run)."""
         command = shlex.join([*self.machine.docker, *args])
         code, out, err = await run(self.home, self.machine, command, stdin=stdin, timeout_s=timeout_s + 15)
         if code == SSH_FAILED:
             raise unreachable(self.machine, _last_line(err, out))
         if code not in ok_codes:
+            words = err.lower()
+            if absent_ok and any(w in words for w in ABSENT) and "cannot connect" not in words:
+                return out
             raise VmError(f"{self.said}: docker {args[0]}: {_last_line(err, out) or f'exit {code}'}")
         return out
 
@@ -855,6 +860,18 @@ class OwnProvider:
         if docker is None:
             return None  # its machine was removed from this node: nothing of it is left to reach
         server = await docker.get_server(cid)
+        return self._out(name or "", server) if server is not None else None
+
+    async def start_server(self, server_id: str) -> Server | None:
+        """A container that stopped (the machine restarted, its Docker did), started again with its disk as it
+        was (openajar.vms.pausing.start_machine). None where nothing can be started: a whole machine, or one
+        that is no longer set up."""
+        name, cid = split_server(server_id)
+        docker = self._known(name)
+        start = getattr(docker, "start_server", None)
+        if not callable(start):
+            return None
+        server = await start(cid)
         return self._out(name or "", server) if server is not None else None
 
     async def list_servers(self, labels: dict[str, str]) -> list[Server]:

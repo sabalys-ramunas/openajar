@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from pathlib import Path
 
 import httpx
 import pytest
@@ -166,6 +167,83 @@ async def test_reaper_deletes_orphans_and_notices_servers_deleted_elsewhere(env)
     del prov.servers[rec.provider_id]
     out = await vms.reap_once()
     assert out["gone"] == [rec.id] and not envs.has("dev/a")
+
+
+async def test_a_server_left_out_of_one_listing_is_read_back_not_deleted(env):
+    """S1-11, S5b-05: one `docker ps` that answered empty (or a renamed node, a provider hiccup) deleted every
+    running machine as "deleted outside openajar". The record is read back by its id first."""
+    vms, envs, prov, _clock = env
+    rec = await vms.create("dev/a", ttl_minutes=60)
+    real = prov.list_servers
+    calls = []
+
+    async def once_empty(labels):
+        calls.append(labels)
+        return [] if len(calls) == 1 else await real(labels)
+
+    prov.list_servers = once_empty
+    out = await vms.reap_once()
+    assert out["gone"] == [] and vms.store.get(rec.id).state == "ready" and rec.provider_id in prov.servers
+    assert prov.deleted == [] and envs.has("dev/a")
+
+
+async def test_a_server_the_provider_says_is_gone_is_marked_never_deleted(env):
+    vms, envs, prov, _clock = env
+    rec = await vms.create("dev/a", ttl_minutes=60)
+    del prov.servers[rec.provider_id]
+    prov.fail_delete = 5  # a delete call would fail: none is made
+    out = await vms.reap_once()
+    got = vms.store.get(rec.id)
+    assert out["gone"] == [rec.id] and got.state == "deleted" and got.delete_reason == "deleted outside openajar"
+    assert prov.fail_delete == 5 and not envs.has("dev/a")
+
+
+async def test_a_record_of_another_provider_is_lost_never_deleted_through_this_one(env):
+    """S5b-05: after a switch from Hetzner to Docker (or a token for another project) the old record's id went to
+    `docker rm`, the record said deleted, and the server billed on. It is `lost`, and the owner is told."""
+    vms, _envs, prov, _clock = env
+    rec = await vms.create("dev/a", ttl_minutes=60)
+    old = vms.store.get(rec.id)
+    old.provider = "hetzner"  # made before vms.toml said "fake"
+    vms.store.put(old)
+    told = []
+
+    async def notify(title, body, *, urgent=False):
+        told.append((title, body))
+
+    vms._notify = notify
+    out = await vms.reap_once(old.expires_at + timedelta(hours=1))  # past its limit too: still never deleted here
+    got = vms.store.get(rec.id)
+    assert got.lost and out["lost"] == [rec.id] and out["deleted"] == []
+    assert rec.provider_id in prov.servers and prov.deleted == []
+    assert len(told) == 1 and "Hetzner" in told[0][1] and "console" in told[0][1]
+    assert vms.store.live() == []  # nothing this node can reach counts as running
+    # R1 #3: a state of its own broke 0.7.0 after a downgrade (its store could not read the row, and every budget
+    # check failed): the row says "deleted", which 0.7.0 knows, and the flag 0.7.0 ignores says lost
+    row = json.loads(vms.store._q("SELECT record FROM vms WHERE id = ?", (rec.id,))[0][0])
+    assert row["state"] in ("creating", "booting", "ready", "deleting", "deleted", "failed", "paused"), row["state"]
+    assert row["state"] == "deleted" and row["lost"] is True
+    assert (await vms.reap_once(old.expires_at + timedelta(hours=2)))["orphans"] == []  # its server is never swept
+
+
+async def test_a_home_id_that_cannot_be_read_is_never_replaced(env, monkeypatch):
+    """S1-11: one EMFILE while reading vms/home-id wrote a new id over the old, and every machine was an orphan."""
+    vms, _envs, _prov, _clock = env
+    first = vms.home_id
+    vms._home_id = None
+    real = Path.read_text
+
+    def emfile(self, *a, **kw):
+        if self.name == "home-id":
+            raise OSError(24, "Too many open files")
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", emfile)
+    with pytest.raises(OSError):
+        _ = vms.home_id
+    monkeypatch.setattr(Path, "read_text", real)
+    vms._home_id = None
+    assert vms.home_id == first
 
 
 async def test_two_homes_with_one_node_name_never_sweep_each_others_servers(env, tmp_path):
@@ -767,3 +845,74 @@ def test_setup_says_plainly_what_the_docker_provider_does_not_isolate():
         assert chr(0x2014) not in words
     assert "Docker Desktop" in mac and "another account on this Mac" in mac
     assert "Docker Desktop" not in linux
+
+
+class _Environments:
+    """The environments service as the VM reaper asks it: its passes finish; `hold` is what holds_machine says."""
+
+    def __init__(self, hold: str | None = None) -> None:
+        self.hold = hold
+
+    def reap_mark(self) -> int:
+        return 0
+
+    def reaped_since(self, mark: int) -> bool:
+        return True
+
+    def holds_machine(self, env_id: str) -> str | None:
+        return self.hold
+
+
+def _restarted(tmp_path, envs, prov, clock, environments, awake, told) -> VmManager:
+    """A new VmManager on the same home: the node's process started again, with an awake clock of its own."""
+    runtime = Runtime(envs=envs)
+    runtime.register("environments", environments)
+    vms = VmManager(tmp_path / "home", runtime=runtime, provider=prov, node_name="node-1", probe=ok_probe, clock=clock,
+                    settings=VmSettings(max_live=2, monthly_budget_eur=10.0, ssh_from=["198.51.100.7/32"]),
+                    awake=awake)
+    runtime.register("vms", vms)
+
+    async def notify(title, body, *, urgent=False):
+        told.append(title)
+
+    vms._notify = notify
+    return vms
+
+
+async def _crash_loop(tmp_path, environments, *, restarts: int):
+    """R1 #2's proof: an environment's machine two days past its limit, and a node that restarts every 10 minutes
+    of awake time (a crash loop, a supervisor). Returns the record after it, and the notifications."""
+    envs = EnvManager(tmp_path / "home", host=FakeHost(), launcher=DirectLauncher(), settings=EnvSettings(proxy_port=0))
+    clock, prov, told = Clock(), FakeProvider(), []
+    vms = _restarted(tmp_path, envs, prov, clock, environments, lambda: 0.0, told)
+    rec = await vms.create("env/e1-term", ttl_minutes=60, purpose="an environment")
+    rec = vms.store.get(rec.id)
+    rec.environment = "e1"
+    vms.store.put(rec)
+    clock.advance(days=2)
+    for _ in range(restarts):
+        t = [0.0]
+        vms = _restarted(tmp_path, envs, prov, clock, environments, lambda t=t: t[0], told)
+        for _ in range(3):
+            await vms.reap_once()
+            t[0] += 300
+            clock.advance(minutes=5)
+    await envs.shutdown()
+    return vms.store.get(rec.id), told
+
+
+async def test_a_node_that_restarts_often_still_lets_an_expired_machine_go_after_its_grace(tmp_path):
+    """R1 #2: the grace counted awake time from this process's first sight, in memory, so a node that restarted
+    more often than every 15 minutes kept an expired machine forever (0.7.0 deleted it on its first pass). The
+    awake time it was kept is on the record now."""
+    rec, _told = await _crash_loop(tmp_path, _Environments(), restarts=3)
+    assert rec.state == "deleted" and rec.delete_reason == "time limit", (rec.state, rec.held_s)
+
+
+async def test_a_held_machine_is_told_once_across_restarts(tmp_path):
+    """R1 #2's other half: a machine its environment holds (its save keeps failing) bills on, and the owner hears of
+    it once, never at every start and never not at all."""
+    rec, told = await _crash_loop(tmp_path, _Environments(hold="its last save did not hold 1 changed file"),
+                                  restarts=6)
+    assert rec.state == "ready" and rec.overdue_told
+    assert told.count(f"VM {rec.id} is still running past its time limit") == 1, told

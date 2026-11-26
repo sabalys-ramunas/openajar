@@ -57,6 +57,35 @@ class Pausing:
         except Exception as e:  # noqa: BLE001 - the node's own reaper still deletes it at its limit
             log.warning("VM %s: the provider's backstop could not be moved: %s", rec.id, getattr(e, "message", e))
 
+    # ================================================================ a machine that stopped
+    async def start_machine(self, vm_id: str) -> bool:
+        """A ready machine its provider says stopped (a reboot, a Docker Desktop restart, an agent's poweroff),
+        started again with its disk as it was (the 0.7.0 audit, S1-04: it was called gone and deleted). Its address
+        and SSH port are read again (docker publishes a new port) and its terminal lane follows. True once it runs;
+        False when the provider cannot start one or the start failed. Nothing is deleted either way."""
+        rec = self.store.get(vm_id)
+        start = getattr(self.provider(), "start_server", None)
+        if rec.state != "ready" or not rec.provider_id or not callable(start):
+            return False
+        try:
+            server = await start(rec.provider_id)
+        except Exception as e:  # noqa: BLE001 - the caller tells the owner; the next look tries again
+            log.warning("VM %s: its stopped machine did not start: %s", vm_id, getattr(e, "message", e))
+            return False
+        if server is None:
+            return False
+        rec = self.store.get(vm_id)
+        if (server.ipv4 or rec.host, server.ssh_port) != (rec.host, rec.port):
+            rec.host, rec.port = server.ipv4 or rec.host, server.ssh_port
+            self.store.put(rec)
+            envs = self.runtime.get("envs") if self.runtime is not None else None
+            if envs is not None and callable(getattr(envs, "rehost", None)) and envs.has(rec.lane_id):
+                await envs.rehost(rec.lane_id, self._remote(rec))
+        log.warning("VM %s for lane %s had stopped and was started again (%s port %s)", vm_id, rec.lane_id, rec.host,
+                    rec.port)
+        self._publish(rec, "started")
+        return True
+
     # ================================================================ pause
     def can_pause(self) -> bool:
         return self.configured and capable(self.provider(), "pause")

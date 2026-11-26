@@ -1,5 +1,5 @@
-"""A machine that dies under the agent: the harness kills its container in the middle of a build (`docker
-kill`, as a crash or a lost host would). The agent has to notice, take a new machine and run the build
+"""A machine that dies under the agent: the harness removes its container in the middle of a build (`docker
+rm -f`, as a lost host would; one that only stopped is started again with its disk, so it is no dead machine). The agent has to notice, take a new machine and run the build
 again there (merged from the evals/ suite of 2026-11-20, `machine-dies`). The agent leaves the new
 machine open; the checker reads the build's output on it, and the harness removes it."""
 

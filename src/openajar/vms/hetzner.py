@@ -247,6 +247,14 @@ class HetznerProvider:
     async def delete_server(self, server_id: str) -> None:
         await self._call("DELETE", f"/servers/{server_id}", ok_404=True)
 
+    async def start_server(self, server_id: str) -> Server | None:
+        """Power on a server that is off (an agent's poweroff): its disk and address as they were. The server
+        once Hetzner says the action is done, else None."""
+        data = await self._call("POST", f"/servers/{server_id}/actions/poweron") or {}
+        await self._wait_action(data.get("action"), timeout_s=300)
+        server = await self.get_server(server_id)
+        return server if server is not None and server.status == "running" else None
+
     async def update_labels(self, server_id: str, labels: dict[str, str]) -> None:
         """Replace a server's labels (a warm machine bound to an environment, openajar.environments.warmpool)."""
         await self._call("PUT", f"/servers/{server_id}", body={"labels": labels})

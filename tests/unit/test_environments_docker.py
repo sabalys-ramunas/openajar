@@ -176,6 +176,39 @@ async def test_the_whole_story_on_a_real_machine(node):
     assert await asyncio.to_thread(containers, node["node_name"]) == []
 
 
+async def test_a_stopped_container_is_started_again_with_its_work_never_deleted(node):
+    """S1-04 on a real container: `docker stop` (a reboot, a Docker Desktop restart) leaves the container exited with
+    its disk whole. 0.7.0 called it gone and deleted it with the work. It is started again on a new SSH port, the
+    link comes back, and the file written before the stop is there."""
+    mgr, envs, vms, grant = node["mgr"], node["envs"], node["vms"], node["grant"]
+    eid = mgr.planned_id("session:s2", "Stopped shop")
+    plan = await mgr.plan(eid, size=None, hours=1)
+    env = await mgr.create(eid, plan, binding="session:s2", title="Stopped shop", grant_id=grant.id,
+                           grant_root=grant.root_id, agent="agent-1", client=None, repo=f"{HOST}/{REPO}", ref=None)
+    env = await mgr.wait_ready(env.id, 120)
+    assert env.state == "ready", env.error
+    lane = env.terminal_lane
+    wrote = await envs.exec(lane, "cd /work/shop && echo 'not pushed' > kept.txt && git add kept.txt")
+    assert wrote.exit_code == 0, wrote.stderr
+    rec = vms.store.get(env.vm_id)
+    stopped = await asyncio.to_thread(subprocess.run, ["docker", "stop", "-t", "2", rec.provider_id],
+                                      capture_output=True, text=True, check=False)
+    assert stopped.returncode == 0, stopped.stderr
+    assert await mgr.machine_gone(mgr.get(env.id), cause="test") is None  # stopped is not gone
+    state = await asyncio.to_thread(subprocess.run, ["docker", "inspect", "-f", "{{.State.Status}}", rec.provider_id],
+                                    capture_output=True, text=True, check=False)
+    assert state.stdout.strip() == "running"
+    assert vms.store.get(rec.id).state == "ready" and mgr.get(env.id).gone_at is None
+    for _ in range(20):  # its ssh -N ended with the stop: the reaper's relink brings it back on the new port
+        await mgr.reap_once()
+        res = await envs.exec(lane, "cat /work/shop/kept.txt", timeout_s=30)
+        if res.exit_code == 0:
+            break
+        await asyncio.sleep(1)
+    assert res.exit_code == 0 and res.stdout.strip() == "not pushed", res.stdout + res.stderr
+    assert mgr.get(env.id).open and mgr.tunnel_of(env.id) is not None and mgr.tunnel_of(env.id).alive
+
+
 async def _review_browser_sees(mgr, env, marker: str) -> None:
     try:
         import playwright  # noqa: F401

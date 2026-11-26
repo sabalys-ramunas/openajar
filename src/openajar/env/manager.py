@@ -405,6 +405,15 @@ class EnvManager(Jobs, Sync):
         self.store.add_lane(lane)
         return self.info(lane_id)
 
+    async def rehost(self, lane_id: str, remote: RemoteHost) -> None:
+        """A VM lane's machine answers on another address or port now (openajar.vms started a stopped one
+        again): the lane goes cold, and its next command reaches the machine there."""
+        lane = self.store.get_lane(lane_id)
+        if lane.remote is None:
+            raise InvalidRequest(f"{lane_id} is not a VM lane")
+        await self.cool(lane_id)
+        await self.store.run(self.store.put_lane, lane.model_copy(update={"remote": remote}))
+
     def get(self, lane_id: str) -> EnvLane:
         return self.store.get_lane(lane_id)
 

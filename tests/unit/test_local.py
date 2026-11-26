@@ -157,6 +157,34 @@ def test_browser_node_in_environments_toml_is_refused_with_what_to_do(tmp_path):
     assert build_runtime(cfg).environments.settings.browser == "vm"
 
 
+@pytest.mark.parametrize(("name", "text"), [("vms.toml", 'provider = "docker"\nssh_form = ["10.0.0.0/8"]\n'),
+                                          ("environments.toml", 'browser_langauge = "en-GB"\n'),
+                                          ("vms.toml", "provider = \"docker\n")])
+def test_a_settings_file_that_does_not_read_stops_the_start_and_names_the_file(tmp_path, name, text):
+    """S2-01: 0.7.0 served on without that service, and the other service's reaper then deleted machines with
+    no save. A local node is its environments: it does not start without them, and says which file to fix."""
+    cfg = local_home.ensure(tmp_path / "openajar", 7419)
+    (cfg.home / name).write_text(text)
+    with pytest.raises(LocalError, match=name) as err:
+        build_runtime(cfg)
+    words = err.value.message + (err.value.hint or "")
+    assert str(cfg.home / name) in err.value.hint and "\u2014" not in words, words
+    if name == "vms.toml":  # R1 #9: moved aside, a Docker node's vms.toml falls back to Hetzner and loses its machines
+        assert "aside" not in err.value.hint and "keep its provider line" in err.value.hint, err.value.hint
+    (cfg.home / name).unlink()
+    assert build_runtime(cfg).get("vms") is not None
+
+
+def test_serve_does_not_start_on_a_settings_file_it_cannot_read(tmp_path, user_home):
+    from openajar.cli import app
+
+    root = tmp_path / "openajar"
+    local_home.ensure(root, free_port())
+    (root / "vms.toml").write_text('ssh_form = ["10.0.0.0/8"]\n')
+    out = CliRunner().invoke(app, ["local", "serve", "--home", str(root)])
+    assert out.exit_code == 1 and "vms.toml" in out.output and "ssh_form" in out.output, out.output
+
+
 def test_environments_setup_says_the_browser_runs_on_the_vm_on_a_laptop(tmp_path):
     from openajar.environments.cli import _local_browser
 

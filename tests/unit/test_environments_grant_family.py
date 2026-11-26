@@ -253,6 +253,38 @@ async def test_pruning_keeps_a_snapshot_another_save_names(node, tmp_path):  # n
     assert out["removed"] == [sid] and snap in node["cloud"].snapshots  # the copy still resumes from it
 
 
+async def test_a_save_that_does_not_read_holds_forget_and_prune_of_a_snapshot(node, tmp_path):  # noqa: F811
+    """U5-03 under S1-05: whether another save names a snapshot is known only while every save reads. The copy
+    that shares it does not read (a newer version's manifest): forgetting or pruning the original deletes
+    nothing and keeps the save, saying why; once the copy reads again, the forget keeps the snapshot for it."""
+    from datetime import timedelta
+
+    mgr, cloud = node["mgr"], node["cloud"]
+    await opened(node, keep="save")
+    closed = await node["call"]("environment_close")
+    sid, snap = closed["saved"]["save_id"], closed["saved"]["snapshot"]["id"]
+    store, key = mgr.saves(), await mgr._saves_key(create=False)
+    f = tmp_path / "save.tar"
+    export_save(store, sid, f, key)
+    copy = import_save(store, f, key, family="g_elsewhere")
+    _m, path = store.find(copy.id)
+    manifest = path / "manifest.json"
+    good = manifest.read_text()
+    manifest.write_text(good.replace('"kind": "save"', '"kind": "checkpoint"'))  # it does not read now
+    held = await mgr.forget(None, None, sid)
+    assert held["forgot"] == [] and held["snapshots_deleted"] == 0, held
+    assert [k["id"] for k in held["kept"]] == [sid] and "does not read" in held["kept"][0]["why"]
+    m, _ = store.find(sid)
+    days = timedelta(days=mgr.settings.saved_days)
+    await mgr.prune_saves(m.saved_at + days - timedelta(hours=12))  # told first
+    pruned = await mgr.prune_saves(m.saved_at + days + timedelta(hours=1))
+    assert pruned["removed"] == [] and snap in cloud.snapshots and store.find(sid)
+    manifest.write_text(good)
+    out = await mgr.forget(None, None, sid)
+    assert out["forgot"] == [sid] and out["snapshots_deleted"] == 0 and snap in cloud.snapshots
+    assert out["snapshots_kept"] == [{"id": snap, "save": sid, "used_by": [copy.id]}]
+
+
 # ------------------------------------------------------------------ save-import says whose it is
 
 

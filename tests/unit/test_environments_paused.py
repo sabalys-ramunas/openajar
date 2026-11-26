@@ -232,6 +232,24 @@ async def test_forget_deletes_the_paused_machine(node):
     assert vms.store.get(vm_id).state == "deleted" and not (vms.dir / "paused" / vm_id).exists()
 
 
+async def test_forget_keeps_the_paused_machine_while_a_save_does_not_read(node):
+    """S1-05 with U5-03: another save may name the same paused machine, which is not known while one does not read.
+    The forget deletes nothing and keeps the save, saying why; once every save reads, it goes as before."""
+    cloud, vms, mgr = node["cloud"], node["vms"], node["mgr"]
+    out = await opened(node, keep="save")
+    server = vms.store.get(mgr.get(out["id"]).vm_id).provider_id
+    await node["call"]("environment_close")
+    sid = mgr.saves().all()[0].id
+    stray = mgr.saves().root / "g_other" / "t_other" / "s0000000000" / "manifest.json"
+    stray.parent.mkdir(parents=True)
+    stray.write_text("{")  # a save that does not read
+    held = await mgr.forget(None, None, sid)
+    assert held["forgot"] == [] and "does not read" in held["kept"][0]["why"] and server in cloud.servers
+    stray.unlink()
+    gone = await mgr.forget(None, None, sid)
+    assert gone["forgot"] == [sid] and server not in cloud.servers
+
+
 async def test_close_with_forget_deletes_the_paused_machine_of_an_earlier_save(node):
     cloud, vms = node["cloud"], node["vms"]
     first = await opened(node, keep="save")
@@ -367,6 +385,7 @@ async def test_a_paused_machine_no_save_points_to_is_deleted_and_the_owner_told(
     mgr, cloud, vms = node["mgr"], node["cloud"], node["vms"]
     rec = await vms.create("dev/stray", ttl_minutes=60)
     await vms.pause(rec.id, why="a save that never finished", keep_days=30)
+    mgr.saves().discard(mgr.saves().tmp())  # the save that paused it made its folder first (S1-05: none is held)
     soon = await mgr.sweep_snapshots(utcnow() + timedelta(minutes=5), force=True)
     assert "paused_deleted" not in soon and rec.provider_id in cloud.servers
     later = await mgr.sweep_snapshots(utcnow() + timedelta(hours=1), force=True)

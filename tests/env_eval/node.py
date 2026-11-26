@@ -263,10 +263,12 @@ class EvalNode:
         return done.returncode, done.stdout
 
     def kill(self, env_id: str) -> str | None:
-        """Kill the container of environment `env_id` as a crash would (`docker kill`, no shutdown): its id,
-        or None when it has none. The harness's own step (t12's dying machine), never the agent's."""
+        """Lose the container of environment `env_id` as a lost host would (`docker rm -f`: no shutdown, and its
+        disk goes with it): its id, or None when it has none. The harness's own step (t12's dying machine), never
+        the agent's. A container that only stopped (`docker kill`) is no longer a dead machine: the node starts it
+        again with its disk (the 0.7.0 audit, S1-04)."""
         rec = next((r for r in self.vms() if r.environment == env_id and r.provider_id), None)
-        if rec is None or docker("kill", rec.provider_id).returncode != 0:
+        if rec is None or docker("rm", "-f", rec.provider_id).returncode != 0:
             return None
         return rec.provider_id[:12]
 

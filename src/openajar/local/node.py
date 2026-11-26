@@ -38,7 +38,14 @@ from openajar.local import wake
 from openajar.local.home import LocalError
 from openajar.local.lanes import build_local_lanes
 from openajar.mcp.providers import tool_providers
-from openajar.node.daemon import SERVICES_KEY, build_services, node_runtime, serve
+from openajar.node.daemon import (
+    REQUIRED_SERVICES,
+    SERVICES_KEY,
+    ServiceBuildError,
+    build_services,
+    node_runtime,
+    serve,
+)
 
 log = logging.getLogger("openajar.local")
 
@@ -53,6 +60,13 @@ LOCAL_SERVICES: tuple[str, ...] = (
     "openajar.vms.service",
     "openajar.environments.service",
 )
+# A local node is its environments: it does not start without them (the 0.7.0 audit, S2-01: a vms.toml or
+# environments.toml that did not read left the node serving without that service, and the other service's
+# reaper deleted machines with no save). What each reads, for the error that names the file to fix.
+LOCAL_REQUIRED: frozenset[str] = REQUIRED_SERVICES | {"openajar.env.service", "openajar.vms.service",
+                                                      "openajar.environments.service"}
+READS = {"openajar.vms.service": ("vms.toml", "vms.db"),
+         "openajar.environments.service": ("environments.toml", "environments.db")}
 
 # The MCP tools of a local node, besides the node's own (whoami, howto, browsers_list, browser_view and the
 # browser tools: browser_navigate, browser_snapshot, browser_act, browser_wait, browser_screenshot).
@@ -151,7 +165,10 @@ def build_runtime(config: NodeConfig, *, services: tuple[str, ...] = LOCAL_SERVI
     from openajar.node.typist import typist_factory
 
     runtime.register("typist", typist_factory(runtime))  # the vault types a bound login into the VM's browser
-    build_services(runtime, services)
+    try:
+        build_services(runtime, services, required=LOCAL_REQUIRED)
+    except ServiceBuildError as e:
+        raise _not_started(config.home, e) from e
     vms = runtime.get("vms")
     if vms is not None:
         vms.follow_ip = True  # a laptop: SSH from wherever this computer is now
@@ -162,6 +179,24 @@ def build_runtime(config: NodeConfig, *, services: tuple[str, ...] = LOCAL_SERVI
         route_browsers(environments, lanes)
     runtime.get(SERVICES_KEY).append(("openajar.local.wake", wake.build(runtime)))  # started and stopped with them
     return runtime
+
+
+def _not_started(home: Path, e: ServiceBuildError) -> LocalError:
+    """The start refused for a service that did not build: which file, and what it said."""
+    names = READS.get(e.module)
+    said = " ".join(str(e.cause).split())[:600]
+    if names is None:
+        return LocalError(f"openajar local did not start: {e.module} did not build ({said}).",
+                          hint=f"Look at the log in {home}, fix what it names, then start it again.")
+    toml, db = (Path(home) / n for n in names)
+    # never "move vms.toml aside": its defaults rent Hetzner servers, and a Docker node's machines would be lost to it
+    fix = (f"Fix the setting the error names in {toml} (a key this version does not know, or a value of the wrong "
+           "type), and keep its provider line" if e.module == "openajar.vms.service" else
+           f"Fix the setting the error names in {toml} (a key this version does not know, or a value of the wrong "
+           "type), or move the file aside to start with the defaults")
+    return LocalError(f"openajar local did not start: {names[0]} or {names[1]} cannot be read ({said}). It does not "
+                      "run without its environments, so no machine is closed or deleted while it is stopped.",
+                      hint=f"{fix}; if it reads, {db} is locked or damaged. Then start it again.")
 
 
 def route_browsers(environments: object, lanes: object) -> None:

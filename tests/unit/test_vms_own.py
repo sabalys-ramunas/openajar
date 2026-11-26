@@ -71,6 +71,8 @@ class FakeDocker:
             return 1, "", f"Error: No such image: {name}"
         if "{{.Size}}" in args:
             return 0, f"{3 * GB}\n", ""
+        if "{{json .Config.Labels}}" in args:
+            return 0, json.dumps(self.images[name]) + "\n", ""
         return 0, self.images[name].get("org.agentos.environment", "") + "\n", ""
 
     def _network(self, args, stdin):
@@ -114,7 +116,8 @@ class FakeDocker:
                             "HostConfig": {"NetworkMode": c["network"]},
                             "NetworkSettings": {"Ports": {"22/tcp": [{"HostIp": "127.0.0.1",
                                                                       "HostPort": str(c["port"])}]}}})
-        return (0 if out else 1), json.dumps(out), ""
+        missing = [cid for cid in args if cid not in self.containers]  # docker's own words, as it says them
+        return (1 if missing else 0), json.dumps(out), "".join(f"Error: No such object: {c}\n" for c in missing)
 
     def _ps(self, args, stdin):
         return 0, "".join(cid + "\n" for cid, c in self.containers.items() if self._match(c["labels"], args)), ""
@@ -482,3 +485,48 @@ def test_an_overdue_machine_names_where_to_remove_it_by_hand():
     mine = by_hand_words(VmRecord(id="vm_ab12", provider="own", provider_id="homebox:0123", **base))
     assert "on your machine homebox" in mine and "docker rm -f agentos-vm-ab12" in mine
     assert "Hetzner console" in by_hand_words(VmRecord(id="vm_cd34", provider="hetzner", **base))
+
+
+# ---------------------------------------------------------------- the reapers on your own machine (F1)
+
+async def test_a_container_that_stopped_with_its_machine_is_started_again_not_ended(node):
+    """S1-04 on your own machine: the machine restarted, and its containers stopped with their disks whole.
+    Exited read as gone, and the environment was ended unsaved; now its container is started again, on the
+    loopback port docker gives it there, and the lane still reaches it through the machine."""
+    vms, envs, dockers, _ = node
+    rec = await vms.create("dev/a", ttl_minutes=60)
+    box = dockers["homebox"]
+    cid = own.split_server(rec.provider_id)[1]
+    box.containers[cid].update(running=False, port=45678)  # stopped, and a new port once it starts
+    prov = vms.provider()
+    assert (await prov.get_server(rec.provider_id)).status == "exited"
+    assert await vms.start_machine(rec.id) is True
+    assert box.containers[cid]["running"] and len(box.containers) == 1
+    fresh = vms.store.get(rec.id)
+    assert (fresh.state, fresh.host, fresh.port) == ("ready", "127.0.0.1", 45678) and fresh.via == rec.via
+    lane = envs.get("dev/a")
+    assert lane.remote.port == 45678 and lane.remote.via is not None and lane.remote.via.host == "homebox.test"
+
+
+async def test_a_container_of_your_machine_after_a_switch_away_is_lost_and_named_where_it_is(node, tmp_path):
+    """S5b-05 with your own machine: after vms.toml switched to another provider, a record of a container on
+    your machine is out of reach. Nothing is deleted through the new provider, and the owner is told where it
+    is: on that machine, never "in its console"."""
+    from openajar.vms.provider import FakeProvider
+
+    vms, _envs, dockers, home = node
+    rec = await vms.create("dev/a", ttl_minutes=60)
+    told: list[tuple[str, str]] = []
+
+    async def notify(title, body, *, urgent=False):
+        told.append((title, body))
+
+    other = VmManager(home, runtime=vms.runtime, provider=FakeProvider(), settings=VmSettings(provider="hetzner"),
+                      node_name="node-1", probe=ok_probe)
+    other._notify = notify
+    out = await other.reap_once()
+    got = other.store.get(rec.id)
+    assert out["lost"] == [rec.id] and got.lost and got.state == "deleted" and len(dockers["homebox"].containers) == 1
+    assert len(told) == 1 and "your machine homebox" in told[0][1] and "console" not in told[0][1]
+    assert "made with Your machine" not in got.delete_reason and "your own machine" in got.delete_reason
+    await other.shutdown()

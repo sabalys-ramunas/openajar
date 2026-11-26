@@ -146,6 +146,8 @@ class FakeProvider:
     made_in: list[tuple[str, str]] = field(default_factory=list)  # (type, location) of each server made
     fail_create: int = 0
     fail_delete: int = 0
+    fail_start: int = 0                                  # the next starts of a stopped server fail
+    started: list[str] = field(default_factory=list)    # servers started again after they stopped
     user_data: dict[str, str] = field(default_factory=dict)
     deleted: list[str] = field(default_factory=list)
     fail_snapshot: int = 0                               # the next snapshots fail, for tests
@@ -234,6 +236,19 @@ class FakeProvider:
 
     async def get_server(self, server_id: str) -> Server | None:
         return self.servers.get(server_id)
+
+    async def start_server(self, server_id: str) -> Server | None:
+        """Optional for a provider (docker and Hetzner have it): a stopped server started again, disk and all."""
+        from openajar.vms.models import VmError
+        if self.fail_start:
+            self.fail_start -= 1
+            raise VmError("fake: the start failed")
+        s = self.servers.get(server_id)
+        if s is None:
+            return None
+        s.status = "running"
+        self.started.append(server_id)
+        return s
 
     async def list_servers(self, labels: dict[str, str]) -> list[Server]:
         return [s for s in self.servers.values() if _match(s.labels, labels)]

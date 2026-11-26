@@ -306,7 +306,10 @@ When the laptop is about to sleep, openajar acts on each open environment by its
 A sleep that comes too fast for this (the lid closed on a battery about to die) leaves the VMs
 running and billing, and nothing on the laptop can delete them. When it wakes, or when the service
 starts again, openajar at once deals with every environment past its time limit the same way, and
-`openajar local status` says what it closed or saved. `openajar local stop` leaves open environments
+`openajar local status` says what it closed or saved. No machine of an environment is deleted before
+that: the VM reaper waits for the environments' look, and while a save runs (docs/ENVIRONMENTS.md, "A
+delete needs evidence"). A `vms.toml` or `environments.toml` that does not read stops the service from
+starting, and `openajar local serve` names the file. `openajar local stop` leaves open environments
 running: nothing closes them until the next start.
 
 ## Remove it

@@ -280,6 +280,21 @@ class SaveStore:
             except (OSError, ValueError) as e:
                 log.warning("a save at %s does not read: %s", path.parent, e)
 
+    def whole(self) -> bool:
+        """Can every save be read now? False when the saves folder is missing (a home restored without it, a
+        folder moved aside) or a manifest does not read (a newer version's, a hand edit): then what points to a
+        snapshot or a paused machine is not known, and nothing may be deleted as pointed to by none (S1-05)."""
+        if not self.root.is_dir():
+            return False
+        for path in self.root.glob(f"*/*/s*/{MANIFEST}"):
+            if path.parts[-4] == ".tmp":
+                continue
+            try:
+                SaveManifest.model_validate_json(path.read_text())
+            except (OSError, ValueError):
+                return False
+        return True
+
     def all(self, family: str | None = None) -> list[SaveManifest]:
         """Every save (of one family), newest first."""
         out = [m for m, _ in self._manifests() if family is None or m.family == family]
@@ -418,9 +433,10 @@ def open_payload(manifest: SaveManifest, path: Path, out: Path, key: bytes | Non
     return files
 
 
-def check_files_tar(path: Path, roots: list[str]) -> int:
+def check_files_tar(path: Path, roots: list[str], names: set[str] | None = None) -> int:
     """The file part's tarball: it opens, every member is a plain file, link or folder under one of
-    `roots` (work/, a keep_paths folder) with no `..`. Returns how many files it holds."""
+    `roots` (work/, a keep_paths folder) with no `..`. Returns how many files it holds (and adds each
+    member's name to `names`)."""
     n = 0
     with tarfile.open(path, "r:*") as tf:
         for m in tf:
@@ -433,6 +449,8 @@ def check_files_tar(path: Path, roots: list[str]) -> int:
             if m.issym() and (m.linkname.startswith("/") or ".." in m.linkname.split("/")):
                 raise SaveCorrupt(f"the file part holds a link that leaves its folder: {name[:120]!r}")
             n += m.isreg() or m.issym()
+            if names is not None:
+                names.add(name)
     return n
 
 

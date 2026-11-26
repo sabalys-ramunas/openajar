@@ -579,10 +579,17 @@ async def test_a_failed_snapshot_keeps_the_machine_and_brings_its_services_back(
 
 
 async def test_the_vm_reaper_waits_for_the_save_past_the_time_limit(node):
+    """The grace is this process's awake time from when the VM reaper first saw the machine expired, after a whole
+    environments' pass (test_environments_delete_evidence has the overnight cases)."""
     out = await opened(node, keep="save")
-    vms = node["vms"]
-    rec = vms.store.get(node["mgr"].get(out["id"]).vm_id)
+    vms, mgr = node["vms"], node["mgr"]
+    awake = [1000.0]
+    vms._awake = lambda: awake[0]
+    rec = vms.store.get(mgr.get(out["id"]).vm_id)
+    await mgr.reap_once()  # a whole environments' pass (now: neither idle nor past its limit)
     assert (await vms.reap_once(rec.expires_at + timedelta(minutes=1)))["deleted"] == []
+    assert (await vms.reap_once(rec.expires_at + ENV_SAVE_GRACE + timedelta(minutes=1)))["deleted"] == []
+    awake[0] += ENV_SAVE_GRACE.total_seconds() + 1
     assert (await vms.reap_once(rec.expires_at + ENV_SAVE_GRACE + timedelta(minutes=1)))["deleted"] == [rec.id]
 
 

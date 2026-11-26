@@ -25,6 +25,7 @@ PROVIDER_NAMES = {"hetzner": "Hetzner", "docker": "Docker", "morph": "Morph", "d
 def provider_name(provider: str | None) -> str:
     return PROVIDER_NAMES.get(provider or "", (provider or "").capitalize()) or "The provider"
 
+
 # paused: the machine is kept with its memory and bills only its storage (a provider with the "pause"
 # capability; an environment's save, openajar.environments.pausing). Not live: it counts toward no limit.
 VmState = Literal["creating", "booting", "ready", "deleting", "deleted", "failed", "paused"]
@@ -214,6 +215,14 @@ class VmRecord(BaseModel):
     network: str = "full"                     # full, or limited / none: its network closed outside it (openajar.vms.netwall)
     ssh_user: str = "root"                    # who the node signs in as (Morph: the instance id, at its gateway)
     via: dict | None = None                   # the SSH host it is reached through (openajar.vms.own), RemoteVia's fields
+    # made with another provider than vms.toml names now, so openajar cannot reach it (openajar.vms.reaping): ended
+    # as "deleted" though nothing was deleted, so 0.7.0 (which ignores this field) reads the row too
+    lost: bool = False
+    # an environment's machine past its limit: the awake seconds the VM reaper has kept it for its save so far, and
+    # whether the owner was told it is overdue. On the record, so a node that restarts every few minutes still lets
+    # it go after the grace and tells the owner once (R1 #2). 0.7.0 ignores both.
+    held_s: float = 0.0
+    overdue_told: bool = False
 
     @property
     def live(self) -> bool:
