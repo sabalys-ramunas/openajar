@@ -143,7 +143,8 @@ class LocalMachines:
                               stderr="", duration_s=0.01)
         if cmd.startswith("bash -s"):  # the save and restore scripts: their root is the disk already
             return await asyncio.to_thread(self.run, shlex.split(cmd), disk, data)
-        local = cmd.replace(URL, str(self.remote)).replace("/work", str(disk / "work"))
+        # the machine's /work first: the remote's own path (a test folder under any ".../worktrees/...") must not be
+        local = cmd.replace("/work", str(disk / "work")).replace(URL, str(self.remote))
         if cmd == GIT_STATE or "git clone" in cmd or cmd.startswith(("mkdir -p", "rm -rf")) or cmd == saving.scripts.SCRUB:
             return await asyncio.to_thread(self.run, ["bash", "-c", local], disk, data)
         return ExecResult(exit_code=0, stdout="ran\n", stderr="", duration_s=0.01)
