@@ -8,9 +8,25 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [0.8.0] - 2026-11-26
 
-This version adds two more places an environment can run: a machine you already have (`openajar environments
-machine`, as containers on it or as a fresh server handed over whole) and DigitalOcean, which is experimental
-and has not rented a real Droplet yet. No tool or setting of an existing setup changes.
+This version stops openajar from losing your work, and adds two more places an environment can run.
+
+What was lost before, and is not now. An environment's machine could be deleted before its work was saved:
+when your computer was off or asleep through the environment's time limit (the usual overnight case), when a
+reboot or a Docker Desktop restart left the machine stopped, when `vms.toml` or `environments.toml` did not read
+at a start, and when one server list missed a machine. Staged work was missing from a save of the files. The
+rule now: a delete needs positive evidence, and silence (not listed, not readable, not answering, past its
+time) is never permission. The list is under Fixed.
+
+Saves you may have lost track of. Up to 0.7.0, a new local agent grant (after its 90 days, a freeze, a revoke,
+or new default terms) could not see the saves, open environments and title-bound logins of the one before: the
+agent got `saved: []`, and its title opened a new, empty machine while the old one kept billing. The grant is
+now renewed before it ends, and a replacement keeps the computers. If it already happened to you, run
+`openajar environments adopt` once after updating: it lists what earlier grants of this computer left behind,
+and `openajar environments adopt --yes` gives it to the agent you use now. Nothing is deleted.
+
+The two new places: a machine you already have (`openajar environments machine`, as containers on it or as a
+fresh server handed over whole) and DigitalOcean, which is experimental and has not rented a real Droplet yet.
+No setting of an existing setup changes.
 
 ### Added
 
@@ -28,11 +44,15 @@ and has not rented a real Droplet yet. No tool or setting of an existing setup c
   What openajar puts on the machine is one `authorized_keys` line (none with `--key`), the image, and per
   environment a container and a network, per save an image. It changes no firewall, opens no port (a
   container's sshd listens on the machine's loopback and is reached through the node's ssh connection to the
-  machine), never stops, restarts or wipes the machine, and deletes only what carries its own label. A machine
-  that is off or out of reach is waited for, never taken for deleted.
+  machine), never stops, restarts or wipes the machine, and deletes only what carries its own label: a
+  container or an image goes only once the machine's Docker reads this home's label back on it. A machine that
+  is off or out of reach is waited for, never taken for deleted, and so is one whose record on this computer
+  does not read. `machine remove` deletes no saved image there while a save on this computer does not read
+  (`--force` does).
   Said plainly: an environment there is a container, so it shares the machine's kernel and is less isolated
-  than a rented VM, though it reaches neither the machine, your network nor another environment. A machine
-  that restarts loses its open environments (they come back from their last save). Not in this version: macOS
+  than a rented VM, though it reaches neither the machine, your network nor another environment. When the
+  machine restarts, its open environments' containers stop with their disks whole, and openajar starts them
+  again (it tells you when one does not start). Not in this version: macOS
   and Windows machines, rootless Docker and Podman, a machine behind a jump host, and renting VMs and using
   your own machine on one node at once. Tried against a container with its own sshd and Docker that plays
   the machine over ssh; not yet tried against a real remote server.
@@ -56,12 +76,27 @@ and has not rented a real Droplet yet. No tool or setting of an existing setup c
 - DigitalOcean as a provider, experimental. `openajar vm setup --provider digitalocean` (and `openajar setup
   vms`) takes a DigitalOcean API token, and environments then open as Droplets in your account: a firewall
   that lets SSH in from the node only, a closed firewall for a limited or none network, a save as a
-  snapshot that resumes in its own region, and the reaper deleting only what openajar tagged. Experimental
-  means it was written from DigitalOcean's API reference and tested against a fake of that API, and no
-  Droplet has been rented with it yet; setup, the CLI, `openajar environments setup` and the docs say so,
-  and the docs list what was and was not tried. Without a size an environment gets the cheapest Droplet with 2 vCPU and 4 GB (about EUR 0.03
-  an hour); prices are estimates in EUR from DigitalOcean's USD prices (`digitalocean_eur_per_usd`), and a
+  snapshot that resumes in its own region, and the reaper deleting only what openajar tagged: every delete
+  reads the Droplet or the snapshot back first and refuses one without this home's tag, and a Droplet that is
+  off is powered on again, never deleted. Experimental means it was written from DigitalOcean's API reference
+  and tested against a fake of that API, and no Droplet has been rented with it yet; setup, the CLI, `openajar
+  environments setup` and the docs say so, and the docs list what was and was not tried. Without a size an
+  environment gets the cheapest Droplet with 2 vCPU and 4 GB (about EUR 0.03 an hour); prices are estimates in EUR from DigitalOcean's USD prices (`digitalocean_eur_per_usd`), and a
   snapshot there costs about USD 0.06 per GB a month (`snapshot_eur_per_gb_month = 0.052` shows it).
+- `openajar environments adopt` lists the saves, open environments and title-bound logins that earlier agent
+  grants of this computer left behind (revoked or expired, same agent), and `--yes` gives them to the current
+  grant, once. Nothing is deleted; an open machine it moves is let go, so its title takes it back at once; a
+  title the current grant also has stays the current one's, and the moved one is named "<title> (earlier)";
+  another agent's computers are listed as left alone. The move is an `environments_adopted` row in the action
+  log. `openajar local start` and `setup agents` say when there is something to adopt, and `openajar
+  environments saves` marks those saves "(earlier grant)".
+- The error `saved_by_earlier_grant`: `environment_open` with a title the agent had under an earlier grant of
+  this computer is named, and opens no empty machine beside it; `environment()` lists such titles as `earlier`.
+  Both tell the agent to ask you to run `openajar environments adopt`.
+- The service renews this computer's agent grant before it ends (after 72 of its 90 days, checked at its start
+  and every 6 hours) and stores the new token where Claude Code and Codex read it. The old grant is not revoked,
+  so chats open at the time keep working until it ends. `openajar local start` and `setup agents` renew it too,
+  one at a time with the service, so one grant is issued and the token and the connection name the same one.
 
 ### Changed
 
@@ -72,6 +107,74 @@ and has not rented a real Droplet yet. No tool or setting of an existing setup c
 
 ### Fixed
 
+- A computer that was off or asleep through an environment's time limit plus 15 minutes (the usual overnight
+  case) no longer loses the work. After the start or the wake the VM reaper could delete the machine before
+  the environments' reaper had saved it: 10 of 12 restarts on Docker and 2 of 2 on Hetzner. The VM reaper now
+  keeps an environment's machine while a save or close of it runs, until the environments' reaper has
+  finished a whole pass since the start or the wake, and for 15 minutes of awake time from when it first saw
+  the machine past its limit, never by the wall clock. That awake time and the "still running past its time
+  limit" notification are kept on the machine's record, so a node that restarts every few minutes still lets
+  the machine go after its 15 minutes and tells you once. The owner is no longer told "its machine is kept"
+  for a machine that is being deleted, in the notification or in `openajar local status`.
+- A machine that only stopped is started again, never deleted. A reboot or a Docker Desktop restart left
+  containers exited with their disks whole (and a Hetzner server an agent powered off was off), and openajar
+  called them gone and deleted them with the work. Now the node starts it (`docker start`, Hetzner's power
+  on; the container's new SSH port is followed) and the link comes back; one that does not start is left as
+  it is and the owner is told once. One that stops again right after each of 3 starts in 30 minutes is not
+  started again: it is gone, and you and the agent are told why. Docker that does not answer is an error, never "no such container", so a
+  node that starts before Docker Desktop marks nothing gone. A machine marked gone that runs again is not gone
+  any more, and a gone one is ended only once the provider says so again. `environment()` of a gone machine
+  shows `git.ahead`, `git.dirty` and `unsaved` as not known instead of 0, 0 and nothing.
+- openajar local does not start when `vms.toml` or `environments.toml` (or its database) cannot be read, and
+  `openajar local serve` names the file and the setting (for `vms.toml` it says to keep its provider line:
+  without it a Docker computer would use Hetzner). It served on without that service, and the other service's reaper
+  then deleted machines with no save. On a server node the reapers hold instead: the environments' reaper
+  marks nothing deleted while the VM service is missing, and the VM reaper deletes no environment's machine
+  while the environments service is missing (you get the notification for a machine past its limit).
+- One server list that missed a machine (an empty `docker ps`, a renamed node, a provider hiccup) no longer
+  deletes it: the reaper asks the provider for that server by its id, and only its own "no such server" marks
+  the record deleted outside openajar, without a delete. A record made with another provider than `vms.toml`
+  names now is ended as lost (state `deleted` with `lost: true`, which 0.7.0 still reads) and you are told
+  where to look, where its id went to the new provider's delete and the server billed on. `vms/home-id` is
+  never written over after an error other than a missing file.
+- One environment's error no longer stops the reaper's pass for every other environment. Each one's step is
+  its own: logged, in the pass's `errors`, and the owner told once; the VM reaper keeps that environment's
+  machine. A save that cannot make its folder on this computer (a full disk) is a failed save the owner hears
+  of, where it stopped every pass with nobody told.
+- The snapshot sweep deletes nothing while a save does not read or the saves folder is missing, where it
+  deleted the snapshots of those saves and said "Nothing you saved was touched". Its 30 minute grace counts
+  from the sweep's own first sight of a snapshot, never from the provider's creation time. Forgetting or
+  pruning a save with a snapshot or a paused machine deletes nothing then either (the unread save may name
+  it): the save stays, and `forget` says why.
+- The file part of a save (every autosave and rescue, and a resume whose snapshot is gone) now holds work
+  that was staged with `git add`, staged deletions and renames, and the files of a repository with no commit
+  yet. It took `git ls-files -m -o`, which leaves those out, so a rescue said "saved (0 files)" and deleted
+  the machine. It also holds every other file on the disk that `git status` lists (a file untracked with
+  `git rm --cached` and then ignored, a staged change taken back in the work tree), and records as deleted
+  only what is not on the disk, so a resume never deletes a file that was there. A files-only save is not
+  called whole while `git status` lists a file on the disk that the save does not hold: it fails, and the
+  machine is kept past its time limit too, until a save holds that file or you close it; you are told so.
+- A local agent grant that replaces this computer's earlier one keeps its computers: `openajar local start` and
+  `openajar setup agents` issue it in the same environment family, after an expiry or for new default terms, and
+  it keeps the earlier grant's subject and its taint (what it read). After you revoked the grant or a freeze did,
+  the next one starts without those computers and says so: `openajar environments adopt` gives them over after a
+  look. Only this computer's own agent grant carries its family on: a grant `openajar connect` issued for another
+  computer, or one for another subject, never does. Each continuation is a `grant_family` row in the action log. The checks of who asked
+  (self-approval, a task's owner, taint) are unchanged. (S7-01, U5-01)
+- `openajar environments save-import` gives the save to this computer's agent (its agent grant now) unless
+  `--family <grant id>` names another grant, and says which agent resumes it, or that none can yet. It used to
+  keep the family in the file and say "resumes it" when no agent could. A grant `--family` names must exist on
+  the node. (U5-02)
+- Forgetting or pruning a save no longer deletes a disk snapshot (or a paused machine) that another save of this
+  node still names, as a copy `save-import` made on the same node does: only the save goes, `forget` says
+  "Kept snapshot ...", and the last save that names it deletes it. `snapshots_deleted` counts only snapshots it
+  deleted. (U5-03)
+- A save made while `openajar environments adopt` moves its environment is kept under the family and title the
+  environment has when the save is written.
+- On Docker, a container or an image is removed only once Docker reads this home's label back on it. Deletes
+  went by bare id, so an id from a damaged or restored `vms.db`, or a save imported from another node, could
+  remove a container or an image of yours or of another openajar home. Now the delete is refused, the record
+  waits, and you are told it is overdue. (S5b-05, S5b-06)
 - A save on the docker provider no longer shows a monthly cost: its image is in your own Docker, so it
   costs nothing.
 
