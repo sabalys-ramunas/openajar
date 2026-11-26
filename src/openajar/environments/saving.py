@@ -71,7 +71,9 @@ from openajar.environments.saves import (
     new_save_id,
     open_payload,
     seal_payload,
+    snapshot_left,
 )
+from openajar.vms.provider import NOT_OURS
 
 log = logging.getLogger("openajar.environments")
 
@@ -599,30 +601,56 @@ class Saving:
         return {"deleted": [d["id"] for d in deleted], "waiting": waiting}
 
     async def _forget_snapshot(self, image_id: str) -> bool:
+        return await self._delete_snapshot(image_id) is True
+
+    async def _delete_snapshot(self, image_id: str) -> bool | str:
+        """True once the provider deleted it (or has none), False when it did not (tried again later), or the
+        provider's refusal in words when it reads back as not this home's (NOT_OURS: never deleted, never retried)."""
         try:
             await self.vms().delete_image(image_id)
             return True
         except Exception as e:  # noqa: BLE001 - the provider keeps billing it; say so in the log
             log.warning("could not delete snapshot %s: %s", image_id, getattr(e, "message", e))
+            if getattr(e, "provider_code", None) == NOT_OURS:
+                return str(getattr(e, "message", e))
             return False
+
+    def _left(self) -> dict[str, dict]:
+        """The snapshots a drop left in place, by save id, for the forget or the prune that asked (popped there)."""
+        return self.__dict__.setdefault("_snapshots_left", {})
 
     async def _drop(self, m: SaveManifest) -> tuple[bool, list[str]]:
         """Remove one save and its snapshot: (removed, the other saves that name the snapshot and keep it, U5-03).
         A snapshot the provider did not delete keeps its save (the next try deletes it): removed is False then.
-        So does one while a save does not read (S1-05: it may name the same snapshot, and unread is not "none")."""
+        So does one while a save does not read (S1-05: it may name the same snapshot, and unread is not "none").
+        A snapshot that reads back as another home's (a save imported from another node) is never deleted and
+        never will be: the save goes, the snapshot stays where it is, and _left says so (snapshot_left)."""
         saves = self.saves()
         if m.snapshot is not None and not saves.whole():
             return False, []
         sharing = saves.sharing(m)
-        if m.snapshot is not None and not sharing and not await self._forget_snapshot(m.snapshot.id):
-            return False, []
+        if m.snapshot is not None and not sharing:
+            done = await self._delete_snapshot(m.snapshot.id)
+            if done is False:
+                return False, []
+            if done is not True:
+                self._left()[m.id] = snapshot_left(m, str(done))
         with contextlib.suppress(NotFound):
             await asyncio.to_thread(self.saves().remove, m.id)
         return True, sharing
 
+    async def _tell_left(self, save_ids: list[str]) -> None:
+        """A prune that left snapshots of another home in place: the owner is told where, once."""
+        left = [x for x in (self._left().pop(i, None) for i in save_ids) if x is not None]
+        if left:
+            await self._notify("Saves removed, their snapshots left in place",
+                               " ".join(x["words"] for x in left[:5]))
+
     async def _prune_title(self, family: str, title: str) -> list[str]:
         pruned = SaveStore.pruned(self.saves().of_title(family, title), self.settings.keep_last)
-        return [m.id for m in pruned if (await self._drop(m))[0]]
+        out = [m.id for m in pruned if (await self._drop(m))[0]]
+        await self._tell_left(out)
+        return out
 
     async def forget(self, family: str | None, title: str | None, save_id: str | None = None) -> dict:
         """Forget saves (and their snapshots): one by id, or every save of a title. `family` None: the
@@ -637,11 +665,14 @@ class Saving:
             targets = [m for m in saves.all(family) if title and m.title_key == " ".join(title.split()).lower()]
             if not targets:
                 raise NotFound(f"no save titled \"{title}\"")
-        snaps, forgot, kept, shared = 0, [], [], []
+        snaps, forgot, kept, shared, left = 0, [], [], [], []
         for m in targets:
             dropped, sharing = await self._drop(m)
             if dropped:
                 forgot.append(m.id)
+                if (gone := self._left().pop(m.id, None)) is not None:
+                    left.append(gone)
+                    continue
                 snaps += m.snapshot is not None and not sharing
                 if m.snapshot is not None and sharing:
                     shared.append({"id": m.snapshot.id, "save": m.id, "used_by": sharing})
@@ -652,7 +683,8 @@ class Saving:
             else:
                 kept.append({"id": m.id, "why": f"the provider did not delete its snapshot {m.snapshot.id if m.snapshot else ''}; "
                                                 "the save stays until it does (try again)"})
-        out: dict = {"forgot": forgot, "snapshots_deleted": snaps, **({"snapshots_kept": shared} if shared else {})}
+        out: dict = {"forgot": forgot, "snapshots_deleted": snaps, **({"snapshots_kept": shared} if shared else {}),
+                     **({"snapshots_left": left} if left else {})}
         if kept:
             out["kept"] = kept
         return out
@@ -669,6 +701,7 @@ class Saving:
             if now - m.saved_at >= age and m.warned_at is not None:
                 if (await self._drop(m))[0]:
                     out["removed"].append(m.id)
+                    await self._tell_left([m.id])
             elif now - m.saved_at >= age - SAVED_NOTICE and m.warned_at is None:
                 await self._notify(f"Saved environment \"{m.title}\" is removed tomorrow",
                                    f"The save {m.id} of {_when(m.saved_at)} is {self.settings.saved_days} days old "
@@ -957,4 +990,3 @@ class Saving:
         except (SaveFailed, SaveLimit) as e:
             self._tried(env, now)
             log.warning("environment %s: autosave failed: %s", env.id, e.message)
-

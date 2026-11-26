@@ -953,7 +953,7 @@ A file or a folder under /work, to your own computer: a one-use .tar.gz link (15
 
 Toolset: `terminals`. Effect: `read`. Needs the `environments` service.
 
-Delete saves and their disk snapshots (they bill each month): every save of `title`, or one save_id. Its title then opens a new environment. Returns forgot and snapshots_deleted.
+Delete saves and their disk snapshots (they bill each month): every save of `title`, or one save_id. Its title then opens a new environment. Returns forgot and snapshots_deleted, and snapshots_left for a save imported from another node: its snapshot is that node's, left where it is.
 
 | Argument | Type | Required | Description |
 |---|---|---|---|

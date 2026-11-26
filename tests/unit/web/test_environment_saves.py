@@ -39,11 +39,11 @@ def mgr(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> Any:
     m = client.app.state.api.runtime.get("environments")
     deleted: list[str] = []
 
-    async def forget_snapshot(image_id: str) -> bool:
+    async def delete_snapshot(image_id: str) -> bool:
         deleted.append(image_id)
         return True
 
-    monkeypatch.setattr(m, "_forget_snapshot", forget_snapshot)
+    monkeypatch.setattr(m, "_delete_snapshot", delete_snapshot)
     m.deleted_snapshots = deleted
     return m
 

@@ -1895,6 +1895,10 @@ says which agent resumes it. A copy imported on the node that made it shares the
 snapshot: forgetting one keeps the snapshot while another save names it, and the last one deletes it.
 While a save on the node does not read, which saves name a snapshot is not known: forgetting or pruning
 one with a snapshot (or a paused machine) then deletes nothing, and the save stays until every save reads.
+A save imported on another node names the snapshot of the node that made it: the provider reads it back
+as that home's, so forgetting or pruning the save on this node never deletes it. The save goes, the
+snapshot stays where it is, and `forget` (or a notification, for a prune) says where it is and that
+openajar no longer tracks it; delete it there yourself when no node needs it.
 
 **You resume one yourself.** Without a chat: **Resume** on a save in the web app's Saved list, `openajar
 environments resume <title or save id>` on the node, or the Resume button on the saved environment's

@@ -38,7 +38,7 @@ from openajar.environments.saves import SaveStore, export_save, import_save
 from openajar.environments.tools import tool_specs as env_tool_specs
 from openajar.policy.wrap import ToolCallError, bind_request_token, wrap_tool
 from openajar.vms.manager import ENV_SAVE_GRACE, VmManager
-from openajar.vms.models import VmSettings
+from openajar.vms.models import VmError, VmSettings
 from openajar.vms.provider import FakeProvider, Server, ServerSpec
 
 TITLE = "Black Friday page"
@@ -738,6 +738,54 @@ async def test_saved_days_tells_the_owner_first_then_removes(node):
     assert any("removed tomorrow" in t[0] for t in node["told"])
     second = await mgr.prune_saves(m.saved_at + days + timedelta(hours=1))
     assert second["removed"] == [m.id] and m.snapshot.id not in node["cloud"].snapshots
+
+
+async def test_forgetting_a_save_whose_snapshot_is_another_homes_leaves_it_in_place_and_says_where(node, monkeypatch):
+    """A save imported from another node names that node's snapshot, in the same provider account, and the provider
+    reads it back as another home's (openajar.vms.provider.check_ours, as Hetzner, Morph, DigitalOcean and docker
+    do). It was kept for ever ("the provider did not delete its snapshot, try again"); now forget drops the save,
+    leaves the snapshot where it is, and says where and that openajar no longer tracks it. A prune does the same
+    and tells the owner."""
+    from openajar.core.errors import NotFound
+    from openajar.vms.provider import NOT_OURS, check_ours
+
+    mgr, cloud, vms = node["mgr"], node["cloud"], node["vms"]
+    real = cloud.delete_image
+
+    async def read_back_first(image_id):
+        if image_id in cloud.snapshots:
+            check_ours(cloud.snapshots[image_id], vms.home_id, f"Fake: snapshot {image_id}")
+        await real(image_id)
+
+    monkeypatch.setattr(cloud, "delete_image", read_back_first)
+    made = []
+    for _ in range(2):
+        await opened(node, keep="save")
+        closed = await node["call"]("environment_close")
+        m, _ = mgr.saves().find(closed["saved"]["save_id"])
+        cloud.snapshots[m.snapshot.id]["agentos-home"] = "otherhome999"  # made by the node it was imported from
+        made.append(m)
+    out = await mgr.forget(None, None, made[0].id)
+    assert out["forgot"] == [made[0].id] and out["snapshots_deleted"] == 0 and "kept" not in out
+    [left] = out["snapshots_left"]
+    assert (left["id"], left["save"]) == (made[0].snapshot.id, made[0].id) and made[0].snapshot.id in cloud.snapshots
+    assert "another openajar home's" in left["why"] and "otherhome999" in left["why"]
+    words = left["words"]
+    assert made[0].snapshot.id in words and "left in place" in words and "no longer tracks it" in words
+    assert "\u2014" not in words
+    with pytest.raises(NotFound):
+        mgr.saves().find(made[0].id)
+    with pytest.raises(VmError) as e:  # what the provider said: refused, never a delete
+        await vms.delete_image(made[0].snapshot.id)
+    assert e.value.provider_code == NOT_OURS
+    # the reaper's prune at saved_days: the save goes, its snapshot stays, and the owner is told once
+    days = timedelta(days=mgr.settings.saved_days)
+    await mgr.prune_saves(made[1].saved_at + days - timedelta(hours=12))
+    pruned = await mgr.prune_saves(made[1].saved_at + days + timedelta(hours=1))
+    assert pruned["removed"] == [made[1].id] and made[1].snapshot.id in cloud.snapshots
+    [(_title, body)] = [t for t in node["told"] if "left in place" in t[0]]
+    assert made[1].snapshot.id in body and "no longer tracks it" in body
+    assert mgr._left() == {}
 
 
 def test_the_settings_refuse_live_by_default_without_the_opt_in():

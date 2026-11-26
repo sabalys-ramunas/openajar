@@ -178,6 +178,10 @@ No setting of an existing setup changes.
   `vms.db`, or a save imported from another node, could delete one of yours or another openajar home's. Now
   it is refused with an error that names it and says whose it is, nothing is deleted, the VM record ends as
   lost (it holds no machine slot and books no budget), and you are told once. (S5b-05, S5b-06)
+- Forgetting a save imported from another node no longer leaves it stuck. Its snapshot is the other node's,
+  so the delete is refused, and the save stayed for ever ("try again"). Now the save is forgotten, the snapshot
+  stays where it is, and `forget` says where it is and that openajar no longer tracks it
+  (`snapshots_left`). A prune of such a save does the same and tells you.
 - A save on the docker provider no longer shows a monthly cost: its image is in your own Docker, so it
   costs nothing.
 

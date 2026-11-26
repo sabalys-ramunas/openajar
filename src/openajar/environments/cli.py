@@ -419,6 +419,8 @@ def forget(title: Annotated[str, typer.Argument(metavar="TITLE", help="The envir
                f"{'s' if out['snapshots_deleted'] != 1 else ''}.")
     for k in out.get("snapshots_kept") or []:
         typer.echo(f"Kept snapshot {k['id']}: save {', '.join(k['used_by'])} still resumes from it.")
+    for k in out.get("snapshots_left") or []:
+        typer.echo(k["words"])
     for k in out.get("kept") or []:
         typer.echo(f"Kept {k['id']}: {k['why']}.")
 

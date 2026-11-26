@@ -280,8 +280,9 @@ clean or discard; then deletes the VM and the browser lane. Unsaved is any repos
 `environment_save(note: str | None = None) -> dict` (the terminals toolset): `{save_id, saved_at, snapshot:
 {id, gb} | null, files, bytes, commits, verified: true}`; a snapshot only for keep `save` (its services
 stop for it and start again). It never waits for a person. `environment_forget(title: str, save_id: str |
-None = None) -> dict` (the terminals toolset): `{forgot: [ids], snapshots_deleted: n}`, only the family
-that made the save (any other: not found), or the owner.
+None = None) -> dict` (the terminals toolset): `{forgot: [ids], snapshots_deleted: n}`, and `snapshots_left:
+[{id, save, where, why, words}]` when a save's snapshot is another home's (an import: left in place, no longer
+tracked), only the family that made the save (any other: not found), or the owner.
 
 Errors (in docs/ERRORS.md, generated): `save_failed` (the machine is kept), `restore_failed` (the save is
 untouched), `save_limit`, `keep_live_not_allowed`, `no_environment`, `unsaved_work`, `environment_limit` (the

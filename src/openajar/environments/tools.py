@@ -838,7 +838,8 @@ async def environment_save(ctx: ToolContext, *, note: str | None = None, on: str
 
 async def environment_forget(ctx: ToolContext, *, title: str, save_id: str | None = None) -> dict:
     """Delete saves and their disk snapshots (they bill each month): every save of `title`, or one
-    save_id. Its title then opens a new environment. Returns forgot and snapshots_deleted.
+    save_id. Its title then opens a new environment. Returns forgot and snapshots_deleted, and
+    snapshots_left for a save imported from another node: its snapshot is that node's, left where it is.
 
     Args:
         title: The environment's title, as environment() lists it under saved.

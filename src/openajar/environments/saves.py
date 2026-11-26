@@ -537,3 +537,24 @@ def public(m: SaveManifest, eur_per_gb_month: float) -> dict[str, Any]:
             "cost_eur_month": cost,
             "note": (m.agent_note or "")[:300] or None, "agent": m.agent}
 
+
+def snapshot_left(m: SaveManifest, refused: str) -> dict:
+    """A forgotten save's snapshot that stays where it is, since it reads back as another home's: where it is,
+    whose, and that openajar no longer tracks it, in plain words (forget's snapshots_left)."""
+    from openajar.vms.models import provider_name
+
+    snap = m.snapshot
+    assert snap is not None
+    if snap.provider == "own":
+        machine, _, image = snap.id.partition("//")
+        where = f"the image {image} on your machine {machine} (`docker images` there)"
+    elif snap.provider == "docker":
+        where = f"the image {snap.id} in this computer's Docker (`docker images`)"
+    else:
+        where = (f"snapshot {snap.id} in your {provider_name(snap.provider)} account"
+                 + (f" ({snap.location})" if snap.location else ""))
+    return {"id": snap.id, "save": m.id, "provider": snap.provider, "where": where, "why": refused,
+            "words": f"The save {m.id} of \"{m.title}\" is forgotten, and {where} is left in place: the provider reads "
+                     "it back as not this openajar's (a save imported from another node names that node's snapshot), "
+                     "so openajar did not delete it and no longer tracks it. Delete it there yourself if it is "
+                     "yours to remove."}
