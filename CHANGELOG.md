@@ -6,6 +6,13 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The README shows the browser from two addresses in a recorded clip (a datacenter address and a static
+  residential one, same browser), says what eBay answered from a datacenter address on 26 November (403 on
+  the home page, a search link loaded), shows Computers where it showed Home, and its status note names
+  0.7.0.
+
 ## [0.7.0] - 2026-11-26
 
 This version adds your own captcha-solving service (`openajar solver`, off until you add one) and the tool
