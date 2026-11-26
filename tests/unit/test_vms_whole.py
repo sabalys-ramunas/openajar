@@ -280,6 +280,20 @@ async def test_a_hold_this_node_does_not_know_is_not_another_environments_to_end
     assert await prov.list_servers({"agentos-home": "another-home"}) == []
 
 
+async def test_a_hold_of_another_openajar_home_is_never_released_by_its_id(node):
+    """S5b-05, S5b-06 on a whole machine: a release empties /work and ends what runs there. The machine says who
+    holds it, and a delete by an id that matches is still refused unless the hold carries this home's label."""
+    import json
+
+    vms, _, server, _, _ = node
+    prov = vms.provider()
+    server.held = json.dumps({"id": "agentos-vm-theirs", "name": "agentos-vm-theirs", "key": "ssh-ed25519 " + "C" * 68,
+                              "labels": {"agentos-home": "someoneelse", "agentos-vm": "vm_theirs"}})
+    with pytest.raises(VmError, match="another openajar home's") as e:
+        await prov.delete_server("server:agentos-vm-theirs")
+    assert e.value.provider_code == "not_this_home" and server.released == [] and server.held is not None
+
+
 async def test_both_ways_work_side_by_side(node):
     from openajar.environments.machines_cli import use_machine
 

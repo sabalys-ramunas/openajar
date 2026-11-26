@@ -46,7 +46,7 @@ from typing import Any
 
 from openajar.vms import netwall
 from openajar.vms.models import VmError
-from openajar.vms.provider import Server, ServerSpec
+from openajar.vms.provider import Server, ServerSpec, check_ours
 
 SERVER_TYPE = "docker"
 # The sizes of agent environments (openajar.environments.models.SIZES) as docker machines: their CPUs
@@ -63,7 +63,7 @@ IMAGE_VERSION = 2              # the image's entrypoint walls the machine off (d
 # docker's own words for "there is none": only these mean a container or an image is gone. Any other failure (no
 # daemon, a socket that does not answer, a context switch) decides nothing and is an error (the 0.7.0 audit, S1-04:
 # `docker inspect` with no daemon prints [] and exits 1, which was read as "deleted outside openajar").
-ABSENT = ("no such container", "no such object", "no such image")
+ABSENT = ("no such container", "no such object", "no such image", "no such network")
 # What a dev box and sshd need, and nothing more: files and owners (apt, dpkg), switching users
 # (sshd, apt's sandbox), signals, ports under 1024, sshd's chroot and its login records. NET_ADMIN is
 # for the entrypoint's firewall only: it drops NET_ADMIN, NET_RAW and SETPCAP before sshd starts.
@@ -151,6 +151,9 @@ class DockerProvider:
     type_name = SERVER_TYPE
     said = "docker"
     image_hint = "get it with `openajar environments setup --pull`"
+    # this openajar home's id (vms/home-id; VmManager.provider sets it): a container or an image is deleted by its
+    # id only once docker reads back this home's label on it (openajar.vms.provider.check_ours)
+    home_id: str | None = None
 
     def __init__(self, *, image: str = "agentos-env:latest", docker: str = "docker", cpus: float = 2.0,
                  memory_gb: float = 4.0, pids: int = 512):
@@ -371,8 +374,13 @@ class DockerProvider:
         return [self._server(d) for d in await self._inspect(ids)]
 
     async def delete_server(self, server_id: str) -> None:
+        """Remove a container of this home: docker's "no such container" is done, and one without this home's
+        label is refused (never `docker rm` by a bare id)."""
         found = await self._inspect([server_id]) if server_id else []
-        network = str(((found[0].get("HostConfig") or {}).get("NetworkMode")) or "") if found else ""
+        if not found:
+            return  # docker says there is none: nothing to delete
+        check_ours((found[0].get("Config") or {}).get("Labels"), self.home_id, f"{self.said}: container {server_id}")
+        network = str(((found[0].get("HostConfig") or {}).get("NetworkMode")) or "")
         await self._run("rm", "-f", "-v", server_id, absent_ok=True)
         if network.startswith("agentos-"):  # its own network (create_server), never bridge or one of yours
             await self._run("network", "rm", network, ok_codes=(0, 1))
@@ -442,6 +450,17 @@ class DockerProvider:
         return {"id": image_id, "status": "available", "gb": round(int(raw.strip()) / 2**30, 3), "labels": {}}
 
     async def delete_image(self, image_id: str) -> None:
+        """Remove an image of this home (a save's, a prepared machine's): docker's "no such image" is done, and
+        one without this home's label is refused (never `docker rmi` by a bare id)."""
+        raw = (await self._run("image", "inspect", "--format", "{{json .Config.Labels}}", image_id,
+                               absent_ok=True)).strip()
+        if raw in ("", "[]"):  # docker says there is none (its "No such image", with the [] it prints then)
+            return
+        try:
+            labels = json.loads(raw) or {}
+        except ValueError:
+            raise VmError(f"{self.said}: the labels of image {image_id} do not read ({raw[:80]})") from None
+        check_ours(labels if isinstance(labels, dict) else {}, self.home_id, f"{self.said}: image {image_id}")
         await self._run("rmi", "-f", image_id, absent_ok=True)
 
     async def list_images(self, labels: dict[str, str]) -> list[dict]:

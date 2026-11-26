@@ -13,6 +13,8 @@ import itertools
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from openajar.vms.models import VmError, provider_name
+
 
 @dataclass
 class Server:
@@ -346,6 +348,28 @@ async def server_state(prov: Any, provider_id: str | None) -> str:
     return f"the provider says the server is {s.status or 'in no state'}" + ("" if s.ipv4 else ", with no address yet")
 
 
+NOT_OURS = "not_this_home"  # VmError.provider_code: a delete refused, since what the id names is not this home's
+
+
+def check_ours(labels: dict[str, str] | None, home_id: str | None, what: str) -> None:
+    """Before a delete by id: what the provider read back carries this openajar home's label (agentos-home),
+    or the delete is refused with a VmError (NOT_OURS). An id from a damaged or restored record, or a save
+    imported from another node, must never reach a machine or an image this home did not make (the 0.7.0
+    audit, S5b-05 and S5b-06: deletes went by bare id, and a provider account can hold the owner's other
+    servers)."""
+    have = (labels or {}).get("agentos-home") or ""
+    if home_id and have == home_id:
+        return
+    if not home_id:
+        whose = "not known as this openajar's (this home has no id in vms/home-id yet, so it made nothing)"
+    elif have:
+        whose = f"another openajar home's (agentos-home {have}, this one is {home_id})"
+    else:
+        whose = "not openajar's (it has no agentos-home label)"
+    raise VmError(f"{what} is {whose}, so openajar does not delete it; remove it yourself if it is yours to remove",
+                  provider_code=NOT_OURS)
+
+
 def by_hand_words(rec: Any) -> str:
     """Where a person deletes a machine openajar could not (a VM record), for the overdue notification."""
     container = f"agentos-{rec.id.replace('_', '-')}"
@@ -358,6 +382,4 @@ def by_hand_words(rec: Any) -> str:
                 f"{container}` there.")
     if rec.provider == "docker":
         return f"Remove its container if openajar cannot: `docker rm -f {container}`."
-    from openajar.vms.models import provider_name
-
     return f"Delete it in the {provider_name(rec.provider)} console if openajar cannot."

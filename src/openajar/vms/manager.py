@@ -39,7 +39,16 @@ from openajar.core.models import LaneState, parse_lane_id, utcnow
 from openajar.env.models import RemoteHost, RemoteVia
 from openajar.vms import capacity, following, netwall, providers, reaping, repos, ssh
 from openajar.vms import keys as vmkeys
-from openajar.vms.models import Size, VmError, VmFull, VmLimit, VmRecord, VmSettings, load_settings
+from openajar.vms.models import (
+    HOME_ID_FILE,
+    Size,
+    VmError,
+    VmFull,
+    VmLimit,
+    VmRecord,
+    VmSettings,
+    load_settings,
+)
 from openajar.vms.pausing import Pausing
 from openajar.vms.provider import Provider, ServerSpec, boot_error_words, server_state
 from openajar.vms.reaping import ENV_SAVE_GRACE  # noqa: F401 - its home was here (environments.saving, tests)
@@ -59,7 +68,6 @@ OFFERS_TTL = timedelta(minutes=30)        # server types and prices are read aga
 LISTED_FRESH = timedelta(minutes=1)       # what has room now (listed_now) is read again after this
 PREFLIGHT_WAITS_S = (2.0, 4.0, 8.0)        # between tries of a short network check before a VM is made
 SPEC_KEYS = ("cores", "memory_gb", "disk_gb", "architecture", "cpu_type")  # a plan's `specs`
-HOME_ID_FILE = "home-id"                  # in vms/: this OPENAJAR_HOME's own id in the provider's labels
 
 # What `openajar vm image build` installs by default: enough to clone, build and test most projects.
 DEFAULT_IMAGE_SCRIPT = """set -eu
@@ -175,6 +183,8 @@ class VmManager(Pausing):
     def provider(self) -> Provider:
         if self._provider is None:  # vms.toml's provider (openajar.vms.providers), with its secret
             self._provider = providers.make(self.home, self.settings)
+        if getattr(self._provider, "home_id", "") is None:  # one that reads this home's label back before a delete
+            self._provider.home_id = self.home_id  # type: ignore[attr-defined]
         return self._provider
 
     @property

@@ -174,8 +174,12 @@ Setup sets `provider = "digitalocean"` in `vms.toml`. What is different from Het
 - A snapshot lives in the region of the Droplet it was taken from, so a save resumes in that region,
   also after you change `location`.
 - DigitalOcean has tags, not labels: openajar's labels are tags like `agentos-vm:vm_ab12` on its
-  Droplets and snapshots, and it only ever lists and deletes what carries its own. The token itself
-  reaches every Droplet of its team, so a team for openajar alone is the careful choice.
+  Droplets and snapshots, and it only ever lists and deletes what carries its own: before a delete by
+  id it reads the Droplet or the snapshot back, and refuses one without this home's `agentos-home` tag.
+  The token itself reaches every Droplet of its team, so a team for openajar alone is the careful choice.
+- A Droplet that is off (an agent's `poweroff`) is powered on again, as a Hetzner server is; a
+  DigitalOcean that does not answer decides nothing, and a Droplet one listing leaves out is asked for
+  by its id.
 - The firewall covers a Droplet through a tag the Droplet is created with. For the first moments of a
   new Droplet its port 22 may be open to the internet before DigitalOcean applies the firewall; it
   takes the node's key only (no password), and its host key is pinned.
@@ -248,9 +252,12 @@ What openajar puts on the machine, and nothing else:
 No program of openajar runs there, no firewall rule is changed and no port is opened to the network:
 a container's own sshd listens on the machine's loopback only, and the node reaches it through its
 ssh connection to the machine. openajar never stops, restarts or wipes the machine, and it only ever
-removes containers, networks and images that carry its own label. `machine remove` deletes those,
-the image (when openajar put it there) and the `authorized_keys` line; it refuses while environments
-are open or saved there unless you pass `--force`.
+removes containers, networks and images that carry its own label: before it removes one by its id, the
+machine's Docker reads that label back, and one without this home's is refused. `machine remove`
+deletes those, the image (when openajar put it there) and the `authorized_keys` line; it refuses while
+environments are open or saved there, or while a save on this computer does not read (which saves keep
+their disk there is then not known), unless you pass `--force`. It says it removed only what Docker
+removed: any failure but Docker's own "no such ..." is an error.
 
 What is different from a rented VM, said plainly:
 
@@ -264,8 +271,11 @@ What is different from a rented VM, said plainly:
 - A save's disk is an image in that machine's Docker, and it costs nothing. If the machine is lost,
   the save's files (kept on the node) are what is left, and a resume starts from them.
 - A machine that is switched off or out of reach is waited for: its environments are not ended, and
-  calls say the machine did not answer. A machine that restarts loses its open environments (they
-  show as gone, and come back from their last save: `environment_open` with the same title).
+  calls say the machine did not answer. So is a machine whose record on this computer does not read
+  (`vms/machines/NAME/machine.json`): only `machine remove` makes its containers gone. When the machine
+  restarts, its open environments' containers stop with their disks whole, and the node starts them
+  again on its next look (as [a machine that only stopped](#costs-and-the-reaper)); processes that ran
+  are gone, the files are not. Docker there that does not answer is an error, never "no such container".
 - Every command goes through two ssh connections (to the machine, then to the container), so each
   call takes a moment longer than on docker on this computer: about a quarter of a second in all when
   the machine is near, more over a slow link.
@@ -1957,8 +1967,9 @@ open a fresh one under another title. `save_limit`: forget saves you no longer n
   `environment()` waits up to a minute for the link and shows `link`: `down` (since when, why, the tries)
   or, for ten minutes after, `back`.
 - **A machine that only stopped** (a reboot, a Docker Desktop restart, its container killed, an agent's
-  `poweroff`) still has its disk: the node starts it again (`docker start`, Hetzner's power on; a container
-  gets a new SSH port, which the node follows) and the link comes back as above. Processes that ran are gone,
+  `poweroff`, your own machine restarting) still has its disk: the node starts it again (`docker start`,
+  on your own machine too; Hetzner's and DigitalOcean's power on; a container gets a new SSH port, which
+  the node follows) and the link comes back as above. Processes that ran are gone,
   the files are not. One that does not start is left as it is, nothing is deleted, and you get a
   notification once.
 - **A machine that is gone** (deleted outside openajar, its container dead, its host lost) is found once
@@ -2064,7 +2075,7 @@ Not on it:
 | `environment_in_use` | another chat of the agent holds the live machine with this title | the agent opens its own with another title; `take_over=true` once the holder has been quiet for `take_over_minutes` |
 | `saved_by_earlier_grant` | the title is a computer the agent had under an earlier agent grant of this computer (openajar 0.7.0 and before) | `openajar environments adopt`, then `--yes`; the agent then opens the same title |
 | `environment_not_ready` | the environment is starting, or its link is down (a restart, a dropped connection, this computer's address moved) and the node is bringing it back | wait a minute; `openajar environments show ID`, and `openajar logs --level warn --since 10m` if it does not come back |
-| `machine_gone`, or `state: "gone"` | the machine stopped for good: the provider says, twice, that its container or server no longer exists or is dead; one that only stopped is started again, unless it stopped right after each of 3 starts in 30 minutes ("Costs and the reaper"). On your own machine: the container was removed there | the agent opens the same title again and gets a new machine; if it happens often, `docker ps -a` or the Hetzner console, and `openajar logs --level warn --since 30m` |
+| `machine_gone`, or `state: "gone"` | the machine stopped for good: the provider says, twice, that its container or server no longer exists or is dead; one that only stopped is started again, unless it stopped right after each of 3 starts in 30 minutes ("Costs and the reaper"). On your own machine: the container was removed there, or the machine was taken out with `machine remove` | the agent opens the same title again and gets a new machine; if it happens often, `docker ps -a` or the Hetzner console, and `openajar logs --level warn --since 30m` |
 | "your machine box is handed over whole, so it holds one environment at a time" | a whole machine has an environment open ([The whole machine](#the-whole-machine)) | close that one (`environment_close`: its work is saved), or add a second machine, or bring this one in with containers |
 | "box is held by an environment this openajar no longer has" (`machine check`) | the node's records no longer know the environment that holds the whole machine | `openajar environments machine check box --free` ends the hold and empties `/work` |
 | "machine homebox did not answer over ssh" | your own machine is off, asleep or out of reach from the node, or its address changed | switch it on; `openajar environments machine check homebox` says what is wrong. Its environments wait, they are not ended. A new address: `machine remove` and `machine add` again |

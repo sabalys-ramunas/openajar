@@ -26,6 +26,19 @@ def provider_name(provider: str | None) -> str:
     return PROVIDER_NAMES.get(provider or "", (provider or "").capitalize()) or "The provider"
 
 
+HOME_ID_FILE = "home-id"  # in vms/: this OPENAJAR_HOME's own id in the provider's labels (agentos-home)
+_HOME_ID_RE = re.compile(r"^[a-z0-9]{8,32}$")
+
+
+def home_id_of(home: Path) -> str | None:
+    """This home's id as vms/home-id holds it (openajar.vms.manager makes it before it labels anything), or
+    None when there is none: then nothing a provider holds carries it."""
+    try:
+        found = (Path(home) / "vms" / HOME_ID_FILE).read_text().strip()
+    except FileNotFoundError:
+        return None
+    return found if _HOME_ID_RE.match(found) else None
+
 # paused: the machine is kept with its memory and bills only its storage (a provider with the "pause"
 # capability; an environment's save, openajar.environments.pausing). Not live: it counts toward no limit.
 VmState = Literal["creating", "booting", "ready", "deleting", "deleted", "failed", "paused"]
