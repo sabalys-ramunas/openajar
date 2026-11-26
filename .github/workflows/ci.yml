@@ -226,6 +226,17 @@ jobs:
         # Camoufox installs its pinned fpgen model into the venv on first use (not into the cached
         # ~/.cache/camoufox, so a cache hit does not bring it): do it while the network is still open.
         run: uv run --no-sync python -c "from camoufox.fpgen_model import ensure_fpgen_model; ensure_fpgen_model()"
+      - name: Refresh Camoufox's GeoIP database when it is due
+        # Camoufox downloads its GeoIP database again at a launch once the data is over 8 days old. The
+        # cached ~/.cache/camoufox keeps the database it was saved with, and the tests run with the
+        # network cut, so past that age every launch there fails on the download: do it while the
+        # network is still open.
+        run: |
+          uv run --no-sync python - <<'PY'
+          from camoufox.geolocation import download_mmdb, needs_update
+          if needs_update():
+              download_mmdb()
+          PY
       - name: Cut the tests off from everything but loopback
         # The tests run with the group openajar-offline; packets of that group may leave only
         # through lo, and not to the local DNS stub either, so no browser, lookup or helper can
