@@ -98,8 +98,8 @@ can be skipped and changed later.
   - a [Hetzner Cloud](https://www.hetzner.com/cloud) account (about 0.011 EUR an hour while a VM is
     open). Make a project just for openajar: its token can delete any server in that project.
   - Docker running on your computer (free, less isolated)
-  - a Linux machine of your own with Docker that you reach over ssh: a box at home, a server you
-    rent elsewhere (free, less isolated; `openajar environments machine add`)
+  - a Linux machine of your own that you reach over ssh: a box at home with Docker, or a fresh
+    server you hand over as a whole (free, less isolated; `openajar environments machine add`)
 - Optional: the [GitHub CLI](https://cli.github.com) (`gh`), so setup can reuse your login for
   private repositories
 
@@ -545,6 +545,9 @@ ssh and puts the environments image in its Docker, and from then on each environ
 there, with the same terminal, browser, live view and saves. Nothing is rented, openajar never stops
 or wipes the machine, and `machine remove` takes away what it put there. It is a container, so it is
 less isolated than a rented VM ([what is different](docs/ENVIRONMENTS.md#1-where-the-vms-come-from)).
+When the machine has no Docker, `add` offers to install it. A fresh Ubuntu 24.04 server can be handed
+over as a whole instead (`--whole`): no Docker, the agent is root on the machine itself, one
+environment at a time ([the whole machine](docs/ENVIRONMENTS.md#the-whole-machine)).
 
 </details>
 

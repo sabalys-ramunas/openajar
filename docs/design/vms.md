@@ -107,7 +107,7 @@ openajar.vms.docker), `morph` (Morph Cloud, openajar.vms.morph) or `own` (contai
 own machines over SSH, openajar.vms.own). Each declares `capabilities`, and
 callers check a name (`openajar.vms.provider.capable`) before they use what it stands for:
 
-| Capability | Meaning | Hetzner | Docker | Morph | Own machine |
+| Capability | Meaning | Hetzner | Docker | Morph | Own machine (containers; a whole machine has neither `snapshot` nor `network_policy`) |
 |---|---|---|---|---|---|
 | `firewall` | a provider firewall lets SSH in from the node only | yes | no (loopback) | no (its gateway) | no (the machine's loopback) |
 | `snapshot` | a disk snapshot that new machines boot from | yes | yes (`docker commit`) | yes | yes (`docker commit` there) |
@@ -134,6 +134,17 @@ id>` and an image's `<machine>//<docker image>`, so each later call finds its ma
 does not answer raises from `list_servers` and `get_server`: the reaper and the liveness check read
 "no answer" as nothing, never as "deleted". The user guide is docs/ENVIRONMENTS.md "Your own
 machine"; what an environment there can and cannot reach is in docs/THREAT-MODEL.md.
+
+A machine can also be handed over whole (`Machine.mode = "whole"`, `openajar.vms.whole.WholeMachine`):
+`OwnProvider.on(name)` returns either side, and both answer the same calls. A whole machine is its own
+one server: `create_server` writes who holds it to `/var/lib/openajar-machine/server.json` there (made
+with noclobber, so of two opens one gets it) and adds the VM's key to root's `authorized_keys`;
+`get_server` and `list_servers` read that file; `delete_server` runs the release (the key's line, the
+processes the environment left, `/work`, the file). The `Server` it returns carries the machine's
+pinned host keys (`host_keys`, as Morph does), no `via`, and `ssh_user` root. It has no snapshot and no
+wall, and a provider's places may differ, so callers ask `openajar.vms.provider.capable_at(provider,
+name, location)` where the answer depends on the machine (a save's disk snapshot, a closed network);
+`OwnProvider.busy(location)` says who holds a whole machine, for the refusal before anything is opened.
 
 Without `cloud_init` the node runs the environment's setup over SSH as soon as the machine answers
 (openajar.environments.bringup), and the image a snapshot is built from needs none.

@@ -340,14 +340,19 @@ def _use_own(ctx: Ctx, settings: Any) -> None:
     names = [m.name for m in own.every(ctx.home)]
     if not names:
         ui.say("Bring your machine in with one command (it checks the machine over ssh and puts the environments "
-               f"image in its Docker), then run `openajar setup vms` again: {add}")
+               f"image in its Docker), then run `openajar setup vms` again: {add}. A fresh Ubuntu 24.04 server can "
+               "be handed over as a whole instead, with no Docker: add --whole.")
         ctx.todo.append(f"your machine ({add})")
         return
     name = own.default_name(ctx.home, settings) if settings.provider == "own" else None
     name = name or names[0]
     write_vm_settings(ctx.home, {"provider": "own", "location": name})
-    ui.say(f"Environments open as containers on your machine {name}. They are free, and share that machine's "
-           "kernel.")
+    if own.is_whole(ctx.home, name):
+        ui.say(f"Environments open on your machine {name}, handed over as a whole: one at a time, the agent root "
+               "on it. It is free.")
+    else:
+        ui.say(f"Environments open as containers on your machine {name}. They are free, and share that machine's "
+               "kernel.")
     ctx.vms = f"your own machine {name} (free)"
 
 
@@ -815,7 +820,8 @@ def _check_vms(ctx: Ctx) -> tuple[bool, str]:
             asyncio.run(own.OwnProvider(ctx.home, s).check())
         except OpenajarError as e:
             return False, e.message
-        return True, f"your machine {name} answers, and the image is there"
+        return True, f"your machine {name} answers" + ("" if own.is_whole(ctx.home, name)
+                                                       else ", and the image is there")
     if s.provider == "morph":
         from openajar.setup.morph import morph_check
         from openajar.vms.models import MORPH_TOKEN_FILE

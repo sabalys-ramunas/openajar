@@ -455,10 +455,14 @@ async def _open_locked(ctx: ToolContext, mgr: EnvironmentManager, binding: str, 
         plan = await mgr.plan(env_id, size=size, hours=hours, keep=keep)
     mgr.check_network_plan(network, plan)
     mgr.check_limits(plan)
+    await mgr.check_room(plan)
     sp = plan.get("specs") or {}
     specs = f" ({sp.get('cores')} vCPU, {sp.get('memory_gb'):g} GB)" if sp.get("cores") and sp.get("memory_gb") else ""
-    provider = getattr(mgr.vms().provider(), "name", "")
-    what = (f"start a container{specs} on your machine {plan['location']}" if provider == "own"
+    prov = mgr.vms().provider()
+    provider = getattr(prov, "name", "")
+    whole = getattr(prov, "whole", None)
+    what = (f"take your machine {plan['location']} as a whole{specs}" if callable(whole) and whole(plan["location"])
+            else f"start a container{specs} on your machine {plan['location']}" if provider == "own"
             else f"rent a {plan['server_type']} machine{specs} in {plan['location']}")
     summary = (("Resume" if saved is not None else "Open") +
                f" environment {env_id} \"{title}\": {what} for up to {plan['ttl_minutes']} min"
@@ -712,7 +716,7 @@ async def environment_close(ctx: ToolContext, *, on: str | None = None, discard:
         except NotFound:
             gone = {"forgot": [], "snapshots_deleted": 0}
         out["saves"] = {"made": None, **gone}
-        out["next"] = (f"done for good: the machine is {out['machine']} and no save of \"{env.title}\" is left. "
+        out["next"] = (f"done for good: {_machine_words(mgr, env)} and no save of \"{env.title}\" is left. "
                        f"environment_open(title=\"{env.title}\") would open a new one")
         return out
     if env.gone_at is not None:  # its machine had stopped: this close saved nothing (openajar.environments.liveness)
@@ -727,7 +731,7 @@ async def environment_close(ctx: ToolContext, *, on: str | None = None, discard:
         out["saved"] = _saved_result(mgr, env.last_save_id)
         out["pause"] = _pause(mgr, out["saved"])
         out["saves"] = {"made": env.last_save_id}
-        out["next"] = (f"saved as {env.last_save_id}, and the machine is {out['machine']}. {out['pause']}. "
+        out["next"] = (f"saved as {env.last_save_id}, and {_machine_words(mgr, env)}. {out['pause']}. "
                        f"Tell the human: say \"continue {env.title} in openajar\"; environment_open(title=\"{env.title}\") "
                        "resumes it in any chat of your agent")
         return out
@@ -755,6 +759,16 @@ async def _refuse_unsaved(mgr: EnvironmentManager, env: Environment, why: str) -
                           unsaved)
 
 
+def _machine_words(mgr: EnvironmentManager, env: Any) -> str:
+    """What became of a closed environment's machine: "the machine is deleted", or, for a machine of the
+    owner's handed over whole (openajar.vms.whole), that it is free again (nothing of theirs is deleted)."""
+    state = env.vm_state or "unknown"
+    whole = getattr(mgr.vms().provider(), "whole", None)
+    if state == "deleted" and callable(whole) and whole(env.machine.location):
+        return f"your machine {env.machine.location} is free again (its /work is emptied)"
+    return f"the machine is {state}"
+
+
 def _pause(mgr: EnvironmentManager, saved: dict) -> str:
     from openajar.environments import comeback
 
@@ -764,7 +778,8 @@ def _pause(mgr: EnvironmentManager, saved: dict) -> str:
         return paused_words(mgr.saves().find(saved["save_id"])[0])
     snap = saved.get("snapshot") or None
     gb = (snap or {}).get("gb")
-    provider = getattr(mgr.vms().provider(), "name", "") if snap else ""
+    provider = getattr(mgr.vms().provider(), "name", "")
+    provider = provider if snap or provider == "own" else ""  # a save of files there goes back onto that machine
     from openajar.vms.providers import FREE
 
     cost = round(gb * mgr.settings.snapshot_eur_per_gb_month, 4) if gb and provider not in FREE else 0.0

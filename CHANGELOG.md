@@ -30,6 +30,23 @@ All notable changes to openajar are recorded here. The format follows
   and Windows machines, rootless Docker and Podman, a machine behind a jump host, and renting VMs and using
   your own machine on one node at once. Tried against a container with its own sshd and Docker that plays
   the machine over ssh; not yet tried against a real remote server.
+- A whole machine. `openajar environments machine add box root@203.0.113.7 --whole` hands a server over
+  entirely, with no Docker: the machine itself is the environment's computer and the agent is root on it, as
+  on a rented VM. It is for a fresh Ubuntu 24.04 server with nothing of yours on it. The command checks the
+  system and the login (root, or passwordless sudo), names the signs that the machine is in use (containers,
+  open ports, several accounts, files in `/work`, `/var/www`, `/srv` or a home folder) and then hands it over
+  only when you say so at a terminal (`--yes` never answers that), and runs the setup a rented VM gets (git,
+  Node, Python, the browser and the desktop). One environment is open on it at a time; a second open is
+  refused by the title of the first. A save holds the files (no disk snapshot) and resumes onto the same
+  machine. A close takes that environment's key away, ends what it left running, and empties `/work`; what
+  the agent installed or started outside `/work` stays, and openajar never restarts, powers off or reinstalls
+  the machine. Said plainly: nothing walls the agent in there. It is root on a machine that is on your network
+  as itself, and `network` `limited` and `none` are refused. Tried against a container that plays a fresh
+  Ubuntu 24.04 server with systemd and sshd; not yet tried against a real server.
+- `machine add` offers to install Docker when the machine has none: on your yes (asked at a terminal, or
+  `--install-docker`; never on `--yes` alone) it runs Docker's own install script as root there and adds the
+  login to the `docker` group. `machine check NAME --install-docker` does it later. Docker stays on the
+  machine when you remove the machine from openajar.
 
 ### Changed
 
