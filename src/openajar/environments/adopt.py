@@ -1,7 +1,7 @@
 """Computers of this computer's earlier agent grants, given to its current one (`openajar environments adopt`).
 
 Environments, saves and title-bound logins belong to a grant family (openajar.environments.caller). Since
-0.8.0 a local agent grant that replaces an earlier one keeps its family (openajar.policy.families), so
+0.8.1 a local agent grant that replaces an earlier one keeps its family (openajar.policy.families), so
 nothing is left behind. Before, each new grant had a family of its own: after an expiry, a freeze or new
 default terms the agent saw `saved: []`, and its title opened a new, empty machine while the old one kept
 billing (audit S7-01). This gives those computers to the current grant, once, by the owner's word:

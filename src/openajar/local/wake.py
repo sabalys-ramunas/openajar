@@ -206,7 +206,7 @@ def note(record: dict | None) -> str:
         body += f" Saved first: {', '.join(saved)}."
     for k in record.get("kept") or []:
         last = f"; its last save is {k['last_save']}" if k.get("last_save") else "; it has no earlier save"
-        machine = k.get("machine", "kept")  # a record from before 0.8.0 has none: it said kept
+        machine = k.get("machine", "kept")  # a record from before 0.8.1 has none: it said kept
         how = "so its machine is kept" if machine == "kept" else f"and its machine is {machine}"
         body += (f" {k['id']} ({k.get('title') or 'no title'}) could not be saved, {how} "
                  f"({k.get('why') or 'no reason given'}{last}).")

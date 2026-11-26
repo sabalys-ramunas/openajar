@@ -3,7 +3,7 @@
 Environments, saves and title-bound logins belong to a grant family (openajar.environments.caller): the
 grant's root id. A grant's expiry is signed into its root block, so it cannot be extended, and the local
 agent grant (`openajar local start`, `openajar setup agents`: openajar.local.register) is replaced when it
-runs out, is revoked or frozen, or its default terms change. Before 0.8.0 each replacement started a
+runs out, is revoked or frozen, or its default terms change. Before 0.8.1 each replacement started a
 family of its own, and the agent lost every saved and open computer (audit S7-01).
 
 Now the replacement continues the family of the grant it replaces, across an expiry, openajar's own renewal

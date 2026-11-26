@@ -93,7 +93,7 @@ async def stranded(node, policy, vault=None):  # noqa: F811
     if vault is not None:
         login = await logins.add(vault, "https://github.com/login", user="me", password="pw-for-a-test-0001",
                                  scope={"title": TITLE, "family": old.id, "agent": SUBJECT})
-    new, new_token = local_grant(policy)  # a family of its own, as before 0.8.0
+    new, new_token = local_grant(policy)  # a family of its own, as before 0.8.1
     policy.revoke(old.id, by="owner", reason="openajar local issued a new grant for this computer")
     return {"old": old, "new": new, "token": new_token, "save": saved["save_id"], "docs": docs["id"],
             "login": login}
@@ -188,7 +188,7 @@ async def test_a_title_the_current_grant_has_too_moves_under_a_name_of_its_own(n
     in place of the other, nor pruned by the other's keep_last, so the moved one takes "(earlier)"."""
     old, old_token = local_grant(policy)
     first = await saved_by(node, old_token)
-    _new, new_token = local_grant(policy)  # a family of its own, as before 0.8.0
+    _new, new_token = local_grant(policy)  # a family of its own, as before 0.8.1
     blank = await saved_by(node, new_token, session="chat-2")  # 0.7.0 opened the title again, empty
     policy.revoke(old.id, by="owner")
     a = adoption(node, policy)

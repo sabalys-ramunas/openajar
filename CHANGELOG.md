@@ -6,6 +6,8 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-27
+
 This version stops openajar from losing your work, and makes downloads work in an environment's browser.
 
 What was lost before, and is not now. An environment's machine could be deleted before its work was saved:
