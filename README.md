@@ -199,6 +199,13 @@ agent's computer, on a real screen, and adds what a browser alone does not have:
   those whatever the browser is. Give the browser a static residential proxy, or your own computer's
   connection, and it goes out from an internet provider's address instead.
 
+The same browser from two addresses, recorded on two Hetzner VMs on 26 November 2026. Only the
+address differs. [What it gets through](#what-it-gets-through), and what it does not, is below.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/browser-two-addresses.webp" width="100%" alt="A screen recording of the agent's browser on two cloud VMs. From the datacenter address eBay's home page answers with an error page (HTTP 403) and Glassdoor shows Cloudflare's Verify you are human checkbox. Through a static residential address the same browser loads eBay, types mechanical keyboard into the search with a person's timing and gets the results, BrowserScan's bot detection says Normal, and Glassdoor opens with no checkbox.">
+</p>
+
 ### Add a proxy
 
 ```sh
@@ -246,8 +253,8 @@ What it costs you instead:
   saves the environments when it sleeps.
 - **It is your household's address.** What an agent does on a site counts for your home, and a site
   that bans the agent bans your home.
-- **One address for all.** Every environment shares it. For several agents, or accounts that must not
-  be linked to each other, a static residential proxy per environment is still the way.
+- **One address for all.** Every environment shares it. For several agents that should each have their
+  own address, a static residential proxy per environment is still the way.
 - **It moves with you.** When the laptop changes network or a VPN is on, the address changes, and the
   browser's timezone and language follow it at the next launch.
 
@@ -293,7 +300,7 @@ static residential proxy in Lithuania, with openajar's defaults:
 | [CreepJS](https://abrahamjuliot.github.io/creepjs/) | 0% headless, 0% stealth, 13% like headless |
 | [bot.sannysoft.com](https://bot.sannysoft.com), [rebrowser bot detector](https://bot-detector.rebrowser.net), [deviceandbrowserinfo](https://deviceandbrowserinfo.com/are_you_a_bot), BotD | pass, not a bot |
 | A shop behind DataDome and one behind PerimeterX | the page, no challenge |
-| eBay: home, search, an item | works. From the machine's datacenter address, without a proxy: 403 on every page |
+| eBay: home, search, an item | works. From the machine's datacenter address, without a proxy: 403 on the home page (on 26 November a search link loaded after eBay's "Pardon Our Interruption" page) |
 | Amazon: home, search, a product, a second search | works, four sessions out of four, arriving through the home page (and its "Continue shopping" button when it shows one) and its search box |
 | Leaks: a packet capture on the machine while the browser worked | none: no DNS, WebRTC or QUIC from the machine's own address |
 | The same address after 140 page loads, a browser restart, and a save and resume | yes |
@@ -428,8 +435,8 @@ installer again updates it with openajar. To leave it out, answer no, or add it 
 its live view link, and `openajar environments list` in the terminal.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/home-dark.webp">
-  <img src="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/home-light.webp" width="100%" alt="Home in the openajar web app, on demo data. On the left, the sidebar on a night blue: Home, Needs you, Computers and What happened, then Your business (Accounts, Jobs that repeat, Brand), For developers (Runs and checks, Site APIs) and Settings. In the window at the top, over a sunrise picture: 3 jobs are running on 2 machines, 2 runs failed and 1 is running again, a Reddit account switched off for safety and another asked to slow down, 30 things that need you, and three of them as cards (a refund and two payments waiting for a yes, each with a Look button). Under it, Working now: six environments as cards, each a small picture of its screen with its state and time left.">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/environments-dark.webp">
+  <img src="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/environments-light.webp" width="100%" alt="Computers in the openajar web app, on demo data, with its two tabs, Environments and Machines. Environments shows Open 6, Saved 4 and Closed 7, a line that says 3 working, 1 starting, 2 idle, and the open ones as cards: a picture of each one's screen (a desktop with a terminal or a browser on it, or the sunrise while it starts) with its state and time left, its title, and the agent with what it is doing.">
 </picture>
 
 <picture>
@@ -437,20 +444,7 @@ its live view link, and `openajar environments list` in the terminal.
   <img src="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/environment-light.webp" width="100%" alt="One environment in the openajar web app of Northwind Group, from a test run on Docker: its title Autumn sale page with a Working chip, the agent that opened it (Claude Code), Saves when idle and the repository northwind/shop, then its live screen on a dark stage. The desktop shows a browser on the shop page the agent started (Autumn sale, with three prices) and a dock, and the pill under it says Claude Code has control, with Take over, full window and More. Beside it, the time left and the cost so far, what it is doing (it started npm run dev, opened the page, read it and took a picture of it), and its branch. Below, Proofs with the screenshot it kept (the sale page at phone width: Autumn sale, twenty percent off until Sunday, and the three prices), what it did in five steps (npm test among them), the terminal and its code.">
 </picture>
 
-<details>
-<summary><b>More screenshots</b>: Computers</summary>
-
-<br>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/environments-dark.webp">
-  <img src="https://raw.githubusercontent.com/sabalys-ramunas/openajar/main/assets/readme/environments-light.webp" width="100%" alt="Computers in the openajar web app, on demo data, with its two tabs, Environments and Machines. Environments shows Open 6, Saved 4 and Closed 7, a line that says 3 working, 1 starting, 2 idle, and the open ones as cards: a picture of each one's screen (a desktop with a terminal or a browser on it, or the sunrise while it starts) with its state and time left, its title, and the agent with what it is doing.">
-</picture>
-
 The live view link works on its own, without the web app.
-
-
-</details>
 
 ## FAQ
 
@@ -640,10 +634,10 @@ title replaces it with a fresh one. The skill that teaches an agent the loop:
 ## Status
 
 > [!NOTE]
-> **Alpha, at 0.5.2.** 0.5.0 gave the agent's computer a desktop you can watch and work with, and the
-> new name. 0.5.1 notices a machine that dies and replaces it on the same title, keeps typing in the app
-> the agent opened, and brings the web app's simpler navigation and its new design to every screen.
-> 0.5.2 names each agent the same way everywhere ("Claude Code"), and an update restarts the running service.
+> **Alpha, at 0.7.0.** 0.5 gave the agent's computer a desktop you can watch and work with, and the
+> new name. 0.6 gave its browser an address of your own: a static residential proxy or this computer's
+> connection, with the proxy's credentials kept off the machine. 0.7 adds your own captcha-solving
+> service, off until you add one.
 > Computers that stay and their logins are new, and the tools may still change between minor versions:
 > see the [changelog](CHANGELOG.md) and the [releases](https://github.com/sabalys-ramunas/openajar/releases).
 > On a laptop there is no `ui_check` yet (it needs a server), and the laptop must be awake while a VM works.
