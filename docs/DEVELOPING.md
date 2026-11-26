@@ -115,6 +115,15 @@ The first run copies the environments image into the machine's Docker (a minute 
 the volume `openajar-test-machine-docker` (about 4 GB, `docker volume rm` frees it). The same image
 is a quick way to try `openajar environments machine add` by hand.
 
+A machine handed over whole (`machine add --whole`, openajar.vms.whole) and the Docker install have a
+second stand-in: a container that plays a fresh Ubuntu 24.04 server, with systemd, sshd and no Docker.
+Its tests need the internet (they run the real setup and Docker's own install script, a few minutes):
+
+```sh
+docker build -t openajar-test-server tests/fixtures/whole_machine
+uv run pytest -q tests/unit/test_environments_whole_docker.py tests/unit/test_environments_whole_browser_docker.py
+```
+
 To see whether a change makes environments better or worse for the agents that use them (done,
 time, tokens of tool output read, wrong turns), run the environments eval on the same Docker:
 `make eval`, then `uv run python tests/env_eval/run.py compare`. [EVALS.md](EVALS.md) has the

@@ -2,6 +2,7 @@
 (openajar.vms.own). The owner runs these at the node; no tool adds or removes a machine.
 
     openajar environments machine add homebox me@192.168.1.20     # register it, check it, put the image there
+    openajar environments machine add box root@203.0.113.7 --whole  # a fresh server, handed over as a whole
     openajar environments machine list
     openajar environments machine check homebox [--image]        # what is wrong, and the image again
     openajar environments machine use homebox                    # new environments open there
@@ -9,11 +10,17 @@
 
 No password is ever asked for by openajar or kept: `add` makes a key for the machine and installs it with
 your own ssh (which may ask for your password itself), or uses a key file you name with --key.
+
+Two ways to bring one in. With containers (the default): each environment is a container in the machine's
+Docker, walled off from the machine, and `add` offers to install Docker when it is missing. As a whole
+(`--whole`, openajar.vms.whole): a fresh Ubuntu 24.04 server with nothing of yours on it, on which the agent
+is root, one environment at a time.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import subprocess
 import sys
@@ -27,7 +34,7 @@ from openajar.core.config import home_from_env
 from openajar.core.errors import InvalidRequest, OpenajarError
 
 machine_app = typer.Typer(no_args_is_help=True, help=(
-    "Bring your own machine: environments open as containers on a Linux box of yours, over ssh."))
+    "Bring your own machine: environments open on a Linux box of yours over ssh, as containers or whole."))
 
 _state: dict = {"home": None}
 
@@ -36,6 +43,13 @@ RESTART = ("Restart openajar so it uses it: `openajar local restart` on your own
 ISOLATION = ("An environment there is a container: it shares that machine's kernel, and is walled off from the "
              "machine's files, the machine itself, its network and the other environments. That wall is weaker "
              "than a rented VM's, so use your own machine for code you trust.")
+WHOLE = ("An environment there has the whole machine: the agent is root on it, and it is on your network as itself, "
+         "so it reaches whatever that machine reaches. Nothing walls it in. One environment is open on it at a "
+         "time, and a save holds its files, not its disk.")
+HAND_OVER = ("openajar takes this machine as a whole. It installs packages on it as root (git, Node, Python, a "
+             "browser and a desktop), turns its automatic updates off, and empties its /work folder each time an "
+             "environment closes. The agent is root there and can read and change everything on it.")
+SETUP_S = 2700.0
 
 
 def set_home(home: Path | None) -> None:
@@ -71,8 +85,13 @@ def _settings() -> Any:
 
 
 def _docker(m: Any) -> Any:
+    """The machine's side of the provider: its Docker, or the machine itself when it was handed over whole."""
     from openajar.vms.own import MachineDocker
 
+    if m.mode == "whole":
+        from openajar.vms.whole import WholeMachine
+
+        return WholeMachine(_home(), m, _settings())
     return MachineDocker(_home(), m, _settings())
 
 
@@ -129,15 +148,67 @@ def use_machine(home: Path, name: str) -> None:
     write_private(path, tomli_w.dumps(data))
 
 
-def _say_facts(f: Any) -> None:
+def _say_facts(f: Any, *, whole: bool = False) -> None:
     from openajar.vms.own import ARCHES
 
     cpu = {"x86": "x86-64", "arm": "arm64"}.get(ARCHES.get(f.arch, ""), f.arch or "?")
+    if whole:
+        system = f"{f.os_id.capitalize()} {f.os_version}".strip() or f.system or "?"
+        free = f", {f.root_free_gb:g} GB free" if f.root_free_gb is not None else ""
+        typer.echo(f"  {system} on {cpu}, {f.host_cores} CPU, {f.host_memory_gb:g} GB{free}")
+        return
     docker = f"Docker {f.docker_version}" + (" (through sudo)" if f.docker[:1] == ["sudo"] else "") if f.docker else \
         "no Docker it can use"
     size = f", {f.cores} CPU, {f.memory_gb:g} GB" if f.cores else ""
     free = f", {f.free_gb:g} GB free for Docker" if f.free_gb is not None else ""
     typer.echo(f"  {f.system or '?'} on {cpu}{size}, {docker}{free}")
+
+
+def _examine_whole(m: Any) -> tuple[Any, list[str], list[str]]:
+    """A machine to hand over whole: (what it said, why it cannot be, the signs that it is in use)."""
+    from openajar.vms import own, whole
+
+    facts = _run(own.read_facts(_home(), m))
+    got = _run(whole.read_fresh(_home(), m, facts))
+    wrong = whole.problems(facts, got, _home_labels()["agentos-home"])
+    if not wrong:
+        refused = own.forwarding_refused(_home(), m, facts.sshd_port or m.port)
+        if refused:
+            wrong.append(refused)
+    m.system, m.arch, m.cores, m.memory_gb = facts.system, facts.arch, facts.host_cores, facts.host_memory_gb
+    m.disk_gb, m.sudo = facts.disk_gb, facts.uid != 0
+    return facts, wrong, whole.not_fresh(facts, got)
+
+
+def _install_docker(m: Any, facts: Any, install: bool | None) -> bool:
+    """Docker is missing there: install it with Docker's own script when the machine's owner says yes
+    (asked at a terminal; never on --yes alone). True when it was installed."""
+    from openajar.vms import own
+
+    why = own.cannot_install_docker(facts)
+    if why is not None:
+        if install:
+            typer.echo(f"Docker was not installed: {why}.", err=True)
+        return False
+    if install is None:
+        if not sys.stdin.isatty():
+            return False
+        typer.echo(f"Docker is not installed on {m.name}. openajar can install it now with Docker's own script "
+                   "(https://get.docker.com), run as root there. It stays on the machine when you remove the "
+                   "machine from openajar.")
+        install = typer.confirm("Install Docker there?", default=False)
+    if not install:
+        return False
+    typer.echo(f"Installing Docker on {m.name} (a few minutes)...")
+    try:
+        said = asyncio.run(own.install_docker(_home(), m, facts))
+    except OpenajarError as e:
+        typer.echo(f"It did not install: {e.message}", err=True)
+        return False
+    m.installed_docker = True
+    own.save(_home(), m)
+    typer.echo(f"Installed: {said}.")
+    return True
 
 
 def _examine(m: Any) -> tuple[Any, list[str]]:
@@ -242,28 +313,9 @@ def _install_key(name: str, user: str, host: str, port: int, public: str) -> boo
     return done.returncode == 0
 
 
-@machine_app.command("add")
-def add(name: Annotated[str, typer.Argument(metavar="NAME", help="What you call it, like homebox.")],
-        target: Annotated[str, typer.Argument(metavar="USER@HOST", help="How ssh reaches it, like me@192.168.1.20 or "
-                                              "root@box.example.com:2222. A host from your ~/.ssh/config works too.")],
-        key: Annotated[Path | None, typer.Option("--key", help="A private key file of yours that the machine already "
-                                                 "takes (no passphrase). Default: openajar makes a key for this "
-                                                 "machine and adds it there with your own ssh.")] = None,
-        fingerprint: Annotated[str | None, typer.Option("--fingerprint", help="The machine's host key fingerprint "
-                                                        "(SHA256:...), so nothing is asked.")] = None,
-        yes: Annotated[bool, typer.Option("--yes", "-y", help="Pin the host key the machine shows without asking, "
-                                          "and make this the machine new environments open on.")] = False,
-        image: Annotated[bool, typer.Option("--image/--no-image", help="Put the environments image there now "
-                                            "(about 4 GB).")] = True,
-        build: Annotated[bool, typer.Option("--build", help="Build the image there instead of downloading it.")] = False,
-        use: Annotated[bool | None, typer.Option("--use/--no-use", help="Open new environments on this machine "
-                                                 "(vms.toml provider = \"own\"). Default: asked.")] = None) -> None:
-    """Bring a machine of your own in: openajar checks it over ssh, puts the environments image in its
-    Docker, and from then on agents' environments open there as containers.
-
-    It needs Linux (x86-64 or arm64), Docker, and an ssh login that may run Docker. openajar puts there one
-    line in that login's authorized_keys and the image, and later a container per environment. It never
-    stops, restarts or wipes the machine; `machine remove` takes all of it away again."""
+def _reach(name: str, target: str, key: Path | None, fingerprint: str | None, yes: bool) -> Any:
+    """The first part of `add`, the same for both ways: the machine's host key pinned, and a key it takes.
+    Returns the machine (not saved yet); raises typer.Exit with nothing left behind when it cannot sign in."""
     from openajar.vms import own
     from openajar.vms.ssh import probe
 
@@ -308,30 +360,156 @@ def add(name: Annotated[str, typer.Argument(metavar="NAME", help="What you call 
             typer.echo(own.authorized_line(public))
             raise typer.Exit(1)
     typer.echo(f"ssh reaches {user}@{host} with " + ("your key." if key is not None else "the key for this machine."))
+    return m
 
-    own.save(home, m)
-    facts, wrong = _examine(m)
-    _say_facts(facts)
+
+def _take_back(m: Any) -> None:
+    """An `add` that stops before the machine is registered leaves nothing: openajar's key line there goes
+    again, and the machine's folder on this computer."""
+    from openajar.vms import own
+
+    public = own.public_key(_home(), m.name)
+    if m.installed_key and public:
+        with contextlib.suppress(OpenajarError):
+            asyncio.run(own.run(_home(), m, "sh -s", stdin=own.remove_key_script(public).encode(), timeout_s=60))
+    own.forget(_home(), m.name)
+
+
+def _setup_script() -> str:
+    """What a rented VM's image has, for a machine handed over whole: the setup, the browser and the desktop
+    (openajar.environments.machine.dev_image_script without an image's cleanup)."""
+    from openajar.environments import machine
+    from openajar.environments.vmbrowser import desktop_install_script, install_script
+
+    return machine.UPDATES_OFF + machine.setup_install() + install_script() + desktop_install_script()
+
+
+def _set_up(m: Any) -> bool:
+    from openajar.vms import own
+
+    typer.echo(f"Setting {m.name} up (git, Node, Python, the browser and the desktop: 5 to 15 minutes)...")
+    try:
+        code, out, err = asyncio.run(own.run(_home(), m, own.as_root(m), stdin=_setup_script().encode(),
+                                             timeout_s=SETUP_S))
+    except OpenajarError as e:
+        typer.echo(f"The setup did not finish: {e.message}", err=True)
+        return False
+    if code != 0:
+        said = (err or out).strip().splitlines()[-3:]
+        typer.echo("The setup did not finish there" + (":" if said else f" (exit {code})."), err=True)
+        for line in said:
+            typer.echo(f"  {line[:300]}", err=True)
+        return False
+    typer.echo(f"{m.name} is set up.")
+    return True
+
+
+def _add_whole(m: Any, *, yes: bool, setup: bool) -> None:
+    """The second part of `add --whole`: is it a fresh Ubuntu 24.04 the login is root on, does its owner
+    hand it over, and its setup."""
+    from openajar.vms import own
+
+    facts, wrong, signs = _examine_whole(m)
+    _say_facts(facts, whole=True)
     if wrong:
-        typer.echo(f"{name} is registered, but it cannot hold environments yet:", err=True)
+        _take_back(m)
+        typer.echo(f"{m.name} cannot be handed over as a whole:", err=True)
         for w in wrong:
             typer.echo(f"  - {w}", err=True)
-        typer.echo(f"When that is done: openajar environments machine check {name} --image", err=True)
+        raise _fail("nothing was added")
+    typer.echo(HAND_OVER)
+    if signs:
+        typer.echo("This machine does not look fresh:")
+        for sign in signs:
+            typer.echo(f"  - {sign}")
+        typer.echo("Hand over a machine with nothing of yours on it, or bring this one in with containers (leave "
+                   "out --whole): then the agent works inside a container and does not see the machine.")
+        if not sys.stdin.isatty() or not typer.confirm("Hand it over as it is anyway?", default=False):
+            _take_back(m)
+            raise _fail("the machine does not look fresh and was not handed over (this question is asked at a "
+                        "terminal only, never answered by --yes). Nothing was added")
+    elif not yes:
+        if not sys.stdin.isatty() or not typer.confirm(f"Hand {m.name} over to openajar as a whole?", default=False):
+            _take_back(m)
+            raise _fail("not confirmed, so nothing was added. --yes says yes to this for a machine that looks fresh")
+    m.mode = "whole"
+    own.save(_home(), m)
+    if setup and not _set_up(m):
+        typer.echo(f"{m.name} is registered, and its setup runs again with: openajar environments machine check "
+                   f"{m.name} --image", err=True)
+        raise typer.Exit(1)
+
+
+def _add_containers(m: Any, *, image: bool, build: bool, install_docker: bool | None) -> None:
+    """The second part of `add` for a machine of containers: Docker there (installed when its owner says
+    so), and the environments image."""
+    from openajar.vms import own
+
+    own.save(_home(), m)
+    facts, wrong = _examine(m)
+    if facts.system == "Linux" and not facts.docker_found and _install_docker(m, facts, install_docker):
+        facts, wrong = _examine(m)
+    _say_facts(facts)
+    if wrong:
+        typer.echo(f"{m.name} is registered, but it cannot hold environments yet:", err=True)
+        for w in wrong:
+            typer.echo(f"  - {w}", err=True)
+        typer.echo(f"When that is done: openajar environments machine check {m.name} --image", err=True)
         raise typer.Exit(1)
 
     have = _run(_docker(m).has_image())
     if have is not None and image:
         if not _get_image(m, build=build):
-            typer.echo(f"{name} is registered without the image. Try again: openajar environments machine check "
-                       f"{name} --image", err=True)
+            typer.echo(f"{m.name} is registered without the image. Try again: openajar environments machine check "
+                       f"{m.name} --image", err=True)
             raise typer.Exit(1)
     elif have is not None:
-        typer.echo(f"The image is not there yet ({have}): openajar environments machine check {name} --image")
+        typer.echo(f"The image is not there yet ({have}): openajar environments machine check {m.name} --image")
     else:
-        typer.echo(f"The environments image is on {name} already.")
+        typer.echo(f"The environments image is on {m.name} already.")
 
+
+@machine_app.command("add")
+def add(name: Annotated[str, typer.Argument(metavar="NAME", help="What you call it, like homebox.")],
+        target: Annotated[str, typer.Argument(metavar="USER@HOST", help="How ssh reaches it, like me@192.168.1.20 or "
+                                              "root@box.example.com:2222. A host from your ~/.ssh/config works too.")],
+        whole: Annotated[bool, typer.Option("--whole", help="Hand the whole machine over, with no Docker: the agent "
+                                            "is root on it, one environment at a time. For a fresh Ubuntu 24.04 "
+                                            "server with nothing of yours on it.")] = False,
+        key: Annotated[Path | None, typer.Option("--key", help="A private key file of yours that the machine already "
+                                                 "takes (no passphrase). Default: openajar makes a key for this "
+                                                 "machine and adds it there with your own ssh.")] = None,
+        fingerprint: Annotated[str | None, typer.Option("--fingerprint", help="The machine's host key fingerprint "
+                                                        "(SHA256:...), so nothing is asked.")] = None,
+        yes: Annotated[bool, typer.Option("--yes", "-y", help="Pin the host key the machine shows without asking, "
+                                          "and make this the machine new environments open on. With --whole: "
+                                          "also hand over a machine that looks fresh without asking.")] = False,
+        image: Annotated[bool, typer.Option("--image/--no-image", help="Put the environments image there now "
+                                            "(about 4 GB). With --whole: run the machine's setup now.")] = True,
+        build: Annotated[bool, typer.Option("--build", help="Build the image there instead of downloading it.")] = False,
+        install_docker: Annotated[bool | None, typer.Option(
+            "--install-docker/--no-install-docker", help="When Docker is missing there: install it with Docker's "
+            "own script, as root. Default: asked.")] = None,
+        use: Annotated[bool | None, typer.Option("--use/--no-use", help="Open new environments on this machine "
+                                                 "(vms.toml provider = \"own\"). Default: asked.")] = None) -> None:
+    """Bring a machine of your own in: openajar checks it over ssh, and from then on agents' environments
+    open there.
+
+    With containers (the default): it needs Linux (x86-64 or arm64), Docker (openajar offers to install it)
+    and an ssh login that may run Docker. openajar puts there one line in that login's authorized_keys and
+    the environments image, and later a container per environment, walled off from the machine.
+
+    As a whole (--whole): a fresh Ubuntu 24.04 server and a root login (or one with passwordless sudo).
+    The agent is root on the machine itself, and one environment is open on it at a time.
+
+    openajar never restarts, powers off or wipes the machine; `machine remove` takes away what it put there."""
+    m = _reach(name, target, key, fingerprint, yes)
+    if whole:
+        _add_whole(m, yes=yes, setup=image)
+    else:
+        _add_containers(m, image=image, build=build, install_docker=install_docker)
     _offer_use(name, use if use is not None else (True if yes else None))
-    typer.echo(ISOLATION)
+    typer.echo(WHOLE if whole else ISOLATION)
 
 
 def _offer_use(name: str, use: bool | None) -> None:
@@ -380,7 +558,7 @@ def list_cmd(json_out: Annotated[bool, typer.Option("--json")] = False) -> None:
     rows = [{"name": m.name, "address": f"{m.user}@{m.host}" + (f":{m.port}" if m.port != 22 else ""),
              "default": m.name == current, "system": m.system, "arch": m.arch, "cores": m.cores,
              "memory_gb": m.memory_gb, "docker": m.docker_version, "open": len(_live_on(m.name)),
-             "saves": len(_saves_on(m.name)), "key": "yours" if m.key else "openajar's"}
+             "saves": len(_saves_on(m.name)), "key": "yours" if m.key else "openajar's", "mode": m.mode}
             for m in own.every(_home())]
     if json_out:
         typer.echo(json.dumps({"machines": rows, "provider": settings.provider}, indent=2))
@@ -391,19 +569,61 @@ def list_cmd(json_out: Annotated[bool, typer.Option("--json")] = False) -> None:
     for r in rows:
         size = f"{r['cores']} CPU, {r['memory_gb']:g} GB" if r["cores"] else "not checked yet"
         mark = "new environments open here" if r["default"] else ""
-        typer.echo(f"{r['name']:<16} {r['address']:<32} {size:<18} {r['open']} open, {r['saves']} saved  {mark}".rstrip())
+        held = (("in use" if r["open"] else "free") if r["mode"] == "whole"
+                else f"{r['open']} open, {r['saves']} saved")
+        typer.echo(f"{r['name']:<16} {r['address']:<32} {size:<18} {r['mode']:<11} {held}  {mark}".rstrip())
     if settings.provider != "own":
         where = {"docker": "in Docker on this computer"}.get(settings.provider, f"at {settings.provider.capitalize()}")
         typer.echo(f"New environments open {where} now. To open them on one of these: openajar environments "
                    "machine use NAME")
 
 
+def _check_whole(m: Any, *, setup: bool, free: bool) -> None:
+    from openajar.vms import own
+
+    facts, wrong, _signs = _examine_whole(m)
+    own.save(_home(), m)
+    typer.echo(f"ssh reaches {m.user}@{m.host}.")
+    _say_facts(facts, whole=True)
+    if wrong:
+        typer.echo(f"{m.name} cannot hold an environment now:", err=True)
+        for w in wrong:
+            typer.echo(f"  - {w}", err=True)
+        raise typer.Exit(1)
+    side = _docker(m)
+    held = _run(side.held())
+    if held is not None:
+        vm = (held.get("labels") or {}).get("agentos-vm") or ""
+        known = [r for r in _live_on(m.name) if r.id == vm]
+        if known:
+            typer.echo(f"An environment is open on it ({known[0].lane_id}).")
+        elif free:
+            _run(side.delete_server(str(held.get("id") or "")))
+            typer.echo(f"{m.name} was held by an environment this openajar no longer has. It is free now, and what "
+                       "that environment left in /work is gone.")
+        else:
+            typer.echo(f"{m.name} is held by an environment this openajar no longer has ({held.get('name') or '?'}). "
+                       f"Free it, which empties its /work: openajar environments machine check {m.name} --free",
+                       err=True)
+            raise typer.Exit(1)
+    else:
+        typer.echo("No environment is open on it.")
+    if setup and not _set_up(m):
+        raise typer.Exit(1)
+    typer.echo(f"{m.name} is ready.")
+
+
 @machine_app.command("check")
 def check(name: Annotated[str, typer.Argument(metavar="NAME")],
           image: Annotated[bool, typer.Option("--image", help="Put this openajar's image there when it is missing or "
-                                              "older (after an upgrade of openajar).")] = False,
+                                              "older (after an upgrade of openajar). A whole machine: run its "
+                                              "setup again.")] = False,
           build: Annotated[bool, typer.Option("--build", help="With --image: build it there instead of downloading "
-                                              "it.")] = False) -> None:
+                                              "it.")] = False,
+          install_docker: Annotated[bool, typer.Option("--install-docker", help="When Docker is missing there: "
+                                                       "install it with Docker's own script, as root.")] = False,
+          free: Annotated[bool, typer.Option("--free", help="A whole machine held by an environment this openajar "
+                                             "no longer has: end that hold and empty its /work.")] = False) -> None:
     """Look at a machine again: is it reachable, can it hold environments, and does it have the image."""
     from openajar.vms import own
 
@@ -411,7 +631,12 @@ def check(name: Annotated[str, typer.Argument(metavar="NAME")],
         m = own.load(_home(), name)
     except OpenajarError as e:
         raise _fail(e) from None
+    if m.mode == "whole":
+        _check_whole(m, setup=image, free=free)
+        return
     facts, wrong = _examine(m)
+    if facts.system == "Linux" and not facts.docker_found and install_docker and _install_docker(m, facts, True):
+        facts, wrong = _examine(m)
     typer.echo(f"ssh reaches {m.user}@{m.host}.")
     _say_facts(facts)
     if wrong:
@@ -456,7 +681,10 @@ def remove(name: Annotated[str, typer.Argument(metavar="NAME")],
            keep_image: Annotated[bool, typer.Option("--keep-image", help="Leave the environments image in its "
                                                     "Docker.")] = False) -> None:
     """Take a machine out, and take away what openajar put there: its containers, networks and images,
-    and its key's line in authorized_keys. Nothing else on the machine is touched, and it is never stopped."""
+    and its key's line in authorized_keys. Nothing else on the machine is touched, and it is never stopped.
+
+    A whole machine: an environment still open on it is ended (--force) and its /work emptied, and
+    openajar's key goes. What its setup installed stays (packages, Node, the browser under /opt)."""
     from openajar.vms import own
 
     home = _home()
@@ -474,12 +702,15 @@ def remove(name: Annotated[str, typer.Argument(metavar="NAME")],
         raise _fail(f"{' and '.join(what)}. Close and forget them first (`openajar environments list`, `openajar "
                     "environments saves`), or --force deletes them there: the saved files stay on this computer, so "
                     "a save still resumes from them on another machine")
+    whole = m.mode == "whole"
 
     async def clean() -> dict | None:
         docker = _docker(m)
         try:
             found = await docker.remove_mine(_home_labels())
-            if m.installed_image and not keep_image:
+            if whole:
+                await docker.forget()
+            elif m.installed_image and not keep_image:
                 source = own.image_source(_settings())
                 await docker._run("rmi", docker.image, *([source] if source and source != docker.image else []),
                                   ok_codes=(0, 1))
@@ -495,11 +726,20 @@ def remove(name: Annotated[str, typer.Argument(metavar="NAME")],
 
     found = _run(clean())
     own.forget(home, name)
-    if found is None:
+    key_words = (f"the line ending in openajar-machine-{name} in ~/.ssh/authorized_keys is its key"
+                 if m.installed_key else "")
+    if found is None and whole:
+        typer.echo(f"Removed {name} from openajar. It was not reached, so nothing on it changed: /var/lib/"
+                   "openajar-machine there is openajar's folder" + (f", and {key_words}." if key_words else "."))
+    elif found is None:
         typer.echo(f"Removed {name} from openajar. What openajar made is still on it: when you reach it, `docker ps "
                    "-a --filter label=agentos-home` and `docker images --filter label=agentos-home` list it"
-                   + (f", and the line ending in openajar-machine-{name} in ~/.ssh/authorized_keys is its key."
-                      if m.installed_key else "."))
+                   + (f", and {key_words}." if key_words else "."))
+    elif whole:
+        ended = " The environment open on it was ended and its /work emptied." if found["containers"] else ""
+        typer.echo(f"Removed {name}." + ended + (" openajar's key is gone from it." if m.installed_key else "")
+                   + " What the setup installed stays on it (packages, Node, the browser under /opt/agentos-browser); "
+                   "install its system again for a machine as it was.")
     else:
         bits = [f"{len(found['containers'])} container{'s' if len(found['containers']) != 1 else ''}",
                 f"{len(found['images'])} saved image{'s' if len(found['images']) != 1 else ''}"]
@@ -507,7 +747,8 @@ def remove(name: Annotated[str, typer.Argument(metavar="NAME")],
             bits.append("the environments image")
         if m.installed_key:
             bits.append("openajar's key")
-        typer.echo(f"Removed {name}, and from it: {', '.join(bits)}. Nothing else there was touched.")
+        typer.echo(f"Removed {name}, and from it: {', '.join(bits)}. Nothing else there was touched."
+                   + (" Docker, which openajar installed there when you said so, stays." if m.installed_docker else ""))
     settings = _settings()
     if settings.provider == "own":
         left = own.every(home)

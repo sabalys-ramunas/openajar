@@ -67,7 +67,7 @@ class Pausing:
 
     async def save_env(self, env: Environment, *, kind: str = "save", reason: str = "", note: str | None = None,
                        snapshot: bool | None = None, then_delete: bool = False) -> SaveManifest:
-        wants = snapshot if snapshot is not None else env.keep == "save" and self.settings.snapshots
+        wants = snapshot if snapshot is not None else env.keep == "save" and self.snapshots_for(env)
         if not (then_delete and (wants or kind == "rescue") and self.pauses_saves()):
             return await super().save_env(env, kind=kind, reason=reason, note=note,
                                           snapshot=snapshot, then_delete=then_delete)

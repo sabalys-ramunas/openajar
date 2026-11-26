@@ -465,6 +465,22 @@ What this does not stop:
 - **A rootless or foreign Docker.** Rootless Docker and Podman cannot set the inner firewall, so `machine
   add` refuses them instead of running without the wall.
 
+### A machine handed over whole (`machine add --whole`)
+
+No container: the environment's computer is the machine itself (openajar.vms.whole), and the agent is root
+on it. What bounds a container on the owner's machine does not exist here, and the page says so.
+
+| Question | Answer |
+|---|---|
+| What the agent is | root on the whole machine, for as long as its environment is open. It can read and change everything on it |
+| What it reaches | whatever the machine reaches: the internet from the machine's address, and the owner's home or office network when the machine is on it. No wall is set, and `network` `limited` and `none` are refused, because a wall on the machine is one its root takes down |
+| Which machine this is for | a fresh Ubuntu 24.04 with nothing of the owner's on it. `machine add --whole` names the signs of use it finds (containers, listening ports, several accounts, files in the usual places) and hands such a machine over only on the owner's own yes at a terminal, never on `--yes` |
+| How an environment signs in | as root, with a key the node made for that environment alone. Its public half is one line in root's `authorized_keys` while the environment is open, removed at its close. The machine's sshd and host key are not changed; the environment pins the host key the owner confirmed |
+| What a close cleans | that key's line, the processes the environment left (its jobs, what works in `/work`, the browser and its screen), `/work`, and openajar's files of the session. Not what openajar cannot tell from the system's own: installed packages, services, Docker containers, files outside `/work` |
+| What that means for the next environment | it runs on the same system, and finds what the last one installed or left outside `/work`. A backdoor one agent leaves (a service, a cron job, a changed binary) is there for the next. One owner's agents on one machine: the same trust as one long-lived machine. For a clean one, install its system again |
+| What openajar never does there | restart, power off or reinstall the machine, or stop a service or a container it did not start through a job |
+| A machine that does not answer | is not "free" and not "deleted": the provider raises, so nothing is opened on it and no environment is ended for it |
+
 ## Logins in an environment's browser
 
 [ENVIRONMENTS.md, Signing in](ENVIRONMENTS.md#signing-in) is how it works. The owner binds a vault login to environments (`openajar environments login add <site> --title/--repo/--all`),

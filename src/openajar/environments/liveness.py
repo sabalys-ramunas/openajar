@@ -104,6 +104,9 @@ class Liveness:
         except Exception as e:  # noqa: BLE001 - a provider that does not answer says nothing either way
             log.info("environment %s: %s did not answer about its machine: %s", env.id, name, e)
             return None
+        if server is None and rec.provider == "own" and not rec.via:  # a machine handed over whole (no hop to it)
+            return (f"{name} no longer holds this environment: its hold was ended outside openajar "
+                    "(/var/lib/openajar-machine there), or the machine was installed again")
         if server is None:
             return f"{name} no longer has its {what}: it was deleted outside openajar, or lost with its host"
         status = str(getattr(server, "status", "") or "").lower()

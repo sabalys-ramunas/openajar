@@ -278,7 +278,7 @@ class Saving:
         and git are not set up again after the snapshot. Raises SaveFailed or SaveLimit; the machine is
         never touched beyond that."""
         if snapshot is None:
-            snapshot = env.keep == "save" and self.settings.snapshots
+            snapshot = env.keep == "save" and self.snapshots_for(env)
         async with self._lock(f"save:{env.id}"):
             env = self.store.get(env.id)
             if not env.open or env.state not in ("ready", "closing") or not env.vm_id:

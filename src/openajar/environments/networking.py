@@ -113,7 +113,14 @@ class Network:
         """The plan rents the machine closed. A cloud machine closed from its first boot cannot install its
         tools, so it needs the prepared image."""
         from openajar.environments.machine import BASE_IMAGE
+        from openajar.vms.provider import capable_at
 
+        if level != "full" and not capable_at(self.vms().provider(), "network_policy", plan.get("location")):
+            raise net.NetworkNotAllowed(
+                f"network {level}: your machine {plan.get('location')} is handed over whole, so the agent is root on "
+                "the machine itself and nothing outside it can close its network. Open with network full, or tell "
+                "the user: a machine brought in with containers (`openajar environments machine add` without "
+                "--whole) holds a closed network")
         if level != "full" and plan.get("image") == BASE_IMAGE and not getattr(self.vms().provider(),
                                                                                 "closes_network", False):
             raise net.NetworkNotAllowed(

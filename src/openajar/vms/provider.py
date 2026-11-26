@@ -66,6 +66,13 @@ def capable(provider: Any, name: str) -> bool:
     return name in getattr(provider, "capabilities", DEFAULT_CAPABILITIES)
 
 
+def capable_at(provider: Any, name: str, location: str | None) -> bool:
+    """capable(), for one place of a provider whose places differ (openajar.vms.own: a machine handed over
+    whole has no disk snapshot and no wall around it, a machine that holds containers has both)."""
+    at = getattr(provider, "capable_at", None)
+    return bool(at(name, location)) if callable(at) else capable(provider, name)
+
+
 class Provider(Protocol):
     name: str
     firewall: bool              # False: the provider's machines are not on the internet (docker), no firewall
@@ -328,8 +335,12 @@ def by_hand_words(rec: Any) -> str:
     """Where a person deletes a machine openajar could not (a VM record), for the overdue notification."""
     container = f"agentos-{rec.id.replace('_', '-')}"
     if rec.provider == "own":
-        name = (rec.provider_id or "").partition(":")[0] or rec.location
-        return f"Remove its container on your machine {name} if openajar cannot: `docker rm -f {container}` there."
+        name, _, rest = (rec.provider_id or "").partition(":")
+        if rest == container:  # a machine handed over whole: its server is the machine, named as the VM is
+            return (f"Free your machine {name or rec.location} if openajar cannot: `openajar environments machine "
+                    f"check {name or rec.location} --free`.")
+        return (f"Remove its container on your machine {name or rec.location} if openajar cannot: `docker rm -f "
+                f"{container}` there.")
     if rec.provider == "docker":
         return f"Remove its container if openajar cannot: `docker rm -f {container}`."
     return f"Delete it in the {rec.provider.capitalize()} console if openajar cannot."

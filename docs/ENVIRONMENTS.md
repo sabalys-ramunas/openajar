@@ -150,7 +150,14 @@ with one command, at the node:
 
 ```
 openajar environments machine add homebox me@192.168.1.20    # any address your ssh reaches, also me@box.example.com:2222
+openajar environments machine add box root@203.0.113.7 --whole   # a fresh server, handed over as a whole (below)
 ```
+
+There are two ways to bring a machine in. **With containers** (the default, described first): each
+environment is a container in the machine's Docker, walled off from the machine. It suits a machine
+that has other things on it, and it works on any Linux with Docker. **As a whole** (`--whole`): no
+Docker, the agent is root on the machine itself, one environment at a time. It is for a fresh server
+you give to the agent entirely ([The whole machine](#the-whole-machine)).
 
 What the command does, step by step:
 
@@ -166,7 +173,11 @@ What the command does, step by step:
 3. It checks the machine: Linux on x86-64 or arm64, Docker running, the login allowed to use it (root,
    a member of the `docker` group, or passwordless `sudo`), at least 10 GB free, and an sshd that
    allows port forwarding (the default). What is missing is named with the command that fixes it.
-   openajar does not install Docker for you: `curl -fsSL https://get.docker.com | sh` on the machine does.
+   When Docker is missing, it offers to install it: on your yes (asked at a terminal, or
+   `--install-docker`) it runs Docker's own install script (https://get.docker.com) as root there and
+   adds the login to the `docker` group. That needs a root login or passwordless `sudo`; without one
+   it prints the command for you to run. `--yes` alone never installs it. Docker stays on the machine
+   when you remove the machine from openajar. `machine check homebox --install-docker` does the same later.
 4. It puts the environments image in the machine's Docker: the prebuilt one for your version of
    openajar (about 4 GB, several minutes), or built there when it cannot be downloaded (`--build`
    always builds; `--no-image` skips it for now).
@@ -221,10 +232,67 @@ What is different from a rented VM, said plainly:
 - The browser claims no timezone of its own (like docker); give it a proxy, or `this-computer`, when
   the place matters ([The browser's proxy](#the-browsers-proxy)).
 
+#### The whole machine
+
+`openajar environments machine add box root@203.0.113.7 --whole` hands a server over entirely: no
+Docker and no container. The machine itself is the environment's computer, and the agent is root on
+it, as on a rented VM. Use it for a server you give to the agent: a fresh Ubuntu 24.04 with nothing
+of yours on it.
+
+What the command does after the host key and the key (steps 1 and 2 above):
+
+1. It checks the machine: Ubuntu 24.04 on x86-64 or arm64 (the system openajar's setup is made for), a
+   root login or one with passwordless `sudo`, an sshd that lets root sign in with a key
+   (`PermitRootLogin prohibit-password`, the default) and allows port forwarding, and 10 GB free.
+   Another system is refused with the reason: bring that machine in with containers instead.
+2. It looks for signs that the machine is in use: Docker containers, something listening on a port
+   other than ssh, more than one user account, files in `/work`, `/var/www`, `/srv`, a database's folder
+   or a home folder. It names what it found, and then only you can say "hand it over anyway", at a
+   terminal: `--yes` never answers that question.
+3. It says what it takes and asks (`--yes` answers this for a machine that looks fresh): openajar
+   installs packages there as root, turns the machine's automatic updates off (it applies security
+   updates itself at quiet moments, as on a rented VM), and empties `/work` each time an environment
+   closes.
+4. It runs the setup a rented VM gets (git, build tools, Node, Python with uv, the browser and the
+   desktop): 2 to 15 minutes. `machine check box --image` runs it again after an upgrade of openajar.
+
+From then on `environment_open` takes the machine: the same terminal, browser, live view, ports, git
+and tools, as root on the machine itself, with no second ssh hop. Whatever size is asked for, the
+environment has the whole machine.
+
+What is different from a machine of containers, said plainly:
+
+- **One environment at a time.** A second `environment_open` is refused, by the title of the one that
+  is open, until that one is closed. Several machines hold several; so does one machine brought in
+  with containers.
+- **A save holds the files, not the disk.** There is no disk snapshot of a machine openajar does not
+  rent. A save is what `snapshots = false` saves anywhere: the commits and stashes no remote has, the
+  changed and new files, `keep_paths`, the services that ran and the note. A resume clones the
+  repository again onto the emptied machine and puts them back, in a minute or two. Installed
+  packages are there anyway, since the machine is the same; `node_modules` and other ignored files
+  are installed again.
+- **What a close cleans.** That environment's key is taken out of root's `authorized_keys`, what it
+  left running is ended (its jobs and commands, everything working in `/work`, the browser and its
+  screen), `/work` is emptied, and openajar's files of the session go. Everything else stays, because
+  openajar cannot tell it from the system's own: packages the agent installed, services and Docker
+  containers it started, files it wrote outside `/work`. The next environment finds them. For a
+  machine as it was, install its system again.
+- **No wall around it.** The agent is root on a machine that is on your network as itself: it reaches
+  whatever that machine reaches, your home or office network included. `network` `limited` and `none`
+  are refused there (nothing outside the machine could hold the wall). Do not hand over a machine
+  that sits next to things the agent must not reach; a machine of containers has the wall.
+- openajar never restarts, powers off or reinstalls the machine. `machine remove box` ends an
+  environment still open there (with `--force`), takes its key and its folder
+  (`/var/lib/openajar-machine`) away, and leaves what the setup installed.
+- When the node loses track of the machine's environment (its records were restored from a backup,
+  say), `machine check box` says the machine is held, and `machine check box --free` ends that hold
+  and empties `/work`.
+
 Not in this version: macOS and Windows machines, rootless Docker and Podman, a machine your ssh
-reaches only through a jump host, and renting VMs and using your own machine on one node at once
-(a node has one provider; several machines of your own are fine, and environments and saves stay on
-the machine they were made on).
+reaches only through a jump host, a whole machine that is not Ubuntu 24.04, and renting VMs and
+using your own machine on one node at once (a node has one provider, and a machine of your own is a
+fixed server: several of them are fine, of both kinds, and environments and saves stay on the
+machine they were made on).
 
 An agent asks for a size by name, and the open's `machine` says what it got and what each bigger
 size would rent and cost (`machine.bigger`):
@@ -1899,6 +1967,8 @@ Not on it:
 | `environment_in_use` | another chat of the agent holds the live machine with this title | the agent opens its own with another title; `take_over=true` once the holder has been quiet for `take_over_minutes` |
 | `environment_not_ready` | the environment is starting, or its link is down (a restart, a dropped connection, this computer's address moved) and the node is bringing it back | wait a minute; `openajar environments show ID`, and `openajar logs --level warn --since 10m` if it does not come back |
 | `machine_gone`, or `state: "gone"` | the machine stopped for good: the provider says its container or server is off or no longer exists ("Costs and the reaper"). On your own machine: it restarted, or the container was removed there | the agent opens the same title again and gets a new machine; if it happens often, `docker ps -a` or the Hetzner console, and `openajar logs --level warn --since 30m` |
+| "your machine box is handed over whole, so it holds one environment at a time" | a whole machine has an environment open ([The whole machine](#the-whole-machine)) | close that one (`environment_close`: its work is saved), or add a second machine, or bring this one in with containers |
+| "box is held by an environment this openajar no longer has" (`machine check`) | the node's records no longer know the environment that holds the whole machine | `openajar environments machine check box --free` ends the hold and empties `/work` |
 | "machine homebox did not answer over ssh" | your own machine is off, asleep or out of reach from the node, or its address changed | switch it on; `openajar environments machine check homebox` says what is wrong. Its environments wait, they are not ended. A new address: `machine remove` and `machine add` again |
 | "no image agentos-env:latest" on your own machine, or "older than this openajar" | the image is missing there, or openajar was upgraded | `openajar environments machine check homebox --image` |
 | `unsaved_work` on close | uncommitted changes or commits not pushed; "mode change only" names files whose content is as committed (a `chmod +x`) | commit and push, or close with `discard=true` if the work may go |

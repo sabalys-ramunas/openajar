@@ -36,6 +36,10 @@ gone"), so an unreachable machine's environments wait instead of being ended.
 What differs from a rented VM, said plainly: an environment shares the machine's kernel (a container, weaker
 than a VM for code you do not trust); its saves' disk part lives in that machine's Docker; and when the
 machine restarts, its open environments are gone and come back from their last save.
+
+A machine can also be handed over as a whole (`machine add --whole`, Machine.mode "whole"): no Docker, the
+agent is root on the machine itself, one environment at a time. That is openajar.vms.whole; this module
+keeps the registry, the checks and the provider that both ways share.
 """
 
 from __future__ import annotations
@@ -54,6 +58,7 @@ import threading
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -79,6 +84,7 @@ KEY_OPTIONS = "restrict,port-forwarding"  # what openajar's key may do on the ma
 MIN_FREE_GB = 10.0               # the image is about 4 GB, and each environment writes on top of it
 ARCHES = {"x86_64": "x86", "amd64": "x86", "aarch64": "arm", "arm64": "arm"}
 DOCKER_INSTALL = "curl -fsSL https://get.docker.com | sh"
+DOCKER_INSTALL_S = 900.0
 PULL_TIMEOUT_S = 3600.0
 BUILD_TIMEOUT_S = 3600.0
 
@@ -95,12 +101,18 @@ class Machine(BaseModel):
     docker: list[str] = Field(default_factory=lambda: ["docker"])  # how docker runs there (or: sudo -n docker)
     installed_key: bool = False                # openajar wrote its key's line there (remove takes it out)
     installed_image: bool = False              # openajar put the environments image there (remove takes it out)
+    installed_docker: bool = False             # openajar installed Docker there, when its owner said yes (it stays)
+    # "containers": each environment is a container in its Docker. "whole": the machine itself is the one
+    # environment's computer, the agent root on it (openajar.vms.whole); `sudo`: its login is not root
+    mode: Literal["containers", "whole"] = "containers"
+    sudo: bool = False
     added_at: datetime = Field(default_factory=utcnow)
     # what the last check found (shown by `machine list`; the limits are read again from Docker itself)
     system: str = ""
     arch: str = ""
     cores: int = 0
     memory_gb: float = 0.0
+    disk_gb: float = 0.0
     docker_version: str = ""
 
 
@@ -173,6 +185,13 @@ def default_name(home: Path, settings: VmSettings | None = None) -> str | None:
     if where in names:
         return where
     return names[0] if len(names) == 1 else None
+
+
+def is_whole(home: Path, name: str | None) -> bool:
+    """Is this machine handed over as a whole (openajar.vms.whole)? False for one that is not set up."""
+    with contextlib.suppress(NotFound, VmError, InvalidRequest):
+        return load(home, name or "").mode == "whole"
+    return False
 
 
 def remote(home: Path, m: Machine) -> RemoteHost:
@@ -250,6 +269,14 @@ def unreachable(m: Machine, said: str) -> VmError:
 CHECK_SCRIPT = r"""echo "system=$(uname -s)"
 echo "arch=$(uname -m)"
 echo "user=$(id -un)"
+echo "uid=$(id -u)"
+if [ "$(id -u)" = 0 ] || sudo -n true >/dev/null 2>&1; then echo "root=1"; fi
+echo "os_id=$(. /etc/os-release 2>/dev/null; echo "${ID:-}")"
+echo "os_version=$(. /etc/os-release 2>/dev/null; echo "${VERSION_ID:-}")"
+echo "nproc=$(getconf _NPROCESSORS_ONLN 2>/dev/null)"
+echo "mem_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null)"
+echo "disk_kb=$(df -Pk / 2>/dev/null | awk 'NR==2 {print $2}')"
+echo "root_free_kb=$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}')"
 set -- $SSH_CONNECTION
 echo "sshd_port=${4:-}"
 bin=""
@@ -277,6 +304,14 @@ class Facts(BaseModel):
     system: str = ""
     arch: str = ""
     user: str = ""
+    uid: int | None = None
+    root: bool = False            # the login is root, or has passwordless sudo
+    os_id: str = ""               # /etc/os-release: ubuntu, debian, ...
+    os_version: str = ""
+    host_cores: int = 0           # the machine's own (cores and memory_gb are what its Docker says)
+    host_memory_gb: float = 0.0
+    disk_gb: float = 0.0
+    root_free_gb: float | None = None
     sshd_port: int | None = None
     docker_found: bool = False
     docker: list[str] = Field(default_factory=list)
@@ -303,7 +338,15 @@ def parse_check(text: str) -> Facts:
     security = [str(x) for x in info.get("SecurityOptions") or []]
     free = got.get("free_kb", "")
     port = got.get("sshd_port", "")
+
+    def gb(key: str) -> float | None:
+        return round(int(got[key]) / 2**20, 1) if got.get(key, "").isdigit() else None
+
     return Facts(system=got.get("system", ""), arch=got.get("arch", ""), user=got.get("user", ""),
+                 uid=int(got["uid"]) if got.get("uid", "").isdigit() else None, root=got.get("root") == "1",
+                 os_id=got.get("os_id", ""), os_version=got.get("os_version", ""),
+                 host_cores=int(got["nproc"]) if got.get("nproc", "").isdigit() else 0,
+                 host_memory_gb=gb("mem_kb") or 0.0, disk_gb=gb("disk_kb") or 0.0, root_free_gb=gb("root_free_kb"),
                  sshd_port=int(port) if port.isdigit() else None, docker_found=got.get("docker_found") == "1",
                  docker=got.get("docker", "").split(), docker_error=got.get("docker_error", ""),
                  docker_version=str(info.get("ServerVersion") or ""), docker_os=str(info.get("OSType") or ""),
@@ -323,8 +366,8 @@ def problems(f: Facts) -> list[str]:
         out.append(f"its CPU is {f.arch or 'unknown'}; the environments image is made for x86-64 and arm64")
     who = f.user or "this login"
     if not f.docker_found:
-        out.append(f"Docker is not installed there. On the machine: `{DOCKER_INSTALL}`, then `sudo usermod -aG docker "
-                   f"{who}`, log in again, and run this again")
+        out.append(NO_DOCKER + f" On the machine: `{DOCKER_INSTALL}`, then `sudo usermod -aG docker {who}`, log in "
+                   "again, and run this again")
     elif not f.docker:
         out.append(f"Docker is there, but {who} may not use it ({f.docker_error or 'docker info failed'}). On the "
                    f"machine: `sudo usermod -aG docker {who}`, log in again, and run this again")
@@ -339,6 +382,61 @@ def problems(f: Facts) -> list[str]:
         out.append(f"Docker's disk there has {f.free_gb:g} GB free; the image alone is about 4 GB, so free at least "
                    f"{MIN_FREE_GB:g} GB")
     return out
+
+
+NO_DOCKER = "Docker is not installed there."
+
+# Docker's own install script (get.docker.com), run as root there, and only after the machine's owner said
+# yes to it (`machine add`, or --install-docker). $1 is the login: it joins the docker group, so openajar's
+# next ssh runs docker as that login. The script is fetched to a file first, so a download cut short runs
+# nothing.
+INSTALL_DOCKER = """set -eu
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v curl >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+  apt-get update -q >/dev/null
+  apt-get install -y -q --no-install-recommends ca-certificates curl >/dev/null
+fi
+t=$(mktemp)
+curl -fsSL https://get.docker.com -o "$t"
+sh "$t" >/dev/null
+rm -f "$t"
+if [ -d /run/systemd/system ]; then systemctl enable --now docker >/dev/null 2>&1 || true; fi
+if [ -n "${1:-}" ] && [ "$1" != root ]; then usermod -aG docker "$1"; fi
+i=0
+while ! docker info >/dev/null 2>&1; do
+  i=$((i + 1))
+  if [ "$i" -gt 30 ]; then echo "Docker is installed, but its service did not start" >&2; exit 1; fi
+  sleep 2
+done
+docker --version
+"""
+
+
+def as_root(f: Facts | Machine) -> str:
+    """The shell that runs a script as root there: the login's own when it is root, else through sudo."""
+    is_root = f.uid == 0 if isinstance(f, Facts) else not f.sudo
+    return "sh -s" if is_root else "sudo -n sh -s"
+
+
+def cannot_install_docker(f: Facts) -> str | None:
+    """Why openajar cannot install Docker there itself, or None when it can (root, or passwordless sudo)."""
+    if f.system != "Linux" or f.docker_found:
+        return "nothing to install"
+    if not f.root:
+        return (f"{f.user or 'the login'} is not root and has no passwordless sudo there, so openajar cannot "
+                "install it")
+    return None
+
+
+async def install_docker(home: Path, m: Machine, f: Facts) -> str:
+    """Run Docker's install script there as root. Returns what `docker --version` says; raises VmError."""
+    command = f"{as_root(f)} -- {shlex.quote(f.user or m.user)}"
+    code, out, err = await run(home, m, command, stdin=INSTALL_DOCKER.encode(), timeout_s=DOCKER_INSTALL_S)
+    if code == SSH_FAILED:
+        raise unreachable(m, _last_line(err, out))
+    if code != 0:
+        raise VmError(f"machine {m.name}: Docker's install script failed there ({_last_line(err, out) or f'exit {code}'})")
+    return _last_line(out)
 
 
 async def read_facts(home: Path, m: Machine) -> Facts:
@@ -636,14 +734,15 @@ class OwnProvider:
     def __init__(self, home: Path, settings: VmSettings):
         self.home, self.settings = Path(home), settings
         self._keys: dict[str, tuple[str, dict[str, str]]] = {}
-        self._made: dict[str, tuple[float, MachineDocker]] = {}
+        self._made: dict[str, tuple[float, Any]] = {}
 
     def __repr__(self) -> str:
         return f"OwnProvider({', '.join(m.name for m in every(self.home)) or 'no machine'})"
 
     # ------------------------------------------------------------------ machines
-    def on(self, name: str) -> MachineDocker:
-        """The docker of one machine (made again when its record changed)."""
+    def on(self, name: str) -> Any:
+        """One machine's side of the provider (made again when its record changed): its Docker
+        (MachineDocker), or the machine itself when it was handed over whole (openajar.vms.whole)."""
         path = folder(self.home, name) / RECORD
         try:
             stamp = path.stat().st_mtime
@@ -653,12 +752,18 @@ class OwnProvider:
                           "shows them") from None
         made = self._made.get(name)
         if made is None or made[0] != stamp:
-            docker = MachineDocker(self.home, load(self.home, name), self.settings)
+            m = load(self.home, name)
+            if m.mode == "whole":
+                from openajar.vms.whole import WholeMachine
+
+                docker: Any = WholeMachine(self.home, m, self.settings)
+            else:
+                docker = MachineDocker(self.home, m, self.settings)
             docker._keys = self._keys  # one login key store: the node makes a key before it names the machine
             made = self._made[name] = (stamp, docker)
         return made[1]
 
-    def _known(self, name: str | None) -> MachineDocker | None:
+    def _known(self, name: str | None) -> Any:
         if not name:
             return None
         with contextlib.suppress(VmError, InvalidRequest, NotFound):
@@ -690,7 +795,28 @@ class OwnProvider:
 
     def _out(self, name: str, s: Server) -> Server:
         m = self.on(name).machine
+        if m.mode == "whole":  # the machine itself: reached directly, as the node reaches it
+            return replace(s, id=f"{name}:{s.id}")
         return replace(s, id=f"{name}:{s.id}", via=via(self.home, m))
+
+    def capable_at(self, what: str, location: str | None) -> bool:
+        """openajar.vms.provider.capable_at: a whole machine has no disk snapshot and no wall around it."""
+        m = self._known(location)
+        return what in getattr(m, "capabilities", self.capabilities)
+
+    async def busy(self, location: str | None) -> str | None:
+        """The lane of the environment that holds this machine, when it is handed over whole and one is open
+        on it ("" for a holder that names none). None for a free one, and for a machine of containers."""
+        m = self._known(location)
+        if m is None or m.machine.mode != "whole":
+            return None
+        held = await m.held()
+        return None if held is None else str((held.get("labels") or {}).get("agentos-lane") or "")
+
+    def whole(self, location: str | None) -> bool:
+        """Is this machine handed over as a whole (for the words of an open, a close and a list)?"""
+        m = self._known(location)
+        return m is not None and m.machine.mode == "whole"
 
     # ------------------------------------------------------------------ provider
     async def check(self) -> None:
