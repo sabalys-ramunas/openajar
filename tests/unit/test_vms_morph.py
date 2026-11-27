@@ -129,9 +129,14 @@ class FakeMorph:
         return httpx.Response(404, json={"detail": f"the fake has no {req.method} {path}"})
 
 
-def provider(api: FakeMorph, **kw) -> MorphProvider:
+HOME = "h1"  # the home the provider deletes for (a VmManager hands it vms/home-id)
+
+
+def provider(api: FakeMorph, home_id: str | None = HOME, **kw) -> MorphProvider:
+    """None for home_id: as providers.make makes it, and the VmManager hands it vms/home-id."""
     p = MorphProvider(KEY, transport=api.transport(), host_keys=GATEWAY, **kw)
     p.retry_delays = (0.0, 0.0, 0.0)
+    p.home_id = home_id
     return p
 
 
@@ -233,9 +238,9 @@ async def test_create_refuses_without_a_pinned_gateway_and_deletes_an_instance_i
     p._transport = httpx.MockTransport(no_key)
     morph.KEY_WAIT_S, old = 0.0, morph.KEY_WAIT_S
     try:
-        with pytest.raises(VmError, match="no SSH key"):
+        with pytest.raises(VmError, match="no SSH key"):  # made with this home's label, as the node labels it
             await p.create_server(ServerSpec(name="a", server_type="morph-small", image="morphvm-minimal",
-                                             location="morph", user_data="", labels={}))
+                                             location="morph", user_data="", labels={"agentos-home": HOME}))
     finally:
         morph.KEY_WAIT_S = old
     assert api.instances == {}  # deleted, never left billing
@@ -289,9 +294,10 @@ async def test_busy_and_unreachable_calls_are_tried_again_and_errors_name_morph(
     with pytest.raises(VmError) as e:  # a 5xx on a write is not repeated: it may have happened
         await p.pause_server("x")
     assert "Morph" in e.value.message
-    api.fail["DELETE /instance/y"] = [402]
+    y = api._instance(SMALL, {"agentos-home": HOME}, {})["id"]
+    api.fail[f"DELETE /instance/{y}"] = [402]
     with pytest.raises(VmError, match="no credit left"):
-        await p.delete_server("y")
+        await p.delete_server(y)
 
 
 # ------------------------------------------------------------------ pause, resume, TTL
@@ -324,7 +330,7 @@ async def node(tmp_path):
     async def ok_probe(remote, *, timeout_s=15):
         return True, ""
 
-    vms = VmManager(home, runtime=runtime, provider=provider(api), settings=VmSettings(provider="morph"),
+    vms = VmManager(home, runtime=runtime, provider=provider(api, home_id=None), settings=VmSettings(provider="morph"),
                     node_name="node-1", probe=ok_probe)
     runtime.register("vms", vms)
     yield vms, envs, api

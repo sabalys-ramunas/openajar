@@ -33,13 +33,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from openajar.core import agent_names, clock
+from openajar.core import clock
 from openajar.core.errors import InvalidRequest, LaneExists, NotFound, OpenajarError
 from openajar.core.models import ProxyConfig, utcnow
 from openajar.environments.activity import Activity
 from openajar.environments.bringup import BringUp
 from openajar.environments.browserproxy import BrowserProxies
-from openajar.environments.caller import binding_of
+from openajar.environments.caller import binding_of, grant_family
 from openajar.environments.checkpoints import Checkpoints
 from openajar.environments.downloads import Downloads
 from openajar.environments.errors import (
@@ -71,6 +71,7 @@ from openajar.environments.ports import ended
 from openajar.environments.preparing import Preparing
 from openajar.environments.prepbuild import PrepBuild
 from openajar.environments.proofs import Proofs
+from openajar.environments.reaping import Reaping
 from openajar.environments.recording import Recording
 from openajar.environments.relink import Relink
 from openajar.environments.replay import Replay
@@ -154,11 +155,11 @@ def check_ref(ref: str | None) -> str | None:
 
 class EnvironmentManager(Picking, Sizing, BringUp, Views, Proofs, Uploads, Downloads, Pausing, Saving, Activity,
                          SshAccess, Updates, Network, BrowserProxies, Preparing, PrepBuild, WarmPool, Replay,
-                         Checkpoints, Watching, Waking, Recording, Fleet, Logins, Liveness, Relink):
+                         Checkpoints, Watching, Waking, Recording, Fleet, Logins, Liveness, Relink, Reaping):
     """The environments service. Which environment a call means and attaching by title (Picking), its
     sizing and cost (Sizing), its bring-up (BringUp), its read side (Views), its saves (Saving) and what
-    counts as busy (Activity), and in local mode the agent's own ssh (SshAccess) are mixins in their own
-    modules; lane lookups, opening, closing and the reaper are here."""
+    counts as busy (Activity), in local mode the agent's own ssh (SshAccess), and the reaper (Reaping) are
+    mixins in their own modules; lane lookups, opening and closing are here."""
 
     def __init__(self, home: Path, *, runtime: Any = None, settings: EnvSettings | None = None, clock=utcnow):
         self.home = Path(home)
@@ -180,6 +181,8 @@ class EnvironmentManager(Picking, Sizing, BringUp, Views, Proofs, Uploads, Downl
         self._loader_wrapped = False
         self.last_reap: dict = {}
         self._reap_lock = asyncio.Lock()  # the reaper's loop and a catch-up after a wake never overlap
+        self._passes_begun = self._passes_done = 0  # the VM reaper waits for a whole pass (openajar.vms.reaping)
+        self._reap_failed: dict[str, str] = {}  # environments whose step failed, told once each
         self.repo_probe: Any = None  # how check_repo reads a repository (None: `git ls-remote`; tests set one)
         self.repo_check_waits: tuple[float, ...] = REPO_CHECK_WAITS_S
         self.slot_poll_s = SLOT_POLL_S  # environment_open looks for a free machine this often while the node is full
@@ -318,7 +321,7 @@ class EnvironmentManager(Picking, Sizing, BringUp, Views, Proofs, Uploads, Downl
         token or an admin grant over the API), or the member whose agent opened it."""
         if grant is None:
             return True  # no policy on this node: every caller is the owner
-        if getattr(grant, "root_id", None) == env.family or env.grant_id in (getattr(grant, "chain_ids", None) or ()):
+        if grant_family(grant) == env.family or env.grant_id in (getattr(grant, "chain_ids", None) or ()):
             return True
         if mcp:
             return False
@@ -556,8 +559,10 @@ class EnvironmentManager(Picking, Sizing, BringUp, Views, Proofs, Uploads, Downl
         env = self.store.get(env_id)
         if not env.open:
             return env
-        if env.gone_at is not None:  # nothing to save or check on a machine that stopped (openajar.environments.liveness)
-            return await self.end_gone(env)
+        if env.gone_at is not None:  # nothing to save or check on a machine that is gone (openajar.environments.liveness)
+            if (await self._ask(env))[0] != "runs":
+                return await self.end_gone(env)
+            env = self._not_gone(env)  # it runs again: an ordinary close
         if env.keep == "live" and not final:
             return self.unbind(env)
         async with self._lock(f"close:{env_id}"):
@@ -776,7 +781,7 @@ class EnvironmentManager(Picking, Sizing, BringUp, Views, Proofs, Uploads, Downl
         self.store.put(env)
         return env
 
-    # ================================================================ reaper
+    # ================================================================ notifications (the reaper: openajar.environments.reaping)
     async def _notify(self, title: str, body: str) -> None:
         notifier = self._get("notifier")
         fn = getattr(notifier, "notify", None)
@@ -789,150 +794,6 @@ class EnvironmentManager(Picking, Sizing, BringUp, Views, Proofs, Uploads, Downl
                 await out
         except Exception:
             log.exception("could not send an environment notification")
-
-    async def reap_once(self, now: datetime | None = None) -> dict:
-        """One pass of the reaper (its loop runs one every reap_interval_s). Past its time limit means
-        past it by the wall clock, so the first pass after a laptop slept closes it at once."""
-        async with self._reap_lock:
-            return await self._reap(now)
-
-    async def _reap(self, now: datetime | None) -> dict:
-        now = now or self._clock()
-        out: dict[str, Any] = {"at": clock.iso_or_none(now, z=True), "closed": [], "kept_unsaved": [], "tunnels": [], "gone": []}
-        vms = self._get("vms")
-        with contextlib.suppress(Exception):  # proofs past their retention (openajar.environments.proofs)
-            self.prune_proofs(now)
-        with contextlib.suppress(Exception):  # replays past replay_days (openajar.environments.replay)
-            self.prune_replays(now)
-        with contextlib.suppress(Exception):  # download archives past their link's life
-            self.sweep_downloads()
-        with contextlib.suppress(Exception):  # a repository connected at the node closes its cards
-            from openajar.environments import connect
-
-            await connect.sweep(self)
-        for listed in self.store.open():
-            # the list was read before this pass awaited anything: an agent's close may have finished since
-            # (field report 2026-11-16: a stale "closing" here undid a close that had saved and deleted the
-            # machine, and kept the title held by that chat). Read each one fresh.
-            env = self.store.get(listed.id)
-            if not env.open:
-                continue
-            if env.id in self._tasks or self._lock(f"close:{env.id}").locked() or self.in_background(env.id):
-                continue  # still coming up, or an agent's close or save runs (its teardown marks it closing)
-            if env.state == "closing":
-                await self._closing(env, now, out)
-                continue
-            if env.state == "starting":
-                self._spawn(env.id, self._bring_up(env.id, None))  # the node restarted while it came up
-                continue
-            rec = None
-            if vms is not None and env.vm_id:
-                with contextlib.suppress(NotFound):
-                    rec = vms.store.get(env.vm_id)
-            if rec is None or not rec.live:
-                env.closed_reason = "its machine was deleted"
-                await self._teardown(env, reason="its machine was deleted")
-                out["gone"].append(env.id)
-                continue
-            if env.gone_at is not None:  # its machine stopped: no tunnel, screen or save; ended once it waited
-                await self.reap_gone(env, now, out)
-                continue
-            env = await self.renew_live(env, now)
-            if now >= env.expires_at:
-                await self._end_of_life(env, now, out)
-                continue
-            tunnel = self._tunnels.get(env.id)
-            if (rec.state == "ready" and (tunnel is None or not tunnel.alive) and env.state == "ready"
-                    and await self.machine_gone(env, cause="its tunnel went down")):
-                continue  # gone: the agent's next call says so (openajar.environments.liveness)
-            # down: the firewall follows this computer, then the tunnel, the browser lane and the screen (relink)
-            if (rec.state == "ready" and (tunnel is None or not tunnel.alive)
-                    and await self.relink_once(env, cause="the reaper found its tunnel down")):
-                out["tunnels"].append(env.id)
-            if rec.state == "ready":
-                await self.ssh_keep(env, now)  # local mode: the agent's own ssh, and its use counted as use
-                await self.quiet_upgrade(env, now)  # a keep "live" machine's security updates (openajar.environments.updates)
-            idle = (now - self._last_used(env, now) >= timedelta(minutes=self.settings.idle_minutes)
-                    and not await self._busy_for_idle(env))
-            if rec.state == "ready":  # after the idle rule read the lane: the check's command never looks like work
-                self._screen_check(env)  # a desktop's screen that died on its own starts again, in the background
-            if env.keep == "live" or env.state != "ready":
-                continue  # a kept machine is never closed for idleness
-            if env.keep == "save":
-                if idle:
-                    await self.save_and_close(env, now, out, reason=f"idle for {self.settings.idle_minutes} minutes")
-                else:
-                    await self.autosave(env, now, out)
-                continue
-            near_end = env.expires_at - now <= timedelta(minutes=self.settings.unsaved_notice_minutes)
-            if not idle and not near_end:
-                continue
-            repos = await self.git_repos(env)
-            unsaved = self.unsaved_of(repos) if repos is not None else {"unreachable": True}
-            if unsaved is None and idle:
-                await self._teardown(env, reason=f"idle for {self.settings.idle_minutes} minutes")
-                out["closed"].append(env.id)
-                continue
-            if unsaved is not None and not env.unsaved_noticed:
-                def noticed(e: Environment) -> None:
-                    e.unsaved_noticed = True
-
-                env = self.store.update(env.id, noticed)
-                left = max(0, int((env.expires_at - now).total_seconds() // 60))
-                await self._notify(f"Environment \"{env.title}\" has work that is not pushed",
-                                   f"{agent_names.said(env.agent, env.client)} left environment {env.id} with changes that are not committed or "
-                                   f"pushed. It stays open for {left} more minutes, to its time limit; then openajar "
-                                   "saves that work and deletes the machine. Open it to look, or extend it.")
-                out["kept_unsaved"].append(env.id)
-        out["swept"] = await self.sweep_lanes(now)  # lanes a closed environment left behind
-        with contextlib.suppress(Exception):  # saves past saved_days (the owner is told a day before)
-            out["saves"] = await self.prune_saves(now)
-        with contextlib.suppress(Exception):  # snapshots of saves that did not finish
-            swept = await self.sweep_snapshots(now)
-            if swept.get("deleted"):
-                out["snapshots_deleted"] = swept["deleted"]
-        with contextlib.suppress(Exception):  # prepared machines past their retention (openajar.environments.prepbuild)
-            out["prepared"] = await self.prepared_reap(now)
-        with contextlib.suppress(Exception):  # warm machines past warm_minutes (openajar.environments.warmpool)
-            out["warm_deleted"] = await self.pool_reap(now)
-        return out
-
-    async def _end_of_life(self, env: Environment, now: datetime, out: dict) -> None:
-        """Past its time limit (a laptop that woke late included): keep "save" saves first; any other
-        with unsaved work gets a rescue save first. Never a silent discard: a save that fails keeps the
-        machine and tells the owner (openajar.vms gives it ENV_SAVE_GRACE before its own reaper deletes it)."""
-        if env.state != "ready":
-            await self._teardown(env, reason="time limit")
-            out["closed"].append(env.id)
-            return
-        if env.keep == "save":
-            await self.save_and_close(env, now, out, reason="time limit")
-            return
-        repos = await self.git_repos(env)
-        unsaved = self.unsaved_of(repos) if repos is not None else {"unreachable": True}
-        if unsaved is None:
-            await self._teardown(env, reason="time limit")
-            out["closed"].append(env.id)
-            return
-        await self.rescue_and_close(env, now, out, reason="time limit")
-
-    async def _closing(self, env: Environment, now: datetime, out: dict) -> None:
-        """One the CLI marked closing: a keep "save" one is saved first (unless it was discarded); if that
-        fails it goes back to ready, and the owner is told."""
-        reason = env.closed_reason or "closed"
-        if env.keep == "save" and "(discarded)" not in reason and env.vm_id:
-            def ready(e: Environment) -> bool:
-                if e.state != "closing":
-                    return False  # closed (or opened again) since it was read: never undo that
-                e.state, e.closed_reason = "ready", None
-                return True
-
-            env = self.store.update(env.id, ready)
-            if env.state == "ready":
-                await self.save_and_close(env, now, out, reason=reason)
-            return
-        await self._teardown(env, reason=reason)
-        out["closed"].append(env.id)
 
     # ================================================================ report
     def report(self) -> dict:

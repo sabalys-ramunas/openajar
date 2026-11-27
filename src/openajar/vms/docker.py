@@ -46,7 +46,7 @@ from typing import Any
 
 from openajar.vms import netwall
 from openajar.vms.models import VmError
-from openajar.vms.provider import Server, ServerSpec
+from openajar.vms.provider import Server, ServerSpec, check_ours
 
 SERVER_TYPE = "docker"
 # The sizes of agent environments (openajar.environments.models.SIZES) as docker machines: their CPUs
@@ -60,6 +60,10 @@ CALL_TIMEOUT_S = 120.0
 START_CHECKS, START_CHECK_S = 3, 0.3
 IMAGE_LABEL = "org.agentos.environment"
 IMAGE_VERSION = 2              # the image's entrypoint walls the machine off (deploy/environments/Dockerfile)
+# docker's own words for "there is none": only these mean a container or an image is gone. Any other failure (no
+# daemon, a socket that does not answer, a context switch) decides nothing and is an error (the 0.7.0 audit, S1-04:
+# `docker inspect` with no daemon prints [] and exits 1, which was read as "deleted outside openajar").
+ABSENT = ("no such container", "no such object", "no such image", "no such network")
 # What a dev box and sshd need, and nothing more: files and owners (apt, dpkg), switching users
 # (sshd, apt's sandbox), signals, ports under 1024, sshd's chroot and its login records. NET_ADMIN is
 # for the entrypoint's firewall only: it drops NET_ADMIN, NET_RAW and SETPCAP before sshd starts.
@@ -147,6 +151,9 @@ class DockerProvider:
     type_name = SERVER_TYPE
     said = "docker"
     image_hint = "get it with `openajar environments setup --pull`"
+    # this openajar home's id (vms/home-id; VmManager.provider sets it): a container or an image is deleted by its
+    # id only once docker reads back this home's label on it (openajar.vms.provider.check_ours)
+    home_id: str | None = None
 
     def __init__(self, *, image: str = "agentos-env:latest", docker: str = "docker", cpus: float = 2.0,
                  memory_gb: float = 4.0, pids: int = 512):
@@ -172,7 +179,8 @@ class DockerProvider:
 
     # ------------------------------------------------------------------ docker
     async def _run(self, *args: str, stdin: bytes | None = None, ok_codes: tuple[int, ...] = (0,),
-                   timeout_s: float = CALL_TIMEOUT_S) -> str:
+                   timeout_s: float = CALL_TIMEOUT_S, absent_ok: bool = False) -> str:
+        """The docker CLI's output. `absent_ok`: docker's "No such ..." is no error (what it names is gone)."""
         try:
             proc = await asyncio.create_subprocess_exec(
                 self.docker, *args, stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
@@ -188,6 +196,9 @@ class DockerProvider:
             raise VmError(f"docker {args[0]} took longer than {int(timeout_s)} s") from None
         if proc.returncode not in ok_codes:
             said = (err or out or b"").decode(errors="replace").strip().splitlines()
+            words = (err or b"").decode(errors="replace").lower()
+            if absent_ok and any(w in words for w in ABSENT) and "cannot connect" not in words:
+                return out.decode(errors="replace")
             raise VmError(f"docker {args[0]}: {said[-1][:300] if said else f'exit {proc.returncode}'}")
         return out.decode(errors="replace")
 
@@ -343,7 +354,7 @@ class DockerProvider:
     async def _inspect(self, ids: list[str]) -> list[dict]:
         if not ids:
             return []
-        raw = await self._run("inspect", *ids, ok_codes=(0, 1))
+        raw = await self._run("inspect", *ids, absent_ok=True)
         try:
             return [d for d in json.loads(raw or "[]") if isinstance(d, dict)]
         except ValueError:
@@ -363,11 +374,28 @@ class DockerProvider:
         return [self._server(d) for d in await self._inspect(ids)]
 
     async def delete_server(self, server_id: str) -> None:
+        """Remove a container of this home: docker's "no such container" is done, and one without this home's
+        label is refused (never `docker rm` by a bare id)."""
         found = await self._inspect([server_id]) if server_id else []
-        network = str(((found[0].get("HostConfig") or {}).get("NetworkMode")) or "") if found else ""
-        await self._run("rm", "-f", "-v", server_id, ok_codes=(0, 1))
+        if not found:
+            return  # docker says there is none: nothing to delete
+        check_ours((found[0].get("Config") or {}).get("Labels"), self.home_id, f"{self.said}: container {server_id}")
+        network = str(((found[0].get("HostConfig") or {}).get("NetworkMode")) or "")
+        await self._run("rm", "-f", "-v", server_id, absent_ok=True)
         if network.startswith("agentos-"):  # its own network (create_server), never bridge or one of yours
             await self._run("network", "rm", network, ok_codes=(0, 1))
+
+    async def start_server(self, server_id: str) -> Server | None:
+        """Start a container that stopped (a reboot, a Docker Desktop restart): its disk as it was, on a new SSH
+        port of this computer's loopback. The server once it runs, else None."""
+        await self._run("start", server_id)
+        server = None
+        for _ in range(START_CHECKS * 3):  # its entrypoint sets the wall, then sshd starts
+            server = await self.get_server(server_id)
+            if server is None or (server.status == "running" and server.ssh_port and server.ssh_port != 22):
+                break
+            await asyncio.sleep(START_CHECK_S)
+        return server if server is not None and server.status == "running" else None
 
     async def sweep(self, labels: dict[str, str]) -> list[str]:
         """Remove this node's networks that no container uses any more (a machine deleted outside
@@ -416,13 +444,24 @@ class DockerProvider:
         return image if save or prepared else (out or image)
 
     async def get_image(self, image_id: str) -> dict | None:
-        raw = await self._run("image", "inspect", "--format", "{{.Size}}", image_id, ok_codes=(0, 1))
+        raw = await self._run("image", "inspect", "--format", "{{.Size}}", image_id, absent_ok=True)
         if not raw.strip().isdigit():
             return None
         return {"id": image_id, "status": "available", "gb": round(int(raw.strip()) / 2**30, 3), "labels": {}}
 
     async def delete_image(self, image_id: str) -> None:
-        await self._run("rmi", "-f", image_id, ok_codes=(0, 1))
+        """Remove an image of this home (a save's, a prepared machine's): docker's "no such image" is done, and
+        one without this home's label is refused (never `docker rmi` by a bare id)."""
+        raw = (await self._run("image", "inspect", "--format", "{{json .Config.Labels}}", image_id,
+                               absent_ok=True)).strip()
+        if raw in ("", "[]"):  # docker says there is none (its "No such image", with the [] it prints then)
+            return
+        try:
+            labels = json.loads(raw) or {}
+        except ValueError:
+            raise VmError(f"{self.said}: the labels of image {image_id} do not read ({raw[:80]})") from None
+        check_ours(labels if isinstance(labels, dict) else {}, self.home_id, f"{self.said}: image {image_id}")
+        await self._run("rmi", "-f", image_id, absent_ok=True)
 
     async def list_images(self, labels: dict[str, str]) -> list[dict]:
         """The images `docker commit` made with every label (a save's is named by its id)."""

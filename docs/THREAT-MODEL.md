@@ -55,6 +55,20 @@ A grant's subject id is a name, not an identity: two grants may share one. Every
 something (self-approval, a brain task's owner) is keyed on the grant family (the
 root grant id), and the subject ids the node's own issuers use (`site-key:...`) are refused to every other.
 
+Which computers (environments, saves, logins bound by title) a grant reaches is keyed on its environment
+family: its root grant id, or, for the agent grant `openajar local` issues on a laptop, the family of the
+grant it replaced (`grants.env_family`, openajar.policy.families). Only `issue(continues=...)` sets it, only
+for a root agent grant this node issued for the same subject, and only `openajar local` passes it (no API
+route takes it), so a grant `openajar connect` issued for another computer, or another subject's, never
+inherits one; each continuation is a row of the action log (`grant_family`). `openajar local` continues a
+family only across an expiry, its own renewal or replacement and new default terms: after the owner revoked
+the grant (a leaked token) or a freeze did, the next grant starts a family of its own, and the earlier
+computers move only by the owner's `openajar environments adopt` after a dry run. A continued grant starts
+with the taint of the one it continues, since it reaches the same computers. It never touches the checks of
+who asked above, which stay on the root id. Moving computers an older release left with an ended grant of
+the same agent to the current one is the owner's command at the node (`openajar environments adopt`),
+logged as `environments_adopted`.
+
 The device credential is routed exactly as the node token that made it: its actions go through the policy like a
 token's (pacing, taint, the trifecta, Ask me first), never as the owner in person. `openajar node rotate-token` ends
 every device credential, since whoever held the old token could have made one.
@@ -241,6 +255,7 @@ really do (routing, Ask me first, approvals, budget) before it acts. What each t
 | **Device credential** | the owner's computer, Keychain service `agentos-owner` (made by `openajar connect` with the node token) | `device` | `openajar dash`, `openajar approvals list` and `deny`, `openajar open` (a control link that is not an owner link), `openajar expose` and `openajar lane forward` (see Exposes and forwards), revoking the connection's grant; issuing a grant only within `policy.device_grants` (by default every workspace, up to commit, no specials, 90 days at most) | approve or answer (the CLI says to open Needs you in the panel through the tunnel), a grant wider than `policy.device_grants`, reissuing an import's grants, and everything else that needs `person`; MCP refuses it |
 | **Controller key** | the controller's own key files; the node pins its public key at `openajar node join` (`controller_pubkey`) | not on this API: the node channel | signed `config_update` and revoke; decisions it relays count up to `controller_max_level`, and a relayed decision with no proof reaches at most `signed_in` | lower anything the node's owner set (its confirmation layer can only add), report a `chat` answer, exceed the controller ceiling in `node.toml` |
 | **Phone link** | a push notification (signed, one approval, expiring) | not a session | deny that one approval; a freeze link freezes | approve: a link never approves, it opens the panel |
+| **VM provider token** (Hetzner, Morph, DigitalOcean) | `$OPENAJAR_HOME/secrets/<provider>.token` (0600), read by the node only | none: no person or agent presents it | what the provider lets it: a Hetzner token reaches every server, snapshot and firewall of its project, the owner's other servers included | be used by openajar on what is not this home's: every delete by id, firewall rule change and label change first reads the object back and refuses one without this home's `agentos-home` label (openajar.vms.provider.check_ours), so a damaged or restored record, or a save imported from another node, never reaches a server, snapshot or SSH key of yours. It does not bound a bug elsewhere or someone who holds the token: a project or account for openajar alone is the careful choice |
 | **One-time login code** | `panel.db` on the node (hash only), printed once by `openajar panel login` | becomes a `person` session | one sign-in, within 10 minutes | anything a second time |
 
 ## Exposes and forwards
@@ -449,7 +464,7 @@ bounds it is set outside the container, on the machine and on the node.
 | What listens on the machine | the container's sshd, published on the machine's loopback only (`127.0.0.1`, a port Docker picks). It takes one key, the node's key for that environment, and shows a host key the node made. Another account on the same machine can connect to that port and gets no further without the key |
 | How the node reaches the container | through its SSH connection to the machine (a ProxyCommand that only carries the connection), then SSH to the container with that environment's own key and pinned host key. The machine carries the bytes and cannot read them, short of its root swapping the container |
 | What openajar changes on the machine | one `authorized_keys` line (not with the owner's own key), the environments image, and per environment a container and a network, per save an image, all labelled with this node's home id. No firewall rule, no service, no open port. It never stops or restarts the machine |
-| What it deletes there | only containers, networks and images with its own home label (the reaper's orphan sweep and `machine remove` filter by it), the image when it put it there, and its own `authorized_keys` line |
+| What it deletes there | only containers, networks and images with its own home label (the reaper's orphan sweep and `machine remove` filter by it, and a delete by id reads the label back first and refuses one without it), the image when it put it there, and its own `authorized_keys` line |
 | A machine that does not answer | is not "deleted": the provider raises instead of listing nothing, so the reaper ends no environment for it and deletes nothing. The owner removes a machine that is gone for good (`machine remove --force`) |
 
 What this does not stop:
@@ -558,8 +573,8 @@ An environment saves when idle unless the agent asks for single use (`keep="none
 | Where a save lives | the disk snapshot (or, on Morph, the paused machine) in the owner's own provider account, or an image in the Docker of this computer or of the owner's own machine; the file part on the node, sealed with the saves key the vault holds (`encrypt_saves`) |
 | What it holds | the machine's disk as the agent left it (code, installs, anything the agent wrote, a secret the app printed included), and the browser's storage state: cookies and local storage of the environment's own browser, never an account lane's or the vault's (`signins=false` or `save_signins = false`: none) |
 | What it never holds | the git gateway's token and `~/.git-credentials` (removed before the snapshot; a resume mints a new token), the machine's SSH keys, process memory, swap |
-| Who brings it back | an agent of the same grant family by its title, or the owner (`openajar environments resume`); within the node's limits |
-| How it ends | `environment_forget`, `environment_close(forget=true)`, the owner, or retention (`saved_days`, `keep_last`), which deletes the snapshot or the paused machine too |
+| Who brings it back | an agent of the same grant family by its title (on a laptop, also the agent grant that replaced the one that saved it), or the owner (`openajar environments resume`); within the node's limits |
+| How it ends | `environment_forget`, `environment_close(forget=true)`, the owner, or retention (`saved_days`, `keep_last`), which deletes the snapshot or the paused machine too, unless another save of this node names it (a copy `save-import` made here): the last one deletes it |
 
 A sign-in kept in a save is a session on that site: anyone who can read the owner's provider account can
 read the snapshot. Single use keeps nothing once the work is pushed (a rescue save only for unpushed work).

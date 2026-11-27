@@ -149,8 +149,9 @@ def _run_clone_locally(cmd: str, tmp_path):
     for args in (["commit", "-q", "--allow-empty", "-m", "one"], ["branch", "feature"]):
         subprocess.run(["git", "-C", str(src), "-c", "user.name=t", "-c", "user.email=t@example.test", *args],
                        check=True)
-    local = (cmd.replace(shlex.quote("https://example.test/me/shop.git"), shlex.quote(str(src)))
-                .replace("/work", str(tmp_path / "work")))
+    # /work first: the repository's own path (a test folder under any ".../worktrees/...") must not be moved
+    local = (cmd.replace("/work", str(tmp_path / "work"))
+                .replace(shlex.quote("https://example.test/me/shop.git"), shlex.quote(str(src))))
     return subprocess.run(["sh", "-c", local], check=False, capture_output=True, text=True, cwd=tmp_path,
                           env={"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "HOME": str(tmp_path)})
 

@@ -852,7 +852,9 @@ must delete it with unsaved work (docs/design/environments.md, "Keeping"). The w
   their own agents, a grant its own family's.
 - `DELETE /api/orgs/{org}/environments/saves/{save_id}` -> `{ "forgot": [ids], "snapshots_deleted": n }`, and
   `"kept": [{ "id", "why" }]` for a save whose snapshot the provider did not delete (it stays, so nothing billed
-  is lost track of). The owner in person only: a token, a grant and a member get 403. An unknown id is 404.
+  is lost track of), and `"snapshots_left": [{ "id", "save", "provider", "where", "why", "words" }]` for a save
+  whose snapshot reads back as another openajar home's (a save imported from another node): the save is
+  forgotten, the snapshot stays where it is, and openajar no longer tracks it. The owner in person only: a token, a grant and a member get 403. An unknown id is 404.
   Traced as `environment.forget`.
 - `POST /api/orgs/{org}/environments/{id}/close` is the owner's close: it deletes a `keep: "live"` machine too,
   and saves a `keep: "save"` one first (502 `save_failed` keeps the machine).

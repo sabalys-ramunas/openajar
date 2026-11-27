@@ -231,6 +231,15 @@ uname -a".
 
 Run it again at any time: it keeps what works.
 
+The agent grant lives 90 days. The service renews it after 72 (four fifths of its life) and stores the
+new token where Claude Code and Codex read it, so a chat started after that gets the new one, and the old
+one keeps working for the chats open at the time until it ends. When it did end, or a release changed its
+default terms, `openajar local start` and `openajar setup agents` issue the next one, and it keeps the old
+one's computers: its saves, open environments and the logins bound to them by title. When you revoked it
+(a token that leaked, say) or froze the node, the next one starts without them, and `start` says so. In
+that case, and for what openajar 0.8.0 and before left (each new grant had computers of its own),
+`openajar environments adopt` lists them and `--yes` gives them to the current grant ([ENVIRONMENTS.md](ENVIRONMENTS.md), "Whose they are").
+
 ## Commands
 
 | Command | What it does |
@@ -297,7 +306,10 @@ When the laptop is about to sleep, openajar acts on each open environment by its
 A sleep that comes too fast for this (the lid closed on a battery about to die) leaves the VMs
 running and billing, and nothing on the laptop can delete them. When it wakes, or when the service
 starts again, openajar at once deals with every environment past its time limit the same way, and
-`openajar local status` says what it closed or saved. `openajar local stop` leaves open environments
+`openajar local status` says what it closed or saved. No machine of an environment is deleted before
+that: the VM reaper waits for the environments' look, and while a save runs (docs/ENVIRONMENTS.md, "A
+delete needs evidence"). A `vms.toml` or `environments.toml` that does not read stops the service from
+starting, and `openajar local serve` names the file. `openajar local stop` leaves open environments
 running: nothing closes them until the next start.
 
 ## Remove it

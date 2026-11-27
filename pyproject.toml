@@ -1,6 +1,6 @@
 [project]
 name = "openajar"
-version = "0.8.0"
+version = "0.8.1"
 description = "Self-hosted cloud dev environments for AI coding agents: a disposable VM with a terminal and a real browser for Claude Code, Codex and any MCP client."
 readme = "README.md"
 license = "Apache-2.0"

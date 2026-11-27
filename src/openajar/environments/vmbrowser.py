@@ -44,6 +44,7 @@ from typing import Any
 from openajar.core.aio import run_to_end
 from openajar.core.errors import EngineError
 from openajar.core.models import LaneSpec, ProxyConfig, ViewerInfo
+from openajar.environments.vmdownloads import DOWNLOADS_ON_VM, MachineDownloads
 from openajar.node.camoufox.pin import CANVAS_PREF
 from openajar.node.camoufox.prefs import CACHE_PREFS, LINUX_HOST_PREFS, STEADY_CHROME_PREFS, WHEEL_PREFS
 from openajar.node.camoufox.session import CamoufoxSession
@@ -100,6 +101,12 @@ WINDOW_MARGIN = 72
 # reads changes with it: outerWidth/Height are GTK's edge (5 px a side) larger and innerHeight about 35 px taller,
 # real sizes of a real window, inside the pinned screen (docs/ENVIRONMENTS.md).
 DESKTOP_PREFS = {"browser.tabs.inTitlebar": 1, "ui.GtkCSDCloseButton": 0, "browser.quitShortcut.disabled": True}
+# The browser's own saves go to /work/downloads (openajar.environments.vmdownloads), without asking where Firefox
+# lets them. A site's download goes through Playwright as before. The PDF viewer's Save and Ctrl+S always ask
+# (Firefox's rule), in a Save As window that now opens on that folder. The PDF viewer stays on.
+DOWNLOAD_PREFS = {"browser.download.useDownloadDir": True, "browser.download.folderList": 2,
+                  "browser.download.dir": DOWNLOADS_ON_VM, "browser.download.always_ask_before_handling_new_types": False,
+                  "browser.download.alwaysOpenPanel": False, "pdfjs.disabled": False}
 DESKTOP_DIR = "desktop"
 WALLPAPER_MAX = 8 * 1024 * 1024
 WALLPAPER_NAMES = ("wallpaper.svg", "wallpaper.png", "wallpaper.jpg", "wallpaper.jpeg")
@@ -163,7 +170,7 @@ def browser_options(spec: LaneSpec, *, identity_os: list[str] | None = None,
     on the machine, localhost is the machine (an owner's proxy is a Firefox pref, network.vm_browser_prefs)."""
     width, height = size
     window = desktop_window(size) if desktop else (width, height)
-    prefs = {**CACHE_PREFS, **STEADY_CHROME_PREFS, **WHEEL_PREFS, **LINUX_HOST_PREFS, CANVAS_PREF: ""}
+    prefs = {**CACHE_PREFS, **STEADY_CHROME_PREFS, **WHEEL_PREFS, **LINUX_HOST_PREFS, **DOWNLOAD_PREFS, CANVAS_PREF: ""}
     if desktop:
         prefs.update(DESKTOP_PREFS)
     opts: dict[str, Any] = {
@@ -836,7 +843,7 @@ class VmBrowsers:
             session = RemoteSession(pw, browser, context, profile_dir, float(getattr(engine, "close_timeout", 15.0)),
                                     on_close=stop_remote, before_close=keep_signins,
                                     files=LaneFiles(profile_dir.parent / "files", getattr(engine, "files", None)
-                                                    or FilesConfig()),
+                                                    or FilesConfig()), machine=MachineDownloads(self, env),
                                     dialog_timeout=float(getattr(engine, "dialog_timeout", DIALOG_TIMEOUT)))
         except BaseException as e:
             with contextlib.suppress(Exception):

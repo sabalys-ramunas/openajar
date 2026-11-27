@@ -245,8 +245,10 @@ class Views:
         """detail() of an environment whose machine stopped: what the node knows, nothing from the machine."""
         out = self.summary(env)
         out["machine_gone"] = self.gone_view(env)  # type: ignore[attr-defined]  (Liveness)
-        out["ports"], out["checkpoints"], out["unsaved"] = [], [], None
-        out["git"] = {"branch": env.branch, "ahead": 0, "dirty": 0, **self.push_lists(env)}
+        # what only the machine could say is not known (U6-01: unsaved null and ahead 0, dirty 0 read as facts)
+        out["ports"], out["checkpoints"] = [], []
+        out["unsaved"] = {"dirty_files": [], "unpushed": [], "unreachable": True}
+        out["git"] = {"branch": env.branch, "ahead": None, "dirty": None, **self.push_lists(env)}
         out["calls"] = [self.call_view(c) for c in reversed(env.calls[-calls:])]
         out["commands"] = self._commands(env)
         out["viewer"] = None

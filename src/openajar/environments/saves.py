@@ -280,6 +280,21 @@ class SaveStore:
             except (OSError, ValueError) as e:
                 log.warning("a save at %s does not read: %s", path.parent, e)
 
+    def whole(self) -> bool:
+        """Can every save be read now? False when the saves folder is missing (a home restored without it, a
+        folder moved aside) or a manifest does not read (a newer version's, a hand edit): then what points to a
+        snapshot or a paused machine is not known, and nothing may be deleted as pointed to by none (S1-05)."""
+        if not self.root.is_dir():
+            return False
+        for path in self.root.glob(f"*/*/s*/{MANIFEST}"):
+            if path.parts[-4] == ".tmp":
+                continue
+            try:
+                SaveManifest.model_validate_json(path.read_text())
+            except (OSError, ValueError):
+                return False
+        return True
+
     def all(self, family: str | None = None) -> list[SaveManifest]:
         """Every save (of one family), newest first."""
         out = [m for m, _ in self._manifests() if family is None or m.family == family]
@@ -299,6 +314,31 @@ class SaveStore:
             if m.id == save_id:
                 return m, path
         raise NotFound(f"no save {save_id}")
+
+    def sharing(self, m: SaveManifest) -> list[str]:
+        """The other saves that name m's disk snapshot (an import on this node shares the original's)."""
+        if m.snapshot is None:
+            return []
+        return [o.id for o in self.all() if o.id != m.id and o.snapshot is not None and o.snapshot.id == m.snapshot.id]
+
+    def move(self, save_id: str, *, family: str, title: str | None = None) -> SaveManifest:
+        """Give a save to another grant family, under another title when one is given (openajar.environments.adopt):
+        its folder moves first, then its manifest says so, so a move that stops halfway is found and finished by
+        the next one (the payload's sealing names the save id, never its family or title)."""
+        m, path = self.find(save_id)
+        moved = m.model_copy(update={"family": family, "title": title or m.title})
+        dest = self.folder(moved.family, moved.title, moved.id)
+        if dest != path:
+            self._mkdir(dest.parent)
+            os.rename(path, dest)
+            fs.fsync_dir(dest.parent)
+            for parent in (path.parent, path.parent.parent):  # an empty title, then an empty family
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+        self.write_manifest(moved)
+        return moved
 
     def remove(self, save_id: str) -> SaveManifest:
         m, path = self.find(save_id)
@@ -393,9 +433,10 @@ def open_payload(manifest: SaveManifest, path: Path, out: Path, key: bytes | Non
     return files
 
 
-def check_files_tar(path: Path, roots: list[str]) -> int:
+def check_files_tar(path: Path, roots: list[str], names: set[str] | None = None) -> int:
     """The file part's tarball: it opens, every member is a plain file, link or folder under one of
-    `roots` (work/, a keep_paths folder) with no `..`. Returns how many files it holds."""
+    `roots` (work/, a keep_paths folder) with no `..`. Returns how many files it holds (and adds each
+    member's name to `names`)."""
     n = 0
     with tarfile.open(path, "r:*") as tf:
         for m in tf:
@@ -408,6 +449,8 @@ def check_files_tar(path: Path, roots: list[str]) -> int:
             if m.issym() and (m.linkname.startswith("/") or ".." in m.linkname.split("/")):
                 raise SaveCorrupt(f"the file part holds a link that leaves its folder: {name[:120]!r}")
             n += m.isreg() or m.issym()
+            if names is not None:
+                names.add(name)
     return n
 
 
@@ -494,3 +537,24 @@ def public(m: SaveManifest, eur_per_gb_month: float) -> dict[str, Any]:
             "cost_eur_month": cost,
             "note": (m.agent_note or "")[:300] or None, "agent": m.agent}
 
+
+def snapshot_left(m: SaveManifest, refused: str) -> dict:
+    """A forgotten save's snapshot that stays where it is, since it reads back as another home's: where it is,
+    whose, and that openajar no longer tracks it, in plain words (forget's snapshots_left)."""
+    from openajar.vms.models import provider_name
+
+    snap = m.snapshot
+    assert snap is not None
+    if snap.provider == "own":
+        machine, _, image = snap.id.partition("//")
+        where = f"the image {image} on your machine {machine} (`docker images` there)"
+    elif snap.provider == "docker":
+        where = f"the image {snap.id} in this computer's Docker (`docker images`)"
+    else:
+        where = (f"snapshot {snap.id} in your {provider_name(snap.provider)} account"
+                 + (f" ({snap.location})" if snap.location else ""))
+    return {"id": snap.id, "save": m.id, "provider": snap.provider, "where": where, "why": refused,
+            "words": f"The save {m.id} of \"{m.title}\" is forgotten, and {where} is left in place: the provider reads "
+                     "it back as not this openajar's (a save imported from another node names that node's snapshot), "
+                     "so openajar did not delete it and no longer tracks it. Delete it there yourself if it is "
+                     "yours to remove."}

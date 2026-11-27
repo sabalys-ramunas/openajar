@@ -270,6 +270,9 @@ class Environment(BaseModel):
     save_error: str | None = None             # the last save that failed, in words (the machine was kept)
     save_noticed: bool = False                # the owner was told a save failed
     save_tried_at: datetime | None = None     # the last save, made or failed (a failed one is retried later)
+    # files git lists on the disk that the last files-only save did not hold (openajar.environments.savecheck): the
+    # machine is kept until a save holds them or the owner closes it, past any grace (openajar.vms.reaping)
+    save_unheld: list[str] | None = None
     keep_signins: bool = True                 # a save holds its browser's sign-ins (openajar.environments.signins)
     pull_requests: list[dict] = Field(default_factory=list)  # environment_pull_request opened (url, number, branch)
     # Its network (openajar.environments.networking), as it opened: the level, the names of the secrets

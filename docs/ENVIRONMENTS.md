@@ -112,7 +112,11 @@ What a docker machine is kept from, and what it is not:
 `openajar environments setup` says the same.
 
 **Hetzner Cloud**: make a project that holds nothing but these VMs (the token can delete any
-server in it), make a read-write API token in it, and give it to the node:
+server in it), make a read-write API token in it, and give it to the node. openajar itself deletes a
+server, a snapshot or an SSH key by its id only once Hetzner reads it back with this home's
+`agentos-home` label, and changes a firewall's rules or a server's labels only on one of this home's:
+anything else is refused with an error that names it. That guards against a damaged record or a save
+imported from another node, not against the token, so a project of its own is still the careful choice.
 
 ```
 openajar vm setup              # asks for the token, keeps it in $OPENAJAR_HOME/secrets/hetzner.token (0600)
@@ -143,6 +147,8 @@ Setup also pins the host key of Morph's SSH gateway (it prints its fingerprint) 
   done already).
 - Every machine has a time limit at Morph too (its own limit plus a margin), so one the node forgot
   stops billing by itself.
+- An instance or a snapshot is deleted by its id only once Morph reads it back with this home's
+  `agentos-home` label in its metadata; one without it is refused and stays.
 
 **DigitalOcean (experimental)**: each environment is a Droplet in your DigitalOcean account, with a
 firewall that lets SSH in from the node only, and a save is a snapshot there, as on Hetzner.
@@ -174,8 +180,12 @@ Setup sets `provider = "digitalocean"` in `vms.toml`. What is different from Het
 - A snapshot lives in the region of the Droplet it was taken from, so a save resumes in that region,
   also after you change `location`.
 - DigitalOcean has tags, not labels: openajar's labels are tags like `agentos-vm:vm_ab12` on its
-  Droplets and snapshots, and it only ever lists and deletes what carries its own. The token itself
-  reaches every Droplet of its team, so a team for openajar alone is the careful choice.
+  Droplets and snapshots, and it only ever lists and deletes what carries its own: before a delete by
+  id it reads the Droplet or the snapshot back, and refuses one without this home's `agentos-home` tag.
+  The token itself reaches every Droplet of its team, so a team for openajar alone is the careful choice.
+- A Droplet that is off (an agent's `poweroff`) is powered on again, as a Hetzner server is; a
+  DigitalOcean that does not answer decides nothing, and a Droplet one listing leaves out is asked for
+  by its id.
 - The firewall covers a Droplet through a tag the Droplet is created with. For the first moments of a
   new Droplet its port 22 may be open to the internet before DigitalOcean applies the firewall; it
   takes the node's key only (no password), and its host key is pinned.
@@ -248,9 +258,12 @@ What openajar puts on the machine, and nothing else:
 No program of openajar runs there, no firewall rule is changed and no port is opened to the network:
 a container's own sshd listens on the machine's loopback only, and the node reaches it through its
 ssh connection to the machine. openajar never stops, restarts or wipes the machine, and it only ever
-removes containers, networks and images that carry its own label. `machine remove` deletes those,
-the image (when openajar put it there) and the `authorized_keys` line; it refuses while environments
-are open or saved there unless you pass `--force`.
+removes containers, networks and images that carry its own label: before it removes one by its id, the
+machine's Docker reads that label back, and one without this home's is refused. `machine remove`
+deletes those, the image (when openajar put it there) and the `authorized_keys` line; it refuses while
+environments are open or saved there, or while a save on this computer does not read (which saves keep
+their disk there is then not known), unless you pass `--force`. It says it removed only what Docker
+removed: any failure but Docker's own "no such ..." is an error.
 
 What is different from a rented VM, said plainly:
 
@@ -264,8 +277,11 @@ What is different from a rented VM, said plainly:
 - A save's disk is an image in that machine's Docker, and it costs nothing. If the machine is lost,
   the save's files (kept on the node) are what is left, and a resume starts from them.
 - A machine that is switched off or out of reach is waited for: its environments are not ended, and
-  calls say the machine did not answer. A machine that restarts loses its open environments (they
-  show as gone, and come back from their last save: `environment_open` with the same title).
+  calls say the machine did not answer. So is a machine whose record on this computer does not read
+  (`vms/machines/NAME/machine.json`): only `machine remove` makes its containers gone. When the machine
+  restarts, its open environments' containers stop with their disks whole, and the node starts them
+  again on its next look (as [a machine that only stopped](#costs-and-the-reaper)); processes that ran
+  are gone, the files are not. Docker there that does not answer is an error, never "no such container".
 - Every command goes through two ssh connections (to the machine, then to the container), so each
   call takes a moment longer than on docker on this computer: about a quarter of a second in all when
   the machine is near, more over a slow link.
@@ -408,6 +424,36 @@ Either way the browser starts while the environment comes up, beside the clone, 
 after the open returns: the first `browser_navigate` finds it running (or waits for the rest of its
 start) instead of starting it then. A start that fails is only logged, and the first browser call
 starts it again.
+
+#### Downloads
+
+With `"vm"` a file the browser downloads is in two places: in the browser's outbox on the node, as on
+every browser (`browser_files` in the `browser` group lists it with its status, size, type and sha256),
+and as a plain file on the VM in `/work/downloads`, for the terminal. The outbox record's `machine_path`
+names that file, and its `to_human` is the call that gives the person a link to it
+(`environment_download(path="/work/downloads/report.pdf")`). The click that started it says so in its
+result: "a download started: report.pdf; it finished (182.4 KB): out_... in browser_files and on the
+machine at /work/downloads/report.pdf", or "the download failed: <why>".
+
+The bytes cross the network once. The file on the VM is the browser's own (a hard link, or a copy on
+the VM when the folders are on two file systems), and only the outbox copy is streamed to the node. A
+name that is taken gets " (1)", " (2)" before its extension, so nothing in the folder is replaced, and a
+site's name is cut to its last part with no leading dots, so a download never lands outside the
+folder. The size limit (`downloads_max_mb`, 200 MB) and the stall check (no data for 60 s) hold while a
+download runs: the node asks the VM how far it is, once a second, from the second second on.
+
+The browser's own saves go to the same folder, and its PDF viewer stays on. The PDF viewer's Save
+button and Ctrl+S are not downloads: Firefox carries them out itself and always asks where, whatever its
+prefs say, in a Save As window on the VM's screen that opens on `/work/downloads`. After a click on a
+page the viewer shows, or Ctrl+S, the node looks in the folder and, when nothing new is there, at the
+screen's windows (one command on the VM each; any other click costs none). The click's result, and
+`browser_tabs` (its `windows`), then name a window of the browser that shows none of its tabs, with the
+call that answers it: `screen_act` with `keys` "Return" saves into `/work/downloads`, "Escape" closes it.
+Reading the windows needs the desktop (below); on a bare screen the result says nothing of it. A file
+saved into the folder this way is brought into the outbox once (when the click's result is read, or
+when `browser_files` lists the outbox), as a download whose `url` is not known.
+
+With `"node"` (the default on a Linux node) downloads land in the outbox only, as on an account browser.
 
 #### The desktop
 
@@ -1848,6 +1894,42 @@ snapshot and the files, after asking; an agent that opens that title again start
 machine. Agents forget finished work themselves with `environment_forget(title)`.
 `environment()` always lists the agent's `open` and `saved` ones.
 
+**Whose they are.** A save, an open environment and a login bound by title belong to the agent's grant
+family: the grant that opened it and every grant narrowed from it. On a laptop the agent grant of
+`openajar local` lives 90 days; it is renewed before then (the service does it after 72 days, and
+`openajar local start` or `setup agents` do it too), and a grant that replaces it after an expiry or for
+new default terms keeps the same family, so the agent keeps its computers. A renewal leaves the old grant
+working until it ends, for the chats open at the time. After you revoked the grant (a leaked token, say)
+or a freeze did, the next one starts a family of its own and `start` says so: the computers stay the
+revoked grant's until you give them over with `adopt` below, after a look. Only this computer's own agent
+grant carries its family on: one `openajar connect` issued for another computer never takes it. The new
+grant also keeps the old one's taint (what it read), since it reaches the same computers. openajar 0.7.0
+and before gave each new grant a family of its own; computers left that way are named to the agent (`environment_open` with their title answers `saved_by_earlier_grant`
+instead of opening an empty machine, and `environment()` lists them as `earlier`). Give them to the
+current grant on that computer:
+
+```
+openajar environments adopt          # lists the saves, open environments and logins it would move
+openajar environments adopt --yes    # moves them, once; nothing is deleted
+```
+
+It takes only what earlier grants of the same agent left (revoked or expired, never another agent's;
+the list names those it leaves alone). An open machine it moves is let go, so its title takes it back at
+once. A title the current grant also has stays the current one's, and the moved one is named
+"<title> (earlier)". The move is written to the action log.
+
+**Moving a save.** `openajar environments save-export ID FILE` writes one save to a file (unsealed:
+keep it private), and `save-import FILE` adds it on another node (or this one), for this computer's
+agent (its agent grant now); `--family <grant id>` gives it to another grant's agent, and the command
+says which agent resumes it. A copy imported on the node that made it shares the original's disk
+snapshot: forgetting one keeps the snapshot while another save names it, and the last one deletes it.
+While a save on the node does not read, which saves name a snapshot is not known: forgetting or pruning
+one with a snapshot (or a paused machine) then deletes nothing, and the save stays until every save reads.
+A save imported on another node names the snapshot of the node that made it: the provider reads it back
+as that home's, so forgetting or pruning the save on this node never deletes it. The save goes, the
+snapshot stays where it is, and `forget` (or a notification, for a prune) says where it is and that
+openajar no longer tracks it; delete it there yourself when no node needs it.
+
 **You resume one yourself.** Without a chat: **Resume** on a save in the web app's Saved list, `openajar
 environments resume <title or save id>` on the node, or the Resume button on the saved environment's
 live-view link. It resumes the save as `environment_open` with its title does (a disk snapshot, or on
@@ -1893,6 +1975,24 @@ open a fresh one under another title. `save_limit`: forget saves you no longer n
   that no remote has, and stashes. `environment_close` refuses for the same reasons.
 - A daemon restart never deletes environments; the reaper picks up where it was. A server the node
   made but no longer knows about is deleted as an orphan.
+- **A delete needs evidence; silence is never permission.** Past its time limit an environment's machine is
+  the environments' reaper's to save first. The VM reaper keeps it while a save or close of it runs, until
+  the environments' reaper has finished a whole pass since the node started or the computer woke, and for
+  15 minutes of awake time from when it first saw the machine past its limit (never by the wall clock: a
+  laptop that slept through the limit has had none of it; the time is kept on the machine's record, so
+  restarts do not start it over). It also keeps every environment's machine while the environments
+  service is not running, one whose environment the reaper could not check, and one whose last files-only
+  save missed a file `git status` lists (until a save holds it or you close it); you get one notification
+  for a machine that stays past its limit. A save's file part holds every file on the disk that
+  `git status` lists, and a resume deletes only what was not on the disk. A machine that only stopped is
+  started again, except one that stopped right after each of 3 starts in 30 minutes: that one is gone,
+  and you and the agent are told why. A server one listing leaves out is
+  asked for by its id, and only the provider's own "no such server" marks it deleted outside openajar
+  (nothing is deleted on the strength of a list). A record made with another provider than `vms.toml`
+  names now is ended as lost (`deleted` with `lost: true`), never deleted through the new one, and you are
+  told where to look for it. On openajar local a `vms.toml` or `environments.toml` that does not read
+  stops the start, with the file and the setting named (`openajar local serve` says it); the snapshot sweep deletes nothing while a save does not read
+  or the saves folder is missing, and neither does forgetting or pruning a save.
 - **A link that drops** (the SSH connection that carries an environment's tunnels: the browser, its live
   view, the git gateway and the network's ports) comes back by itself. The drop is noticed at once (its
   ssh ends), and the node first lets the VM firewall follow this computer's address when it moved (local
@@ -1906,8 +2006,14 @@ open a fresh one under another title. `save_limit`: forget saves you no longer n
   machine runs nothing and gets `environment_not_ready` (what happened, and that the node is on it), and
   `environment()` waits up to a minute for the link and shows `link`: `down` (since when, why, the tries)
   or, for ten minutes after, `back`.
-- **A machine that stops** (its container killed, its server powered off or deleted outside openajar, its
-  host lost) is found once and said everywhere. A command whose ssh cannot reach the machine, the reaper
+- **A machine that only stopped** (a reboot, a Docker Desktop restart, its container killed, an agent's
+  `poweroff`, your own machine restarting) still has its disk: the node starts it again (`docker start`,
+  on your own machine too; Hetzner's and DigitalOcean's power on; a container gets a new SSH port, which
+  the node follows) and the link comes back as above. Processes that ran are gone,
+  the files are not. One that does not start is left as it is, nothing is deleted, and you get a
+  notification once.
+- **A machine that is gone** (deleted outside openajar, its container dead, its host lost) is found once
+  and said everywhere. A command whose ssh cannot reach the machine, the reaper
   finding its tunnel down, `environment()` finding git on it silent, and `environment_open` with its
   title each ask the provider (`docker inspect`, Hetzner's API), twice, two seconds apart. Only the
   provider decides: one failed ssh call is no reason, a network blip or a busy machine looks the same,
@@ -1918,8 +2024,10 @@ open a fresh one under another title. `save_limit`: forget saves you no longer n
   from; a job that ran on it ends `lost` with the same words; `environment_close` ends it without a
   save (there is nothing to save from) and names the saves left; and `environment_open` with the same
   title ends it and starts a new machine on that title, from the newest save when there is one, so the
-  agent needs no second title. One nobody comes back to is ended after `idle_minutes`, and you get a
-  notification when it is found.
+  agent needs no second title. One nobody comes back to is ended after `idle_minutes`, once the provider
+  says again that it is gone, and you get a notification when it is found. A machine marked gone that
+  the provider says runs again is not gone any more. `environment()` of a gone machine shows what only the
+  machine could tell as not known (`git.ahead` and `git.dirty` null, `unsaved.unreachable`).
 
 ## What is on the VM, and what is not
 
@@ -1985,7 +2093,8 @@ Not on it:
   their calls name one with `on`. `environment()`'s calls show which client made each.
 - Files go in through git, `environment_upload` (a tarball of a local checkout, at most 512 MB), or
   `terminal_upload` and a job's `sync` (above); they come out through git, or
-  `environment_download(path)` (a one-use link to a file or folder in `/work`).
+  `environment_download(path)` (a one-use link to a file or folder in `/work`). What the browser
+  downloads is in `/work/downloads` when it runs on the VM ([Downloads](#downloads)).
 - The node checks where a push goes (declared repository, protected branch), not what the commits
   contain. Review a branch before you merge it.
 - On the dev node (`openajar dev up`), account browsers are simulated. The environment's machine,
@@ -2005,8 +2114,9 @@ Not on it:
 | `which_environment` | a call without the machine's handle: no `on` from a client with no session id, or a title or an id in `on` | the agent passes the `on` its environment_open gave, or opens its own |
 | `environment_already_open` | the title names an open environment with another repository | the agent picks another title |
 | `environment_in_use` | another chat of the agent holds the live machine with this title | the agent opens its own with another title; `take_over=true` once the holder has been quiet for `take_over_minutes` |
+| `saved_by_earlier_grant` | the title is a computer the agent had under an earlier agent grant of this computer (openajar 0.8.0 and before) | `openajar environments adopt`, then `--yes`; the agent then opens the same title |
 | `environment_not_ready` | the environment is starting, or its link is down (a restart, a dropped connection, this computer's address moved) and the node is bringing it back | wait a minute; `openajar environments show ID`, and `openajar logs --level warn --since 10m` if it does not come back |
-| `machine_gone`, or `state: "gone"` | the machine stopped for good: the provider says its container or server is off or no longer exists ("Costs and the reaper"). On your own machine: it restarted, or the container was removed there | the agent opens the same title again and gets a new machine; if it happens often, `docker ps -a` or the Hetzner console, and `openajar logs --level warn --since 30m` |
+| `machine_gone`, or `state: "gone"` | the machine stopped for good: the provider says, twice, that its container or server no longer exists or is dead; one that only stopped is started again, unless it stopped right after each of 3 starts in 30 minutes ("Costs and the reaper"). On your own machine: the container was removed there, or the machine was taken out with `machine remove` | the agent opens the same title again and gets a new machine; if it happens often, `docker ps -a` or the Hetzner console, and `openajar logs --level warn --since 30m` |
 | "your machine box is handed over whole, so it holds one environment at a time" | a whole machine has an environment open ([The whole machine](#the-whole-machine)) | close that one (`environment_close`: its work is saved), or add a second machine, or bring this one in with containers |
 | "box is held by an environment this openajar no longer has" (`machine check`) | the node's records no longer know the environment that holds the whole machine | `openajar environments machine check box --free` ends the hold and empties `/work` |
 | "machine homebox did not answer over ssh" | your own machine is off, asleep or out of reach from the node, or its address changed | switch it on; `openajar environments machine check homebox` says what is wrong. Its environments wait, they are not ended. A new address: `machine remove` and `machine add` again |

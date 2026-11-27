@@ -60,6 +60,10 @@ class EnvStore(SqliteStore):
             raise LaneNotFound(f"no terminal or service lane {lane_id}")
         return EnvLane.model_validate_json(rows[0][0])
 
+    def put_lane(self, lane: EnvLane) -> None:
+        """A lane's spec, replaced (a VM lane whose machine came back on another address or port)."""
+        self._q("UPDATE lanes SET spec=? WHERE id=?", (lane.model_dump_json(), lane.id))
+
     def has_lane(self, lane_id: str) -> bool:
         return bool(self._q("SELECT 1 FROM lanes WHERE id=?", (lane_id,)))
 

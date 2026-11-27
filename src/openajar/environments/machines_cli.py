@@ -122,15 +122,46 @@ def _live_elsewhere() -> list[Any]:
     return [r for r in VmStore(path).live() if r.provider != "own"]
 
 
-def _saves_on(name: str) -> list[Any]:
+def _saves_on(name: str) -> list[Any] | None:
+    """The saves whose disk is on that machine. None when a save on this computer does not read (a hand edit, a
+    newer version's): which saves keep their disk there is then not known, and unread is not "none" (the 0.7.0
+    audit, S1-05), so `machine remove` deletes no saved image there without --force."""
     from openajar.environments.saves import SaveStore
     from openajar.vms.own import IMAGE_SEP
 
+    store = SaveStore(_home())
     try:
-        saves = SaveStore(_home()).all()
+        if store.root.is_dir() and not store.whole():
+            return None
+        saves = store.all()
     except (OSError, ValueError):
-        return []
+        return None
     return [m for m in saves if m.snapshot is not None and m.snapshot.id.startswith(f"{name}{IMAGE_SEP}")]
+
+
+def whole_default(home: Path, s: Any) -> bool:
+    """Do new environments open on a machine of the owner's handed over whole (openajar.vms.whole)? For
+    `openajar environments setup`."""
+    if s.provider != "own":
+        return False
+    from openajar.vms import own
+
+    return own.is_whole(home, own.default_name(home, s))
+
+
+def own_image(home: Path, *, build: bool) -> None:
+    """`openajar environments setup --pull` and `--build` with provider = "own": the image on the machine new
+    environments open on (a machine handed over whole has none: its setup runs again)."""
+    from openajar.vms import own
+
+    name = own.default_name(home)
+    if name is None:
+        typer.echo("No machine is the default: openajar environments machine use NAME")
+        return
+    set_home(home)
+    m = own.load(home, name)
+    if not (_set_up(m) if m.mode == "whole" else _get_image(m, build=build)):
+        raise typer.Exit(1)
 
 
 def use_machine(home: Path, name: str) -> None:
@@ -559,7 +590,7 @@ def list_cmd(json_out: Annotated[bool, typer.Option("--json")] = False) -> None:
     rows = [{"name": m.name, "address": f"{m.user}@{m.host}" + (f":{m.port}" if m.port != 22 else ""),
              "default": m.name == current, "system": m.system, "arch": m.arch, "cores": m.cores,
              "memory_gb": m.memory_gb, "docker": m.docker_version, "open": len(_live_on(m.name)),
-             "saves": len(_saves_on(m.name)), "key": "yours" if m.key else "openajar's", "mode": m.mode}
+             "saves": _count(_saves_on(m.name)), "key": "yours" if m.key else "openajar's", "mode": m.mode}
             for m in own.every(_home())]
     if json_out:
         typer.echo(json.dumps({"machines": rows, "provider": settings.provider}, indent=2))
@@ -570,13 +601,17 @@ def list_cmd(json_out: Annotated[bool, typer.Option("--json")] = False) -> None:
     for r in rows:
         size = f"{r['cores']} CPU, {r['memory_gb']:g} GB" if r["cores"] else "not checked yet"
         mark = "new environments open here" if r["default"] else ""
-        held = (("in use" if r["open"] else "free") if r["mode"] == "whole"
-                else f"{r['open']} open, {r['saves']} saved")
+        saved = "saves unknown (one does not read)" if r["saves"] is None else f"{r['saves']} saved"
+        held = (("in use" if r["open"] else "free") if r["mode"] == "whole" else f"{r['open']} open, {saved}")
         typer.echo(f"{r['name']:<16} {r['address']:<32} {size:<18} {r['mode']:<11} {held}  {mark}".rstrip())
     if settings.provider != "own":
         where = {"docker": "in Docker on this computer"}.get(settings.provider, f"at {provider_name(settings.provider)}")
         typer.echo(f"New environments open {where} now. To open them on one of these: openajar environments "
                    "machine use NAME")
+
+
+def _count(found: list[Any] | None) -> int | None:
+    return None if found is None else len(found)
 
 
 def _check_whole(m: Any, *, setup: bool, free: bool) -> None:
@@ -694,6 +729,12 @@ def remove(name: Annotated[str, typer.Argument(metavar="NAME")],
     except OpenajarError as e:
         raise _fail(e) from None
     live, saves = _live_on(name), _saves_on(name)
+    if saves is None and not force:
+        from openajar.environments.saves import SaveStore
+
+        raise _fail(f"a save in {SaveStore(home).root} does not read, so whether a save keeps its disk on {name} is "
+                    "not known, and removing the machine would delete every saved image openajar made there. Fix or "
+                    "move that save's folder aside first, or --force deletes them")
     if (live or saves) and not force:
         what = []
         if live:

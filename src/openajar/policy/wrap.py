@@ -168,7 +168,7 @@ def wrap_tool(spec: ToolSpec, runtime: Any, *,
         if routing.routes(spec.name) and routing.wants_route(kwargs.get("on"), spec.name):
             try:
                 picked = routing.route(runtime, spec.name, kwargs, session=meta.session, grant_id=grant.id,
-                                       family=grant.root_id)
+                                       family=grant.env_family)
             except OpenajarError as e:
                 policy.traces.write(TraceEvent(kind="tool_end", tool=spec.name, effect=spec.effect.value,
                                                status="error", error=f"{e.code}: {e.message}", args=kwargs,
@@ -206,7 +206,7 @@ def wrap_tool(spec: ToolSpec, runtime: Any, *,
             ctx.precheck(spec.effect, lane_id=lane_id, lane_later=spec.name in routing.PICKS_LANE)
             with _freeze_guard(runtime, spec.name, lane_id, grant, kwargs.get("workspace")), \
                     routing.studio_proxy(runtime, spec.name, kwargs, session=meta.session,
-                                         grant_id=grant.id, family=grant.root_id) as studio_lane:
+                                         grant_id=grant.id, family=grant.env_family) as studio_lane:
                 env_lane[0] = env_lane[0] or studio_lane
                 since = routing.now(runtime) if spec.name in routing.NETWORK_TOOLS else None
                 result = await _frozen_aware(runtime, ctx, spec.handler(ctx, **kwargs))

@@ -30,7 +30,7 @@ from openajar.vms.digitalocean import (
 )
 from openajar.vms.manager import VmManager
 from openajar.vms.models import VmError, VmSettings
-from openajar.vms.provider import ServerSpec, capable
+from openajar.vms.provider import NOT_OURS, ServerSpec, capable
 
 TOKEN = "dop_v1_" + "t" * 20  # made up, put together here
 SIZES = [
@@ -155,8 +155,13 @@ class FakeDigitalOcean:
         return httpx.Response(204) if self.droplets.pop(int(did), None) is not None else self._gone()
 
     def post_droplet_actions(self, req, body, did):
-        assert body["type"] == "snapshot"
         d = self.droplets[int(did)]
+        if body["type"] == "power_on":
+            aid = self._id()
+            d["status"] = "active"
+            self.actions[aid] = {"id": aid, "status": "in-progress", "type": "power_on", "left": self.slow_actions}
+            return httpx.Response(201, json={"action": {"id": aid, "status": "in-progress", "type": "power_on"}})
+        assert body["type"] == "snapshot"
         iid, aid = self._id(), self._id()
         self.images[iid] = {"id": iid, "name": body["name"], "type": "snapshot", "status": "available",
                             "min_disk_size": 80, "size_gigabytes": 2.36, "regions": [d["region"]["slug"]],
@@ -510,6 +515,89 @@ async def test_a_droplet_deleted_outside_openajar_is_found_gone(node):
     do.droplets.clear()
     out = await vms.reap_once()
     assert out["gone"] == [rec.id] and vms.store.get(rec.id).delete_reason == "deleted outside openajar"
+
+
+# ---------------------------------------------------------------- a delete needs positive evidence (F1)
+
+async def test_a_droplet_or_a_snapshot_without_this_homes_tag_is_never_deleted(node):
+    """S5b-05, S5b-06: a delete went by bare id, and a DigitalOcean token reaches every Droplet and snapshot of
+    its team, the owner's other ones too. A delete reads the Droplet or the snapshot back first and refuses one
+    without this home's tag; a record that names one (a vms.db from a backup, a save imported from another
+    node) waits with its error, and the owner hears of it as overdue."""
+    vms, _, do, prov = node
+    assert vms.provider() is prov and prov.home_id == vms.home_id  # the node hands its provider this home's id
+    theirs = provider(do)
+    blog = await theirs.create_server(ServerSpec(name="blog", server_type="s-2vcpu-4gb", image="ubuntu-24-04-x64",
+                                                 location="fra1", user_data="", labels={}))
+    other = await theirs.create_server(ServerSpec(name="agentos-vm-x", server_type="s-2vcpu-4gb",
+                                                  image="ubuntu-24-04-x64", location="fra1", user_data="",
+                                                  labels={"agentos-home": "anotherhome"}))
+    shot = await theirs.create_snapshot(blog.id, "the blog", {})
+    for sid, words in ((blog.id, "not openajar's"), (other.id, "another openajar home's")):
+        with pytest.raises(VmError, match=words) as e:
+            await prov.delete_server(sid)
+        assert e.value.provider_code == NOT_OURS
+    with pytest.raises(VmError, match="snapshot .* not openajar's"):
+        await prov.delete_image(shot)
+    rec = await vms.create("dev/a", ttl_minutes=60, wait_s=0)
+    do.boot(rec.provider_id)
+    await vms._boots[rec.id]
+    rec = vms.store.get(rec.id)
+    rec.provider_id = blog.id
+    vms.store.put(rec)
+    after = await vms._delete(rec, "time limit")  # never retried: no try turns another's Droplet into this home's
+    assert after.state == "deleted" and after.lost and "not openajar's" in (after.delete_reason or "")
+    assert rec.id not in [r.id for r in vms.store.live()]  # it holds no slot of max_live and books no budget
+    assert {int(blog.id), int(other.id)} <= set(do.droplets) and int(shot) in do.images
+    assert not any(m == "DELETE" and p in (f"/droplets/{blog.id}", f"/droplets/{other.id}", f"/images/{shot}")
+                   for m, p in do.calls)
+    # one of this home's goes, and one DigitalOcean says is not there is done
+    two = await vms.create("dev/b", ttl_minutes=60, wait_s=0)
+    do.boot(two.provider_id)
+    await vms._boots[two.id]
+    mine = await vms.snapshot(two.id, description="s", labels={"agentos-save": "s1"})
+    await prov.delete_image(mine["id"])
+    assert int(mine["id"]) not in do.images
+    await prov.delete_server("99999")
+
+
+async def test_a_droplet_that_is_off_is_powered_on_not_deleted(node):
+    """S1-04 at DigitalOcean: a Droplet that is off (an agent's poweroff, a host event) has its disk whole. It
+    is powered on again with its address, never read as gone."""
+    vms, _, do, prov = node
+    rec = await vms.create("dev/a", ttl_minutes=60, wait_s=0)
+    do.boot(rec.provider_id)
+    await vms._boots[rec.id]
+    do.droplets[int(rec.provider_id)]["status"] = "off"
+    assert (await prov.get_server(rec.provider_id)).status == "off"
+    assert await vms.start_machine(rec.id) is True
+    assert do.droplets[int(rec.provider_id)]["status"] == "active"
+    assert ("POST", f"/droplets/{rec.provider_id}/actions") in do.calls
+    assert vms.store.get(rec.id).state == "ready" and int(rec.provider_id) in do.droplets
+
+
+async def test_a_droplet_one_listing_left_out_is_read_back_and_silence_ends_nothing(node, monkeypatch):
+    """S1-11 at DigitalOcean: one listing that left a Droplet out marked it deleted. It is read back by its id,
+    and a DigitalOcean that does not answer decides nothing either way."""
+    vms, _, do, prov = node
+    rec = await vms.create("dev/a", ttl_minutes=60, wait_s=0)
+    do.boot(rec.provider_id)
+    await vms._boots[rec.id]
+    real = prov.list_servers
+
+    async def short(labels):
+        return [s for s in await real(labels) if s.id != rec.provider_id]
+
+    monkeypatch.setattr(prov, "list_servers", short)
+    out = await vms.reap_once()
+    assert out["gone"] == [] and vms.store.get(rec.id).state == "ready"
+
+    async def no_answer(server_id):
+        raise VmError("DigitalOcean API unreachable (ConnectTimeout)", provider_code="unreachable")
+
+    monkeypatch.setattr(prov, "get_server", no_answer)
+    out = await vms.reap_once()
+    assert out["gone"] == [] and vms.store.get(rec.id).state == "ready" and int(rec.provider_id) in do.droplets
 
 
 # ---------------------------------------------------------------- the CLI says it is experimental

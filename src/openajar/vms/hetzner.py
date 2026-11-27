@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 
 from openajar.vms.models import VmError
-from openajar.vms.provider import Server, ServerSpec
+from openajar.vms.provider import Server, ServerSpec, check_ours
 
 log = logging.getLogger("openajar.vms")
 
@@ -63,6 +63,10 @@ class HetznerProvider:
     name = "hetzner"
     firewall = True
     capabilities = frozenset({"firewall", "snapshot", "network_policy", "cloud_init"})
+    # this openajar home's id (vms/home-id; VmManager.provider sets it): a server, a snapshot or an SSH key is
+    # deleted by its id, and a firewall's rules or a server's labels changed, only once Hetzner reads back this
+    # home's label on it (openajar.vms.provider.check_ours). The project may hold the owner's production servers.
+    home_id: str | None = None
 
     def __init__(self, token: str, *, api_url: str = "https://api.hetzner.cloud/v1",
                  transport: httpx.AsyncBaseTransport | None = None):
@@ -165,6 +169,17 @@ class HetznerProvider:
             await asyncio.sleep(3)
         raise VmError(f"Hetzner: action {aid} did not finish in {int(timeout_s)} s")
 
+    async def _ours(self, kind: str, key: str, obj_id: str, *, act: str = "delete it") -> dict | None:
+        """One object read back by its id before a delete or a change: None when Hetzner has none (a 404), else
+        the object once it carries this home's label. One without it is refused (check_ours), and so is one
+        whose answer is not that kind of object: nothing is ever deleted by a bare id."""
+        data = await self._call("GET", f"/{kind}/{obj_id}", ok_404=True)
+        if data is None:
+            return None
+        obj = data.get(key) if isinstance(data.get(key), dict) else {}
+        check_ours(obj.get("labels"), self.home_id, f"Hetzner: {key.replace('_', ' ')} {obj_id}", act=act)
+        return obj
+
     # ------------------------------------------------------------------ provider
     async def check(self) -> None:
         await self._call("GET", "/servers", params={"per_page": 1})
@@ -245,10 +260,23 @@ class HetznerProvider:
         return [_server(d) for d in await self._paged("/servers", "servers", {"label_selector": _selector(labels)})]
 
     async def delete_server(self, server_id: str) -> None:
-        await self._call("DELETE", f"/servers/{server_id}", ok_404=True)
+        """Delete a server of this home: read back first, a 404 is done, one without this home's label refused."""
+        if await self._ours("servers", "server", server_id) is not None:
+            await self._call("DELETE", f"/servers/{server_id}", ok_404=True)
+
+    async def start_server(self, server_id: str) -> Server | None:
+        """Power on a server that is off (an agent's poweroff): its disk and address as they were. The server
+        once Hetzner says the action is done, else None."""
+        data = await self._call("POST", f"/servers/{server_id}/actions/poweron") or {}
+        await self._wait_action(data.get("action"), timeout_s=300)
+        server = await self.get_server(server_id)
+        return server if server is not None and server.status == "running" else None
 
     async def update_labels(self, server_id: str, labels: dict[str, str]) -> None:
-        """Replace a server's labels (a warm machine bound to an environment, openajar.environments.warmpool)."""
+        """Replace a server's labels (a warm machine bound to an environment, openajar.environments.warmpool), only
+        on one of this home's: its label written on another would make that one look like this home's."""
+        if await self._ours("servers", "server", server_id, act="change its labels") is None:
+            raise VmError(f"Hetzner has no server {server_id}", provider_code="not_found")
         await self._call("PUT", f"/servers/{server_id}", body={"labels": labels})
 
     async def ensure_firewall(self, name: str, labels: dict[str, str], ssh_from: list[str]) -> str:
@@ -266,6 +294,9 @@ class HetznerProvider:
         found = data.get("firewalls") or []
         if found:
             fid = str(found[0]["id"])
+            check_ours(found[0].get("labels"), self.home_id, f"Hetzner: firewall {name} ({fid})",
+                       act="use it or change its rules",
+                       then="rename or remove that firewall in the Hetzner console, or set firewall = false in vms.toml")
             if [_rule_key(r) for r in found[0].get("rules") or []] != [_rule_key(r) for r in rules]:
                 res = await self._call("POST", f"/firewalls/{fid}/actions/set_rules", body={"rules": rules}) or {}
                 for a in res.get("actions") or []:
@@ -280,7 +311,9 @@ class HetznerProvider:
         return str(data["ssh_key"]["id"])
 
     async def delete_ssh_key(self, key_id: str) -> None:
-        await self._call("DELETE", f"/ssh_keys/{key_id}", ok_404=True)
+        """Delete an SSH key of this home: read back first, a 404 is done, one without this home's label refused."""
+        if await self._ours("ssh_keys", "ssh_key", key_id) is not None:
+            await self._call("DELETE", f"/ssh_keys/{key_id}", ok_404=True)
 
     async def list_ssh_keys(self, labels: dict[str, str]) -> list[tuple[str, str]]:
         keys = await self._paged("/ssh_keys", "ssh_keys", {"label_selector": _selector(labels)})
@@ -329,7 +362,10 @@ class HetznerProvider:
                 "gb": float(size) if size is not None else None, "labels": dict(img.get("labels") or {})}
 
     async def delete_image(self, image_id: str) -> None:
-        await self._call("DELETE", f"/images/{image_id}", ok_404=True)
+        """Delete a snapshot of this home (a save's, an image build's): read back first, a 404 is done, and one
+        without this home's label refused (a save imported from another home names that home's snapshot)."""
+        if await self._ours("images", "image", image_id) is not None:
+            await self._call("DELETE", f"/images/{image_id}", ok_404=True)
 
     async def list_images(self, labels: dict[str, str]) -> list[dict]:
         """The snapshots that carry every label: {id, status, created, gb, labels}. A save looks for

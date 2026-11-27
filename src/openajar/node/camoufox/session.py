@@ -35,7 +35,8 @@ async def _close_browser(browser: Any) -> None:
 
 class CamoufoxSession:
     def __init__(self, playwright: Any, context: Any, profile_dir: Path, pid: int | None,
-                 close_timeout: float, *, files: LaneFiles | None = None, dialog_timeout: float = DIALOG_TIMEOUT):
+                 close_timeout: float, *, files: LaneFiles | None = None, dialog_timeout: float = DIALOG_TIMEOUT,
+                 machine: Any = None):
         self._pw = playwright
         self._ctx = context
         self._profile_dir = profile_dir
@@ -47,7 +48,8 @@ class CamoufoxSession:
         self.pin_notes: list[tuple[str, dict[str, Any]]] = []
         self.signer: Any = None  # the lane's webbotauth.route.LaneSigner while it signs
         context.on("close", lambda *_: setattr(self, "_ctx_closed", True))
-        self.tracker = PageTracker(context, files=files, dialog_timeout=dialog_timeout)
+        # machine: where a browser that runs elsewhere keeps its downloads (openajar.environments.vmdownloads)
+        self.tracker = PageTracker(context, files=files, dialog_timeout=dialog_timeout, machine=machine)
         self.routes = RouteDispatcher(context)  # the only owner of this context's routes
         self.guard: LaneGuard | None = None     # the lane's egress guard (set by the engine)
         # what its browser was launched with (the pinned config, prefs and proxy): the signed-out

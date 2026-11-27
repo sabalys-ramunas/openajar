@@ -48,7 +48,7 @@ from typing import Any
 import httpx
 
 from openajar.vms.models import VmError
-from openajar.vms.provider import Server, ServerSpec
+from openajar.vms.provider import Server, ServerSpec, check_ours
 
 log = logging.getLogger("openajar.vms")
 
@@ -156,6 +156,9 @@ class MorphProvider:
     # what an image build keeps: Morph's gateway signs in with the instance's own key and host key
     script_prefix = "export OPENAJAR_KEEP_SSH=1\n"
     retry_delays: tuple[float, ...] = RETRY_DELAYS_S
+    # this openajar home's id (vms/home-id; VmManager.provider sets it): an instance or a snapshot is deleted by
+    # its id only once Morph reads back this home's label in its metadata (openajar.vms.provider.check_ours)
+    home_id: str | None = None
 
     def __init__(self, token: str, *, api_url: str = API_URL, ssh_host: str = SSH_HOST,
                  base_image: str = BASE_IMAGE, usd_per_mcu: float = 0.05, storage_usd_per_gb_month: float = 0.0073,
@@ -366,6 +369,12 @@ class MorphProvider:
         return [self._server(d) for d in (data or {}).get("data") or []]
 
     async def delete_server(self, server_id: str) -> None:
+        """Delete an instance of this home: read back first, a 404 is done, and one without this home's label in
+        its metadata is refused (the account may run other instances; never a DELETE by a bare id)."""
+        data = await self._call("GET", f"/instance/{server_id}", ok_404=True) if server_id else None
+        if data is None:
+            return
+        check_ours(data.get("metadata"), self.home_id, f"Morph: instance {server_id}")
         await self._call("DELETE", f"/instance/{server_id}", ok_404=True)
 
     async def ensure_firewall(self, name: str, labels: dict[str, str], ssh_from: list[str]) -> str:
@@ -423,6 +432,11 @@ class MorphProvider:
         return None if snap is None else self._image(snap)
 
     async def delete_image(self, image_id: str) -> None:
+        """Delete a snapshot of this home: read back first, a 404 is done, one without this home's label refused."""
+        snap = await self._snapshot(image_id) if image_id else None
+        if snap is None:
+            return
+        check_ours(snap.get("metadata"), self.home_id, f"Morph: snapshot {image_id}")
         await self._call("DELETE", f"/snapshot/{image_id}", ok_404=True)
 
     async def list_images(self, labels: dict[str, str]) -> list[dict]:

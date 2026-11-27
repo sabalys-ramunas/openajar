@@ -1,6 +1,7 @@
 """Who a tool call is, as environments see it: its grant, its grant family and its binding.
 
-A call reaches the environments of its grant family (the root grant), and one without `on` goes to
+A call reaches the environments of its grant family (the root grant, or for a local agent grant that
+replaced an earlier one, the family it continues: openajar.policy.families), and one without `on` goes to
 the environment bound to it: the MCP session (one chat), else the grant (stdio). The tools read
 these from the call's ToolContext; the "environments" service takes the call itself
 (`EnvironmentManager.bound_to_call`), so a lower layer (whoami, in openajar.node) asks it without
@@ -34,13 +35,20 @@ def grant_id(ctx: Any) -> str:
     return f"agent:{pid}" if pid else "owner"
 
 
+def grant_family(grant: Any) -> str | None:
+    """The family whose environments a grant reaches: its root grant's id, or the family a local agent
+    grant continues from the one it replaced (Grant.env_family, openajar.policy.families)."""
+    found = getattr(grant, "env_family", None) or getattr(grant, "root_id", None)
+    return str(found) if found else None
+
+
 def family(ctx: Any) -> str | None:
-    """The caller's grant family (its root grant), whose environments it reaches. None: the owner
+    """The caller's grant family (grant_family), whose environments it reaches. None: the owner
     with no policy on the node, who reaches every one."""
     g = grant_of(ctx)
     if g is None:
         return None
-    return str(getattr(g, "root_id", None) or grant_id(ctx))
+    return grant_family(g) or grant_id(ctx)
 
 
 def binding(ctx: Any) -> str:

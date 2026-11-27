@@ -38,6 +38,7 @@ all sharing the state its __init__ sets up:
   authorize.py   the decision itself: `authorize_call`, which runs the order above, with the
                  routing, taint and approval steps (6 to 8)
   registry.py    keys, issuing, narrowing, resolving and revoking grants (step 2)
+  families.py    the environment family a replacing local agent grant keeps, and the ones left behind
   scope.py       lane, domain and effect inside the grant (steps 3 and 4)
   budgets.py     budgets, brain quotas and the day's meters (step 5)
   lane_pace.py   a lane's posting pace and waking hours (step 5, for a commit)
@@ -72,6 +73,7 @@ from openajar.policy.confirm import DeviceStore, default_registry
 from openajar.policy.confirm_chat import ChatConfirm
 from openajar.policy.confirmation import ConfirmationStore
 from openajar.policy.errors import Denied
+from openajar.policy.families import FamiliesMixin
 from openajar.policy.grants import Grant
 from openajar.policy.keys import KeyRing, link_key
 from openajar.policy.lane_pace import LanePaceMixin
@@ -139,6 +141,8 @@ def _migrate(db: DB) -> None:
         db.execute("ALTER TABLE grants ADD COLUMN v INTEGER NOT NULL DEFAULT 1")
     if "block_sha256" not in cols:
         db.execute("ALTER TABLE grants ADD COLUMN block_sha256 TEXT")
+    if "env_family" not in cols:  # the family a local agent grant continues (openajar.policy.families)
+        db.execute("ALTER TABLE grants ADD COLUMN env_family TEXT")
     # a v2 revocation id comes from the block's signature, so it names exactly one grant; v1 ids
     # were block data (an offline child could copy one) and are no longer used to revoke
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS grants_rid_v2 ON grants(rid) WHERE v >= 2")
@@ -156,8 +160,8 @@ def _panel_url(node_config: NodeConfig | None) -> str:
     return f"http://localhost:{port}"
 
 
-class PolicyService(AuthorizeMixin, GrantRegistryMixin, MembersMixin, PrincipalsMixin, ScopeMixin, BudgetsMixin, LanePaceMixin,
-                    TaintMixin, RunGrantsMixin):
+class PolicyService(AuthorizeMixin, GrantRegistryMixin, FamiliesMixin, MembersMixin, PrincipalsMixin, ScopeMixin,
+                    BudgetsMixin, LanePaceMixin, TaintMixin, RunGrantsMixin):
     """Runtime service "policy". Its methods outside the authorization decision come from the mixins
     (see the module docstring); every one of them reads the state set up here."""
 

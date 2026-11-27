@@ -41,7 +41,7 @@ from typing import Any
 from openajar.core.models import utcnow
 from openajar.vms import own
 from openajar.vms.docker import SIZE_TYPES
-from openajar.vms.models import VmError, VmSettings
+from openajar.vms.models import VmError, VmSettings, home_id_of
 from openajar.vms.own import (
     ARCHES,
     MIN_FREE_GB,
@@ -53,7 +53,7 @@ from openajar.vms.own import (
     known_hosts_path,
     unreachable,
 )
-from openajar.vms.provider import Server, ServerSpec
+from openajar.vms.provider import Server, ServerSpec, check_ours
 from openajar.vms.ssh import PGID_DIR
 
 STATE_DIR = "/var/lib/openajar-machine"
@@ -241,6 +241,7 @@ class WholeMachine:
 
     def __init__(self, home: Path, machine: Machine, settings: VmSettings):
         self.home, self.machine, self.settings = Path(home), machine, settings
+        self.home_id = home_id_of(self.home)  # a release reads this home's label back first (delete_server)
         self.said = f"machine {machine.name}"
         self._keys: dict[str, tuple[str, dict[str, str]]] = {}
 
@@ -327,9 +328,13 @@ class WholeMachine:
         return [self._server(state)]
 
     async def delete_server(self, server_id: str) -> None:
+        """Release the machine (empty /work, end what ran there) when this home's environment holds it: the
+        machine itself says who holds it, by id and by this home's label. Held by none, or by another id:
+        nothing to release."""
         state = await self.held()
         if not server_id or state is None or state.get("id") != server_id:
             return
+        check_ours(state.get("labels"), self.home_id, f"{self.said}: the environment that holds it ({server_id})")
         await self._root(release_script(server_id, str(state.get("key") or "")), timeout_s=RELEASE_TIMEOUT_S)
 
     async def sweep(self, labels: dict[str, str]) -> list[str]:

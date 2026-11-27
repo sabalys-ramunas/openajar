@@ -189,15 +189,27 @@ def _installed(name: str) -> Any | None:
         raise
 
 
-def build_services(runtime: Runtime, modules: Sequence[str] = FEATURE_SERVICES) -> list[tuple[str, Any]]:
-    """Build every installed feature service, in order, and remember them for start and stop."""
+class ServiceBuildError(RuntimeError):
+    """A required service did not build, so the node does not start. `module` names it."""
+
+    def __init__(self, module: str, cause: BaseException):
+        super().__init__(f"{module} failed to build ({type(cause).__name__}: {cause}); refusing to start without it")
+        self.module, self.cause = module, cause
+
+
+def build_services(runtime: Runtime, modules: Sequence[str] = FEATURE_SERVICES, *,
+                   required: frozenset[str] | None = None) -> list[tuple[str, Any]]:
+    """Build every installed feature service, in order, and remember them for start and stop. One in
+    `required` (REQUIRED_SERVICES when not given) that does not build stops the start (ServiceBuildError);
+    any other is left out."""
+    required = REQUIRED_SERVICES if required is None else required
     built: list[tuple[str, Any]] = runtime.get(SERVICES_KEY) or []
     for name in modules:
-        required = name in REQUIRED_SERVICES
+        needed = name in required
         try:
             module = _installed(name)
             if module is None:
-                if required:  # never skipped: without the policy every MCP call would run as the owner
+                if needed:  # never skipped: without the policy every MCP call would run as the owner
                     raise ModuleNotFoundError(f"{name} is not installed", name=name)
                 log.info("%s is not installed", name)
                 continue
@@ -206,9 +218,8 @@ def build_services(runtime: Runtime, modules: Sequence[str] = FEATURE_SERVICES) 
             if service_name and not runtime.has(service_name):
                 runtime.register(service_name, service)  # builds that leave registering to the caller
         except Exception as exc:
-            if required:
-                raise RuntimeError(f"{name} failed to build ({type(exc).__name__}: {exc}); refusing to "
-                                   "start without it") from exc
+            if needed:
+                raise ServiceBuildError(name, exc) from exc
             log.exception("%s failed to build; it is not available on this node", name)
             continue
         log.info("built %s", name)

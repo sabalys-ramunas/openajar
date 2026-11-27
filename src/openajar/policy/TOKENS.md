@@ -316,7 +316,10 @@ decide approvals, and nothing they are given opens the owner's credential.
 ## Family key
 
 Taint, the denial cooldown and the pending cap are keyed by `family:<root grant id>`, the same
-for v1 and v2 roots.
+for v1 and v2 roots. The computers a grant reaches (environments, saves, logins bound by title) are
+keyed on `Grant.env_family` instead: the root id, or the family a local agent grant continues from the
+one it replaced (the registry's `env_family` column, set only by `issue(continues=...)`;
+openajar.policy.families). The token's bytes do not carry it.
 
 ## Test vectors
 

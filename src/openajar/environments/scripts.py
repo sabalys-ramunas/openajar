@@ -4,10 +4,11 @@ first argument), so the same script runs on a VM ("/") and in tests (a folder).
 
 SAVE writes a save's file part into a staging folder and prints what it found, one `key=value` line
 each: the repositories under /work with their branch, HEAD, stashes and the commits no remote has (a
-git bundle each, checked with `git bundle verify`), the changed and new files git does not ignore
-(never .env files or node_modules, never anything outside /work and the keep_paths), the deleted
-paths, the docker containers that run, and a sha256 of each file it wrote. A line `error=...` and a
-non-zero exit say what failed (exit 7: the file part is past the size cap).
+git bundle each, checked with `git bundle verify`), the changed and new files git does not ignore,
+staged or not, and every other file on the disk that `git status` lists (never .env files or node_modules,
+never anything outside /work and the keep_paths), the deleted paths (only those not on the disk), each
+repository's `git status` paths (r<n>.status, which the node checks the file part against:
+openajar.environments.savecheck), the docker containers that run, and a sha256 of each file it wrote. A line `error=...` and a non-zero exit say what failed (exit 7: the file part is past the size cap).
 """
 
 from __future__ import annotations
@@ -74,13 +75,38 @@ while IFS= read -r gitdir; do
   fi
   rm -f "$S/$R.err"
   for ref in $(gx for-each-ref --format='%(refname)' refs/agentos-save); do gx update-ref -d "$ref"; done
-  gx ls-files -z -d > "$S/$R.deleted" || { echo "error=could not write to the disk (is it full?)"; exit 3; }
-  gx ls-files -z -m -o --exclude-standard | while IFS= read -r -d '' f; do
+  # what differs from HEAD, staged or not, and what git does not track yet (the 0.7.0 audit, S1-02: ls-files -m
+  # left out what was staged with git add); with no commit yet, everything in the index
+  if [ -n "$H" ]; then
+    gx diff --name-only -z --no-renames --diff-filter=D HEAD > "$S/$R.gone" \
+      || { echo "error=could not write to the disk (is it full?)"; exit 3; }
+    { gx diff --name-only -z --no-renames --diff-filter=d HEAD; gx ls-files -z -o --exclude-standard; }
+  else
+    gx ls-files -z -d > "$S/$R.gone" || { echo "error=could not write to the disk (is it full?)"; exit 3; }
+    gx ls-files -z -c -o --exclude-standard
+  fi | while IFS= read -r -d '' f; do
     p="$D/$f"
     [ -e "$p" ] || [ -L "$p" ] || continue
     case "/$f" in */node_modules/*|*/.env|*/.env.*) continue;; esac
     printf '%s\0' "$p"
   done >> "$LIST"
+  # deleted is only what is not on the disk: `git rm --cached` leaves the file there, and a resume that deleted
+  # it would lose it (it is in the file part instead)
+  while IFS= read -r -d '' f; do
+    [ -e "$D/$f" ] || [ -L "$D/$f" ] || printf '%s\0' "$f"
+  done < "$S/$R.gone" > "$S/$R.deleted" || { echo "error=could not write to the disk (is it full?)"; exit 3; }
+  rm -f "$S/$R.gone"
+  # each path git status lists, c (on the disk) or d (not): the node checks that the file part holds them. Each
+  # file on the disk goes into the file part too (a path untracked and ignored after `git rm --cached`, a staged
+  # change the work tree took back), so the file part holds what git reports
+  gx status --porcelain=v1 -z --untracked-files=all --no-renames 2>/dev/null | while IFS= read -r -d '' e; do
+    f=${e:3}; p="$D/$f"
+    case "/$f" in */node_modules/*|*/.env|*/.env.*) continue;; esac
+    if [ -e "$p" ] || [ -L "$p" ]; then
+      printf 'c%s\0' "$f"
+      if [ -f "$p" ] || [ -L "$p" ]; then printf '%s\0' "$p" >> "$LIST"; fi  # status-list
+    else printf 'd%s\0' "$f"; fi
+  done > "$S/$R.status" || { echo "error=could not write to the disk (is it full?)"; exit 3; }
 done < "$S/repos.txt"
 find "$W" -mindepth 1 \( -name node_modules -o -name .venv -o -name __pycache__ -o -name .git \) -prune -o \
   -type d -exec test -e '{}/.git' \; -prune -o \( -type f -o -type l \) ! -name .env ! -name '.env.*' -print0 \
@@ -92,6 +118,7 @@ for k in $KEEP; do
   if [ $((KB + ${kb:-0})) -gt "$KEEP_CAP_KB" ]; then echo "keep_skipped=/$k ${kb:-0}"; continue; fi
   KB=$((KB + ${kb:-0})); printf '%s\0' "$k" >> "$LIST"; echo "keep=/$k"
 done
+if [ -s "$LIST" ] && sort -zu "$LIST" > "$LIST.u" 2>/dev/null; then mv -f "$LIST.u" "$LIST"; else rm -f "$LIST.u"; fi
 echo "files=$(tr -cd '\000' < "$LIST" | wc -c | tr -d ' ')"
 if [ -s "$LIST" ]; then
   tar -czf "$S/files.tgz" --null -T "$LIST" 2>"$S/tar.err"

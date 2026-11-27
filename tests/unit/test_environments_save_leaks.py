@@ -113,12 +113,12 @@ async def test_the_sweep_deletes_old_orphan_snapshots_and_tells_the_owner(node):
     cloud.image_created["snap-image"] = old
     kept = await mgr.save_env(mgr.store.open()[0], kind="save")  # a real save's snapshot stays
     cloud.image_created[kept.snapshot.id] = old
-    swept = await mgr.sweep_snapshots(force=True)
-    assert swept["deleted"] == ["snap-old"] and swept["waiting"] == ["snap-new"]
-    assert {"snap-new", "snap-other-home", "snap-image", kept.snapshot.id} <= set(cloud.snapshots)
-    assert any("Leftover environment snapshots" in t for t, _ in node["told"])
+    swept = await mgr.sweep_snapshots(force=True)  # the grace runs from this process's own first sight (S1-05)
+    assert swept["deleted"] == [] and sorted(swept["waiting"]) == ["snap-new", "snap-old"]
     later = datetime.now(UTC) + saving.SNAPSHOT_GRACE + timedelta(minutes=1)
-    assert (await mgr.sweep_snapshots(later, force=True))["deleted"] == ["snap-new"]
+    assert sorted((await mgr.sweep_snapshots(later, force=True))["deleted"]) == ["snap-new", "snap-old"]
+    assert {"snap-other-home", "snap-image", kept.snapshot.id} <= set(cloud.snapshots)
+    assert any("Leftover environment snapshots" in t for t, _ in node["told"])
     assert (await mgr.sweep_snapshots(later + timedelta(minutes=1)))  == {}  # once per SNAPSHOT_SWEEP
 
 

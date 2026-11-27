@@ -39,7 +39,7 @@ from typing import Any
 import httpx
 
 from openajar.vms.models import VmError
-from openajar.vms.provider import Server, ServerSpec
+from openajar.vms.provider import Server, ServerSpec, check_ours
 
 log = logging.getLogger("openajar.vms")
 
@@ -146,6 +146,9 @@ class DigitalOceanProvider:
     capabilities = frozenset({"firewall", "snapshot", "network_policy", "cloud_init"})
     retry_delays: tuple[float, ...] = RETRY_DELAYS_S
     action_poll_s: float = ACTION_POLL_S
+    # this openajar home's id (vms/home-id; VmManager.provider sets it): a Droplet or a snapshot is deleted by its
+    # id only once DigitalOcean reads back this home's tag on it (openajar.vms.provider.check_ours)
+    home_id: str | None = None
 
     def __init__(self, token: str, *, api_url: str = API_URL, eur_per_usd: float = 0.86, location: str = "fra1",
                  transport: httpx.AsyncBaseTransport | None = None):
@@ -314,10 +317,23 @@ class DigitalOceanProvider:
         return [_server(d) for d in await self._paged("/droplets", "droplets", params) if _has(d.get("tags"), labels)]
 
     async def delete_server(self, server_id: str) -> None:
+        """Delete a Droplet of this home: read back first, a 404 is done, and one without this home's tag is
+        refused (the account may hold the owner's other Droplets; never a DELETE by a bare id)."""
         data = await self._call("GET", f"/droplets/{server_id}", ok_404=True)
+        if data is None:
+            return  # DigitalOcean says there is none: nothing to delete
+        tags = (data.get("droplet") or {}).get("tags")
+        check_ours(labels_of(tags), self.home_id, f"DigitalOcean: droplet {server_id}")
         await self._call("DELETE", f"/droplets/{server_id}", ok_404=True)
-        if data is not None:
-            await self._drop_tags((data.get("droplet") or {}).get("tags"))
+        await self._drop_tags(tags)
+
+    async def start_server(self, server_id: str) -> Server | None:
+        """Power on a Droplet that is off (an agent's poweroff, a host event): its disk and address as they were.
+        The server once DigitalOcean says it is active, else None."""
+        data = await self._call("POST", f"/droplets/{server_id}/actions", body={"type": "power_on"}) or {}
+        await self._wait_action(data.get("action"), timeout_s=300)
+        server = await self.get_server(server_id)
+        return server if server is not None and server.status == "running" else None
 
     async def _drop_tags(self, tags: list[str] | None) -> None:
         """Delete the tags that named this one machine or save (OWN_KEYS). Never a reason to fail a delete."""
@@ -450,10 +466,15 @@ class DigitalOceanProvider:
         return None if img["status"] in ("deleted", "retired") else img
 
     async def delete_image(self, image_id: str) -> None:
+        """Delete a snapshot of this home (a save's, a prepared machine's): read back first, a 404 is done, and
+        one without this home's tag is refused (never a DELETE by a bare id)."""
         data = await self._call("GET", f"/images/{image_id}", ok_404=True)
+        if data is None:
+            return  # DigitalOcean says there is none: nothing to delete
+        tags = (data.get("image") or {}).get("tags")
+        check_ours(labels_of(tags), self.home_id, f"DigitalOcean: snapshot {image_id}")
         await self._call("DELETE", f"/images/{image_id}", ok_404=True)
-        if data is not None:
-            await self._drop_tags((data.get("image") or {}).get("tags"))
+        await self._drop_tags(tags)
 
     async def list_images(self, labels: dict[str, str]) -> list[dict]:
         """The snapshots that carry every label (a save looks for its own after a create call that failed)."""

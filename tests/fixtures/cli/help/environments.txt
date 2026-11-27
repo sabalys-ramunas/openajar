@@ -30,6 +30,8 @@
 │ allow        Set the limits that bound the environments agents open.         │
 │ setup        Check what environments need on this node, and say what is      │
 │              missing.                                                        │
+│ adopt        Give the computers of this computer's earlier agent grants to   │
+│              its current one.                                                │
 │ prepare      Build the repository's prepared machine now, and show its       │
 │              steps.                                                          │
 │ resume       Resume a saved environment now, held by no chat, and give its   │

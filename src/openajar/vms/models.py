@@ -25,6 +25,20 @@ PROVIDER_NAMES = {"hetzner": "Hetzner", "docker": "Docker", "morph": "Morph", "d
 def provider_name(provider: str | None) -> str:
     return PROVIDER_NAMES.get(provider or "", (provider or "").capitalize()) or "The provider"
 
+
+HOME_ID_FILE = "home-id"  # in vms/: this OPENAJAR_HOME's own id in the provider's labels (agentos-home)
+_HOME_ID_RE = re.compile(r"^[a-z0-9]{8,32}$")
+
+
+def home_id_of(home: Path) -> str | None:
+    """This home's id as vms/home-id holds it (openajar.vms.manager makes it before it labels anything), or
+    None when there is none: then nothing a provider holds carries it."""
+    try:
+        found = (Path(home) / "vms" / HOME_ID_FILE).read_text().strip()
+    except FileNotFoundError:
+        return None
+    return found if _HOME_ID_RE.match(found) else None
+
 # paused: the machine is kept with its memory and bills only its storage (a provider with the "pause"
 # capability; an environment's save, openajar.environments.pausing). Not live: it counts toward no limit.
 VmState = Literal["creating", "booting", "ready", "deleting", "deleted", "failed", "paused"]
@@ -214,6 +228,14 @@ class VmRecord(BaseModel):
     network: str = "full"                     # full, or limited / none: its network closed outside it (openajar.vms.netwall)
     ssh_user: str = "root"                    # who the node signs in as (Morph: the instance id, at its gateway)
     via: dict | None = None                   # the SSH host it is reached through (openajar.vms.own), RemoteVia's fields
+    # made with another provider than vms.toml names now, so openajar cannot reach it (openajar.vms.reaping): ended
+    # as "deleted" though nothing was deleted, so 0.8.0 and 0.7.0 (which ignore this field) read the row too
+    lost: bool = False
+    # an environment's machine past its limit: the awake seconds the VM reaper has kept it for its save so far, and
+    # whether the owner was told it is overdue. On the record, so a node that restarts every few minutes still lets
+    # it go after the grace and tells the owner once (R1 #2). 0.8.0 and 0.7.0 ignore both.
+    held_s: float = 0.0
+    overdue_told: bool = False
 
     @property
     def live(self) -> bool:

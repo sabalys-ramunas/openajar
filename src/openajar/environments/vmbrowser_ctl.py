@@ -28,6 +28,13 @@ Actions, each printing one JSON line:
 - clipboard {limit, timeout, nothing}: the text the browser copied, for the live view's "copy" button.
 - stop {what: ["browser", "display"]}: ends them (each runs in a process group of its own).
 - status: which of them run.
+- download_keep {src, name}: a download the browser finished (its own file, src, in a Playwright artifacts folder)
+  as a plain file in DOWNLOADS: a hard link where it can be one, else a copy, under `name` made safe here again,
+  " (1)", " (2)" ... before its extension when the name is taken. Nothing in DOWNLOADS is ever replaced.
+- download_size {src}: how far a running download is (its file or the .part beside it), for the node's size cap
+  and stall check.
+- download_saves {known}: complete files in DOWNLOADS written since the browser started, whose names are not in
+  `known`: what the browser saved there without a download the node saw (the PDF viewer's Save, Ctrl+S).
 
 The desk helper's own socket (desk.sock, beside vnc.sock) is how the node shows the agent's commands and
 brings a window to the front; this script only starts it.
@@ -269,6 +276,11 @@ while True:
     conn.close()
 """
 KEYS_WAIT_S = 10.0
+# Where the browser's downloads land as plain files (browser.download.dir, openajar.environments.vmbrowser
+# DOWNLOAD_PREFS): under /work, so the terminal, a save and environment_download see them.
+DOWNLOADS = "/work/downloads"
+DOWNLOAD_NAME_BYTES = 150
+SAVES_MAX = 20
 BROWSER_BIN = "camoufox-bin"
 READBACK_WAIT_S = 5.0
 
@@ -656,6 +668,10 @@ def browser(req):
     if not _running("xvfb"):
         raise RuntimeError("the screen is not running; start it first")
     port = int(req["port"])
+    try:
+        os.makedirs(DOWNLOADS, exist_ok=True)  # the browser saves there without asking (browser.download.dir)
+    except OSError:
+        pass  # Firefox falls back to its own Downloads folder; the node's copies say where they went
     opts = dict(req["options"], host="127.0.0.1", port=port, ws_path=req["ws_path"])
     if req.get("pin") is not None:
         opts["openajar_pin"] = req["pin"]
@@ -823,6 +839,119 @@ def _server():
         return "x11vnc"
 
 
+def _artifact(src):
+    """A download's own file as the browser server keeps it: a regular file directly in a Playwright artifacts
+    folder of this machine's temp folder, and nothing else (the node names it, but never anything else)."""
+    import tempfile
+
+    src = str(src or "")
+    real = os.path.realpath(src)
+    folder = os.path.dirname(real)
+    temp = os.path.realpath(tempfile.gettempdir())
+    if real != src or os.path.dirname(folder) != temp or not os.path.basename(folder).startswith("playwright-"):
+        raise ValueError("not a download of the browser")
+    return real
+
+
+def _safe_name(name):
+    """A plain file name: its last part only, no control characters, no leading dots, at most 150 bytes."""
+    name = str(name or "").replace("\\", "/").rsplit("/", 1)[-1]
+    name = "".join(ch for ch in name if ch.isprintable()).strip().lstrip(".").strip()
+    while len(name.encode()) > DOWNLOAD_NAME_BYTES:
+        stem, dot, ext = name.rpartition(".")
+        name = (stem[:-1] + dot + ext) if dot and stem and len(ext) <= 16 else name[:-1]
+    return name or "download"
+
+
+def _downloads_dir():
+    """DOWNLOADS, made when missing, opened without following a link: (its fd, its path)."""
+    os.makedirs(DOWNLOADS, exist_ok=True)
+    return os.open(DOWNLOADS, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW), DOWNLOADS
+
+
+def _candidates(name):
+    stem, dot, ext = name.rpartition(".")
+    if not dot or not stem or len(ext) > 16:
+        stem, dot, ext = name, "", ""
+    yield name
+    for i in range(1, 1000):
+        yield f"{stem} ({i}){dot}{ext}"
+
+
+def download_keep(req):
+    src = _artifact(req.get("src"))
+    st = os.lstat(src)
+    if not (st.st_mode & 0o170000 == 0o100000):
+        raise ValueError("the download is not a regular file")
+    dfd, folder = _downloads_dir()
+    try:
+        for cand in _candidates(_safe_name(req.get("name"))):
+            try:
+                os.link(src, cand, dst_dir_fd=dfd, follow_symlinks=False)
+                _say(ok=True, path=f"{folder}/{cand}", name=cand, linked=True)
+                return
+            except FileExistsError:
+                continue
+            except OSError:
+                pass  # another file system, or links not allowed: a copy
+            try:
+                out = os.open(cand, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+            except FileExistsError:
+                continue
+            try:
+                with open(src, "rb") as f, os.fdopen(out, "wb") as o:
+                    while chunk := f.read(1 << 20):
+                        o.write(chunk)
+            except BaseException:
+                os.unlink(cand, dir_fd=dfd)
+                raise
+            _say(ok=True, path=f"{folder}/{cand}", name=cand, linked=False)
+            return
+        raise ValueError("no free name for it in " + folder)
+    finally:
+        os.close(dfd)
+
+
+def download_size(req):
+    src = _artifact(req.get("src"))
+    sizes = []
+    for path in (src, src + ".part"):
+        try:
+            sizes.append(os.lstat(path).st_size)
+        except OSError:
+            pass
+    _say(ok=True, size=max(sizes) if sizes else None)
+
+
+def download_saves(req):
+    known = set(req.get("known") or [])
+    pid = _running("browser")
+    since = _started_at(pid) if pid else None
+    if since is None:
+        _say(ok=True, files=[])  # no browser: nothing it saved
+        return
+    try:
+        dfd, folder = _downloads_dir()
+    except OSError as e:
+        _say(ok=True, files=[], error=str(e)[-300:])
+        return
+    try:
+        names = set(os.listdir(dfd))
+        found = []
+        for name in sorted(names - known):
+            if name.endswith(".part") or name + ".part" in names or name.startswith("."):
+                continue  # still being written (Firefox writes <name>.part beside an empty <name>)
+            try:
+                st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+            except OSError:
+                continue
+            if st.st_mode & 0o170000 == 0o100000 and st.st_mtime >= since - 1:
+                found.append({"name": name, "size": st.st_size})
+        _say(ok=True, folder=folder, files=found[:SAVES_MAX])
+    finally:
+        os.close(dfd)
+
+
 def status(_req):
     _say(ok=True, browser=bool(_running("browser")), display=_screen_runs(),
          desktop=bool(_running("desk") and _running("openbox")))
@@ -832,7 +961,8 @@ def main(req):
     os.makedirs(DIR, mode=0o700, exist_ok=True)
     os.chmod(DIR, 0o700)
     action = {"display": display, "browser": browser, "clipboard": clipboard, "stop": stop,
-              "status": status}.get(req.get("action"))
+              "status": status, "download_keep": download_keep, "download_size": download_size,
+              "download_saves": download_saves}.get(req.get("action"))
     if action is None:
         _say(ok=False, error=f"unknown action {req.get('action')!r}")
         return

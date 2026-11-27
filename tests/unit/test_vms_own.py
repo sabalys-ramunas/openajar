@@ -22,6 +22,7 @@ from openajar.env.sandbox import DirectLauncher
 from openajar.vms import own, providers, ssh
 from openajar.vms.manager import VmManager
 from openajar.vms.models import VmError, VmSettings
+from openajar.vms.provider import NOT_OURS
 
 GB = 2**30
 
@@ -71,6 +72,8 @@ class FakeDocker:
             return 1, "", f"Error: No such image: {name}"
         if "{{.Size}}" in args:
             return 0, f"{3 * GB}\n", ""
+        if "{{json .Config.Labels}}" in args:
+            return 0, json.dumps(self.images[name]) + "\n", ""
         return 0, self.images[name].get("org.agentos.environment", "") + "\n", ""
 
     def _network(self, args, stdin):
@@ -114,7 +117,8 @@ class FakeDocker:
                             "HostConfig": {"NetworkMode": c["network"]},
                             "NetworkSettings": {"Ports": {"22/tcp": [{"HostIp": "127.0.0.1",
                                                                       "HostPort": str(c["port"])}]}}})
-        return (0 if out else 1), json.dumps(out), ""
+        missing = [cid for cid in args if cid not in self.containers]  # docker's own words, as it says them
+        return (1 if missing else 0), json.dumps(out), "".join(f"Error: No such object: {c}\n" for c in missing)
 
     def _ps(self, args, stdin):
         return 0, "".join(cid + "\n" for cid, c in self.containers.items() if self._match(c["labels"], args)), ""
@@ -482,3 +486,172 @@ def test_an_overdue_machine_names_where_to_remove_it_by_hand():
     mine = by_hand_words(VmRecord(id="vm_ab12", provider="own", provider_id="homebox:0123", **base))
     assert "on your machine homebox" in mine and "docker rm -f agentos-vm-ab12" in mine
     assert "Hetzner console" in by_hand_words(VmRecord(id="vm_cd34", provider="hetzner", **base))
+
+
+# ---------------------------------------------------------------- the reapers on your own machine (F1)
+
+async def test_a_container_that_stopped_with_its_machine_is_started_again_not_ended(node):
+    """S1-04 on your own machine: the machine restarted, and its containers stopped with their disks whole.
+    Exited read as gone, and the environment was ended unsaved; now its container is started again, on the
+    loopback port docker gives it there, and the lane still reaches it through the machine."""
+    vms, envs, dockers, _ = node
+    rec = await vms.create("dev/a", ttl_minutes=60)
+    box = dockers["homebox"]
+    cid = own.split_server(rec.provider_id)[1]
+    box.containers[cid].update(running=False, port=45678)  # stopped, and a new port once it starts
+    prov = vms.provider()
+    assert (await prov.get_server(rec.provider_id)).status == "exited"
+    assert await vms.start_machine(rec.id) is True
+    assert box.containers[cid]["running"] and len(box.containers) == 1
+    fresh = vms.store.get(rec.id)
+    assert (fresh.state, fresh.host, fresh.port) == ("ready", "127.0.0.1", 45678) and fresh.via == rec.via
+    lane = envs.get("dev/a")
+    assert lane.remote.port == 45678 and lane.remote.via is not None and lane.remote.via.host == "homebox.test"
+
+
+async def test_a_container_of_your_machine_after_a_switch_away_is_lost_and_named_where_it_is(node, tmp_path):
+    """S5b-05 with your own machine: after vms.toml switched to another provider, a record of a container on
+    your machine is out of reach. Nothing is deleted through the new provider, and the owner is told where it
+    is: on that machine, never "in its console"."""
+    from openajar.vms.provider import FakeProvider
+
+    vms, _envs, dockers, home = node
+    rec = await vms.create("dev/a", ttl_minutes=60)
+    told: list[tuple[str, str]] = []
+
+    async def notify(title, body, *, urgent=False):
+        told.append((title, body))
+
+    other = VmManager(home, runtime=vms.runtime, provider=FakeProvider(), settings=VmSettings(provider="hetzner"),
+                      node_name="node-1", probe=ok_probe)
+    other._notify = notify
+    out = await other.reap_once()
+    got = other.store.get(rec.id)
+    assert out["lost"] == [rec.id] and got.lost and got.state == "deleted" and len(dockers["homebox"].containers) == 1
+    assert len(told) == 1 and "your machine homebox" in told[0][1] and "console" not in told[0][1]
+    assert "made with Your machine" not in got.delete_reason and "your own machine" in got.delete_reason
+    await other.shutdown()
+
+
+# ---------------------------------------------------------------- a delete needs positive evidence (F1)
+
+NO_DAEMON = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"
+
+
+async def test_docker_there_that_does_not_answer_is_an_error_never_no_such_container(node):
+    """The 0.7.0 audit, S1-04, on your own machine: `docker inspect` with no daemon prints [] and exits 1, and
+    the docker provider read that as "deleted outside openajar". Over ssh it is the same docker: only its own
+    "No such ..." says a container or an image is gone, and any other failure decides nothing."""
+    vms, _, dockers, _ = node
+    rec = await vms.create("dev/a", ttl_minutes=60)
+    snap = await vms.snapshot(rec.id, description="s", labels={"agentos-save": "s1"})
+    box, prov = dockers["homebox"], vms.provider()
+    real = box.run
+    box.run = lambda args, stdin: (1, "[]", NO_DAEMON)  # the machine answers, its Docker does not
+    for call in (prov.get_server(rec.provider_id), prov.delete_server(rec.provider_id), prov.get_image(snap["id"]),
+                 prov.delete_image(snap["id"])):
+        with pytest.raises(VmError, match="Cannot connect"):
+            await call
+    with pytest.raises(VmError, match="Cannot connect"):
+        await vms.reap_once()
+    box.run = real
+    cid = own.split_server(rec.provider_id)[1]
+    assert vms.store.get(rec.id).state == "ready" and cid in box.containers and "agentos-env:save-s1" in box.images
+    # docker's own words: gone, and a delete of what is gone is done
+    box.containers.pop(cid)
+    assert await prov.get_server(rec.provider_id) is None
+    await prov.delete_server(rec.provider_id)
+    box.images.pop("agentos-env:save-s1")
+    assert await prov.get_image(snap["id"]) is None
+    await prov.delete_image(snap["id"])
+
+
+async def test_a_container_or_an_image_without_this_homes_label_is_never_deleted_there(node):
+    """S5b-05, S5b-06: deletes went by bare id, so an id from a damaged or restored vms.db, or a save imported
+    from another node, could remove a container or an image openajar of this home never made. Docker there reads
+    the labels back first, and refuses without this home's; the record waits, and the owner hears of it."""
+    vms, _, dockers, _ = node
+    box, prov = dockers["homebox"], vms.provider()
+    box.run(["create", "--name", "postgres", "--network", "bridge", "postgres:16"], None)
+    box.run(["create", "--name", "agentos-vm-other", "--network", "n", "--label", "agentos-home=someoneelse",
+             "agentos-env:latest"], None)
+    pg, other = list(box.containers)
+    box.images["postgres:16"] = {}
+    box.images["agentos-env:save-theirs"] = {"agentos-home": "someoneelse"}
+    for cid, words in ((pg, "not openajar's"), (other, "another openajar home's")):
+        with pytest.raises(VmError, match=words) as e:
+            await prov.delete_server(f"homebox:{cid}")
+        assert e.value.provider_code == NOT_OURS and "remove it yourself" in e.value.message
+    for image in ("postgres:16", "agentos-env:save-theirs"):
+        with pytest.raises(VmError, match="does not delete it") as e:
+            await prov.delete_image(f"homebox//{image}")
+        assert e.value.provider_code == NOT_OURS
+    # a record that names the person's container (a vms.db from another home's backup): refused, ended as lost
+    rec = await vms.create("dev/a", ttl_minutes=60)
+    rec.provider_id = f"homebox:{pg}"
+    vms.store.put(rec)
+    after = await vms._delete(rec, "time limit")
+    assert after.state == "deleted" and after.lost and "not openajar's" in (after.delete_reason or "")
+    assert {c["name"] for c in box.containers.values()} >= {"postgres", "agentos-vm-other"}
+    assert {"postgres:16", "agentos-env:save-theirs"} <= set(box.images)
+    assert not any(c[0] in ("rm", "rmi") and (pg in c or other in c) for c in box.calls)
+
+
+async def test_a_machine_whose_record_does_not_read_is_never_called_gone(node):
+    """S2-01 on your own machine: a machine record that does not read (a hand edit, a newer version's) is not
+    a machine `machine remove` took out. Its containers and images are not known to be gone: the provider says
+    so with an error, and the reaper ends and forgets nothing there."""
+    vms, envs, dockers, home = node
+    rec = await vms.create("dev/a", ttl_minutes=60)
+    snap = await vms.snapshot(rec.id, description="s", labels={"agentos-save": "s1"})
+    (own.folder(home, "homebox") / own.RECORD).write_text("{ not json")
+    prov = vms.provider()
+    for call in (prov.get_server(rec.provider_id), prov.delete_server(rec.provider_id), prov.get_image(snap["id"]),
+                 prov.delete_image(snap["id"])):
+        with pytest.raises(VmError, match="cannot be read"):
+            await call
+    out = await vms.reap_once()  # its container is missing from the list: read back by id, which says nothing
+    assert out["gone"] == [] and out["orphans"] == [] and vms.store.get(rec.id).state == "ready"
+    assert len(dockers["homebox"].containers) == 1 and "agentos-env:save-s1" in dockers["homebox"].images
+    assert envs.has("dev/a")
+
+
+async def test_remove_never_says_it_removed_what_is_still_there(node):
+    """`machine remove` took exit 1 of `docker rm` as removed (and said so). Only docker's "No such ..." is."""
+    vms, _, dockers, _ = node
+    await vms.create("dev/a", ttl_minutes=60)
+    box = dockers["homebox"]
+    real = box.run
+    box.run = lambda args, stdin: (1, "", NO_DAEMON) if args[0] in ("rm", "rmi") else real(args, stdin)
+    docker = vms.provider().on("homebox")
+    with pytest.raises(VmError, match="Cannot connect"):
+        await docker.remove_mine({"agentos-home": vms.home_id})
+    assert len(box.containers) == 1
+    box.run = real
+    found = await docker.remove_mine({"agentos-home": vms.home_id})
+    assert len(found["containers"]) == 1 and box.containers == {}
+
+
+def test_remove_deletes_no_saved_image_while_a_save_does_not_read(machines, capsys):
+    """S1-05 for `machine remove`: a save that does not read may keep its disk on that machine, and unread is
+    not "none". Without --force the remove stops and names the saves folder; nothing there is touched."""
+    import typer
+
+    from openajar.environments import machines_cli
+    from openajar.environments.saves import MANIFEST, SaveStore
+
+    home, dockers = machines
+    box = dockers["homebox"]
+    box.images["agentos-env:save-s1"] = {"agentos-home": "x"}
+    bad = SaveStore(home).root / "fam" / "title" / "s1abc"
+    bad.mkdir(parents=True)
+    (bad / MANIFEST).write_text("{ not json")
+    machines_cli.set_home(home)
+    try:
+        with pytest.raises(typer.Exit):
+            machines_cli.remove("homebox", force=False, keep_image=False)
+    finally:
+        machines_cli.set_home(None)
+    said = capsys.readouterr().err
+    assert "does not read" in said and str(SaveStore(home).root) in said and "--force" in said
+    assert box.calls == [] and own.load(home, "homebox").name == "homebox"

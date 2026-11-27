@@ -130,10 +130,17 @@ class Pausing:
         await self._working_again(env)
 
     # ================================================================ costs, retention, forgetting
-    async def _drop(self, m: SaveManifest) -> bool:
-        """Saving's drop, the paused machine first: one the provider did not delete keeps its save."""
-        if m.paused is not None and not await self.vms().forget_paused(m.paused.vm_id, why=f"save {m.id} removed"):
-            return False
+    async def _drop(self, m: SaveManifest) -> tuple[bool, list[str]]:
+        """Saving's drop, the paused machine first: one the provider did not delete keeps its save. One
+        another save names too (an import on this node) stays for that save, and while a save does not read
+        (S1-05) no paused machine goes: the save stays with it."""
+        if m.paused is not None and not self.saves().whole():
+            return False, []
+        shared = m.paused is not None and any(o.id != m.id and o.paused is not None and o.paused.vm_id == m.paused.vm_id
+                                              for o in self.saves().all())
+        if m.paused is not None and not shared and \
+                not await self.vms().forget_paused(m.paused.vm_id, why=f"save {m.id} removed"):
+            return False, []
         return await super()._drop(m)
 
     def snapshots_eur_month(self) -> float:
@@ -151,7 +158,7 @@ class Pausing:
             return out
         self.__dict__["_paused_swept"] = now
         vms = self.vms()
-        if not callable(getattr(vms, "paused", None)):
+        if not callable(getattr(vms, "paused", None)) or not self.saves().whole():  # S1-05: unreadable is not none
             return out
         known = {m.paused.vm_id for m in self.saves().all() if m.paused is not None}
         known |= {p.vm_id for p in self._pausing().values() if p is not None}

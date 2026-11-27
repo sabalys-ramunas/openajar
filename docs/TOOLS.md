@@ -622,7 +622,7 @@ Store a file in the browser's inbox, ready for browser_upload or a connector too
 
 Toolset: `browser`. Effect: `read`. Needs the `lanes` service.
 
-The browser's files: the inbox (what you stored with browser_file_put, the only files browser_upload can attach) and the outbox (everything the browser downloaded, with a status: complete, downloading, partial or failed), and the size limits. Does not start the browser. Cheap. Effect: read. Errors: invalid (not a browser).
+The browser's files: the inbox (what you stored with browser_file_put, the only files browser_upload can attach) and the outbox (everything the browser downloaded, with a status: complete, downloading, partial or failed), and the size limits. In an environment a download is also a file on its machine (machine_path, in /work/downloads), and what the browser saved there itself (a PDF viewer's Save) is in the outbox too. Does not start the browser. Cheap. Effect: read. Errors: invalid (not a browser).
 
 | Argument | Type | Required | Description |
 |---|---|---|---|
@@ -953,7 +953,7 @@ A file or a folder under /work, to your own computer: a one-use .tar.gz link (15
 
 Toolset: `terminals`. Effect: `read`. Needs the `environments` service.
 
-Delete saves and their disk snapshots (they bill each month): every save of `title`, or one save_id. Its title then opens a new environment. Returns forgot and snapshots_deleted.
+Delete saves and their disk snapshots (they bill each month): every save of `title`, or one save_id. Its title then opens a new environment. Returns forgot and snapshots_deleted, and snapshots_left for a save imported from another node: its snapshot is that node's, left where it is.
 
 | Argument | Type | Required | Description |
 |---|---|---|---|

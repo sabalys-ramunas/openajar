@@ -66,8 +66,8 @@ from openajar.core.config import write_private
 from openajar.core.errors import InvalidRequest, NotFound
 from openajar.core.models import utcnow
 from openajar.env.models import RemoteHost
-from openajar.vms.docker import CALL_TIMEOUT_S, DockerProvider
-from openajar.vms.models import VmError, VmSettings, load_settings
+from openajar.vms.docker import ABSENT, CALL_TIMEOUT_S, DockerProvider
+from openajar.vms.models import VmError, VmSettings, home_id_of, load_settings
 from openajar.vms.provider import Server, ServerSpec
 from openajar.vms.ssh import ssh_base
 
@@ -657,6 +657,7 @@ class MachineDocker(DockerProvider):
         super().__init__(image=settings.docker_image, docker=" ".join(machine.docker), cpus=settings.docker_cpus,
                          memory_gb=settings.docker_memory_gb, pids=settings.docker_pids)
         self.home, self.machine = Path(home), machine
+        self.home_id = home_id_of(self.home)  # deletes read this home's label back first (DockerProvider)
         self.said = f"machine {machine.name}"
         self.image_hint = f"put it there with `openajar environments machine check {machine.name} --image`"
 
@@ -664,12 +665,17 @@ class MachineDocker(DockerProvider):
         return f"MachineDocker({self.machine.name}, {self.image})"
 
     async def _run(self, *args: str, stdin: bytes | None = None, ok_codes: tuple[int, ...] = (0,),
-                   timeout_s: float = CALL_TIMEOUT_S) -> str:
+                   timeout_s: float = CALL_TIMEOUT_S, absent_ok: bool = False) -> str:
+        """docker's output there. A machine that does not answer raises (never "it has none"); `absent_ok`:
+        docker's own "No such ..." is no error, as on this computer (DockerProvider._run)."""
         command = shlex.join([*self.machine.docker, *args])
         code, out, err = await run(self.home, self.machine, command, stdin=stdin, timeout_s=timeout_s + 15)
         if code == SSH_FAILED:
             raise unreachable(self.machine, _last_line(err, out))
         if code not in ok_codes:
+            words = err.lower()
+            if absent_ok and any(w in words for w in ABSENT) and "cannot connect" not in words:
+                return out
             raise VmError(f"{self.said}: docker {args[0]}: {_last_line(err, out) or f'exit {code}'}")
         return out
 
@@ -711,14 +717,16 @@ class MachineDocker(DockerProvider):
         return {"containers": containers, "networks": networks, "images": images}
 
     async def remove_mine(self, labels: dict[str, str]) -> dict[str, list[str]]:
-        """Remove exactly those (never a container, network or image without this home's label)."""
+        """Remove exactly those (never a container, network or image without this home's label). Only docker's
+        "no such ..." counts as removed: any other failure raises, so `machine remove` never says it removed
+        what is still there."""
         found = await self.mine(labels)
         if found["containers"]:
-            await self._run("rm", "-f", "-v", *found["containers"], ok_codes=(0, 1))
+            await self._run("rm", "-f", "-v", *found["containers"], absent_ok=True)
         for n in found["networks"]:
-            await self._run("network", "rm", n, ok_codes=(0, 1))
+            await self._run("network", "rm", n, absent_ok=True)
         for i in found["images"]:
-            await self._run("rmi", "-f", i, ok_codes=(0, 1))
+            await self._run("rmi", "-f", i, absent_ok=True)
         return found
 
 
@@ -733,6 +741,7 @@ class OwnProvider:
 
     def __init__(self, home: Path, settings: VmSettings):
         self.home, self.settings = Path(home), settings
+        self.home_id: str | None = None  # this home's id (VmManager.provider sets it; else vms/home-id is read)
         self._keys: dict[str, tuple[str, dict[str, str]]] = {}
         self._made: dict[str, tuple[float, Any]] = {}
 
@@ -761,14 +770,26 @@ class OwnProvider:
                 docker = MachineDocker(self.home, m, self.settings)
             docker._keys = self._keys  # one login key store: the node makes a key before it names the machine
             made = self._made[name] = (stamp, docker)
+        if self.home_id:
+            made[1].home_id = self.home_id
         return made[1]
 
     def _known(self, name: str | None) -> Any:
+        """The machine's side, or None when it is not set up or its record does not read (for words and plans)."""
         if not name:
             return None
         with contextlib.suppress(VmError, InvalidRequest, NotFound):
             return self.on(name)
         return None
+
+    def _reach(self, name: str | None) -> Any:
+        """The side of the machine a server or an image id names, for a call whose answer decides what is gone.
+        None only when no machine of that name is set up (`machine remove` took it out, with what openajar made
+        there). A record that is there but does not read raises: that machine's containers and images are not
+        known to be gone, so nothing is ended or forgotten on the strength of it (the 0.7.0 audit, S2-01)."""
+        if not name or not NAME_RE.match(name) or not (folder(self.home, name) / RECORD).exists():
+            return None
+        return self.on(name)
 
     def default(self) -> str:
         """The machine new environments go to: what vms.toml names now (so `machine use` holds without a
@@ -851,10 +872,22 @@ class OwnProvider:
 
     async def get_server(self, server_id: str) -> Server | None:
         name, cid = split_server(server_id)
-        docker = self._known(name)
+        docker = self._reach(name)
         if docker is None:
             return None  # its machine was removed from this node: nothing of it is left to reach
         server = await docker.get_server(cid)
+        return self._out(name or "", server) if server is not None else None
+
+    async def start_server(self, server_id: str) -> Server | None:
+        """A container that stopped (the machine restarted, its Docker did), started again with its disk as it
+        was (openajar.vms.pausing.start_machine). None where nothing can be started: a whole machine, or one
+        that is no longer set up."""
+        name, cid = split_server(server_id)
+        docker = self._reach(name)
+        start = getattr(docker, "start_server", None)
+        if not callable(start):
+            return None
+        server = await start(cid)
         return self._out(name or "", server) if server is not None else None
 
     async def list_servers(self, labels: dict[str, str]) -> list[Server]:
@@ -867,8 +900,8 @@ class OwnProvider:
 
     async def delete_server(self, server_id: str) -> None:
         name, cid = split_server(server_id)
-        docker = self._known(name)
-        if docker is not None:
+        docker = self._reach(name)
+        if docker is not None:  # None: `machine remove` took the machine out, with what openajar made there
             await docker.delete_server(cid)
 
     async def sweep(self, labels: dict[str, str]) -> list[str]:
@@ -895,14 +928,14 @@ class OwnProvider:
     async def create_snapshot(self, server_id: str, description: str, labels: dict[str, str]) -> str:
         """`docker commit` on the container's own machine: the image stays in that machine's Docker."""
         name, cid = split_server(server_id)
-        docker = self._known(name)
+        docker = self._reach(name)
         if docker is None:
             raise VmError(f"the machine of {server_id} is no longer set up on this node, so it cannot be saved")
         return f"{name}{IMAGE_SEP}{await docker.create_snapshot(cid, description, labels)}"
 
     async def get_image(self, image_id: str) -> dict | None:
         name, inner = split_image(image_id)
-        docker = self._known(name)
+        docker = self._reach(name)
         if docker is None:
             return None
         info = await docker.get_image(inner)
@@ -910,8 +943,8 @@ class OwnProvider:
 
     async def delete_image(self, image_id: str) -> None:
         name, inner = split_image(image_id)
-        docker = self._known(name)
-        if docker is not None:
+        docker = self._reach(name)
+        if docker is not None:  # None: `machine remove` took the machine out, with what openajar made there
             await docker.delete_image(inner)
 
     async def list_images(self, labels: dict[str, str]) -> list[dict]:

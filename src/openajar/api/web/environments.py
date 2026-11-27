@@ -68,6 +68,7 @@ from openajar.api.errors import error_body
 from openajar.api.web.base import org_route
 from openajar.core.errors import InvalidRequest, NotFound
 from openajar.core.models import Effect
+from openajar.environments.caller import grant_family
 from openajar.environments.stills import stills_of
 
 WORKSPACE = "env"
@@ -134,7 +135,7 @@ def _visible(access: Any, env: Any) -> bool:
     if member is not None:
         return env.member is not None and env.member == member.id
     grant = getattr(getattr(access, "ctx", None), "grant", None)
-    return grant is not None and env.family == getattr(grant, "root_id", None)
+    return grant is not None and env.family == grant_family(grant)
 
 
 def _save_visible(access: Any, m: Any) -> bool:
@@ -146,7 +147,7 @@ def _save_visible(access: Any, m: Any) -> bool:
     if member is not None:
         return m.member is not None and m.member == member.id
     grant = getattr(getattr(access, "ctx", None), "grant", None)
-    return grant is not None and m.family == getattr(grant, "root_id", None)
+    return grant is not None and m.family == grant_family(grant)
 
 
 SAVED_KEYS = ("id", "title", "repo", "branch", "head", "saved_at", "snapshot_gb", "files_bytes", "cost_eur_month",

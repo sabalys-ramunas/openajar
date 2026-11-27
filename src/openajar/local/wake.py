@@ -10,7 +10,9 @@ runs it at once:
 - when the wall clock jumped ahead of the awake clock by WAKE_JUMP_S or more: the computer slept.
 
 Each catch-up first sets the VM firewall to this computer's address now (it may have woken on
-another network), then runs the environments' reaper and the VMs' reaper, and writes what they
+another network), then runs the environments' reaper and the VMs' reaper (after a wake, the VMs' reaper
+keeps every environment's machine until a whole environments' pass that began after the wake is done:
+openajar.vms.reaping), and writes what they
 closed to local-catch-up.json in the home, which `openajar local status` reads. The environments'
 reaper saves before it deletes (openajar.environments.saving): a keep "save" environment is saved, and
 one with unsaved work gets a rescue save. One whose save failed stays (it is in `kept`, with its last
@@ -110,6 +112,8 @@ class CatchUp:
         # and until now `openajar local status` read the record of the start before and named its time
         self._write({**record, "running": True})
         vms = self.runtime.get("vms")
+        if reason == "woke" and vms is not None and callable(getattr(vms, "note_wake", None)):
+            vms.note_wake()  # its own loop may tick before the pass below: it waits for that pass (S1-01)
         if vms is not None and vms.store.live():
             try:
                 await vms.refresh_firewall()  # a move here: the reaper's pass below brings the tunnels back
@@ -126,7 +130,7 @@ class CatchUp:
                 for env_id in out.get("save_failed", []):
                     env = envs.get(env_id)
                     record["kept"].append({"id": env.id, "title": env.title, "why": env.save_error or "",
-                                           "last_save": env.last_save_id,
+                                           "last_save": env.last_save_id, "machine": _machine(vms, env.vm_id),
                                            "last_save_at": env.last_save_at.isoformat() if env.last_save_at else None})
             except Exception as e:  # noqa: BLE001
                 record["errors"].append(f"environments: {getattr(e, 'message', e)}")
@@ -146,6 +150,15 @@ class CatchUp:
             fs.write_private(catch_up_path(self.home), json.dumps(record, indent=2) + "\n")
         except OSError as e:
             log.warning("could not write %s: %s", catch_up_path(self.home), e)
+
+
+def _machine(vms: Any, vm_id: str | None) -> str:
+    """What became of a machine whose save failed: "kept" only while its VM record is ready."""
+    try:
+        rec = vms.store.get(vm_id) if vms is not None and vm_id else None
+    except Exception:  # noqa: BLE001 - not known is not kept
+        rec = None
+    return "kept" if rec is not None and rec.state == "ready" else (rec.state if rec is not None else "not known")
 
 
 def read_last(home: Path) -> dict | None:
@@ -193,7 +206,9 @@ def note(record: dict | None) -> str:
         body += f" Saved first: {', '.join(saved)}."
     for k in record.get("kept") or []:
         last = f"; its last save is {k['last_save']}" if k.get("last_save") else "; it has no earlier save"
-        body += (f" {k['id']} ({k.get('title') or 'no title'}) could not be saved, so its machine is kept "
+        machine = k.get("machine", "kept")  # a record from before 0.8.1 has none: it said kept
+        how = "so its machine is kept" if machine == "kept" else f"and its machine is {machine}"
+        body += (f" {k['id']} ({k.get('title') or 'no title'}) could not be saved, {how} "
                  f"({k.get('why') or 'no reason given'}{last}).")
     errors = record.get("errors") or []
     if errors:

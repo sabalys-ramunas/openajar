@@ -6,6 +6,150 @@ All notable changes to openajar are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-27
+
+This version stops openajar from losing your work, and makes downloads work in an environment's browser.
+
+What was lost before, and is not now. An environment's machine could be deleted before its work was saved:
+when your computer was off or asleep through the environment's time limit (the usual overnight case), when a
+reboot or a Docker Desktop restart left the machine stopped, when `vms.toml` or `environments.toml` did not read
+at a start, and when one server list missed a machine. Staged work was missing from a save of the files. The
+rule now: a delete needs positive evidence, and silence (not listed, not readable, not answering, past its
+time) is never permission. The list is under Fixed.
+
+Saves you may have lost track of. Up to 0.8.0, a new local agent grant (after its 90 days, a freeze, a revoke,
+or new default terms) could not see the saves, open environments and title-bound logins of the one before: the
+agent got `saved: []`, and its title opened a new, empty machine while the old one kept billing. The grant is
+now renewed before it ends, and a replacement keeps the computers. If it already happened to you, run
+`openajar environments adopt` once after updating: it lists what earlier grants of this computer left behind,
+and `openajar environments adopt --yes` gives it to the agent you use now. Nothing is deleted.
+
+Deletes by id read the object back first. 0.8.0, its new providers for your own machine and DigitalOcean
+included, deleted a server, a container, a snapshot or an image by its bare id. 0.8.1 reads each one back first
+and deletes only what carries this home's label, on Hetzner, Morph, DigitalOcean, Docker and your own machine:
+a Hetzner project can hold your production servers too.
+
+Downloads work now in an environment's browser that runs on its machine: a file lands in the browser's outbox
+and in `/work/downloads` there, where every download failed before.
+
+Nothing you set up needs to change.
+
+### Added
+
+- `openajar environments adopt` lists the saves, open environments and title-bound logins that earlier agent
+  grants of this computer left behind (revoked or expired, same agent), and `--yes` gives them to the current
+  grant, once. Nothing is deleted; an open machine it moves is let go, so its title takes it back at once; a
+  title the current grant also has stays the current one's, and the moved one is named "<title> (earlier)";
+  another agent's computers are listed as left alone. The move is an `environments_adopted` row in the action
+  log. `openajar local start` and `setup agents` say when there is something to adopt, and `openajar
+  environments saves` marks those saves "(earlier grant)".
+- The error `saved_by_earlier_grant`: `environment_open` with a title the agent had under an earlier grant of
+  this computer is named, and opens no empty machine beside it; `environment()` lists such titles as `earlier`.
+  Both tell the agent to ask you to run `openajar environments adopt`.
+- The service renews this computer's agent grant before it ends (after 72 of its 90 days, checked at its start
+  and every 6 hours) and stores the new token where Claude Code and Codex read it. The old grant is not revoked,
+  so chats open at the time keep working until it ends. `openajar local start` and `setup agents` renew it too,
+  one at a time with the service, so one grant is issued and the token and the connection name the same one.
+
+### Fixed
+
+- A computer that was off or asleep through an environment's time limit plus 15 minutes (the usual overnight
+  case) no longer loses the work. After the start or the wake the VM reaper could delete the machine before
+  the environments' reaper had saved it: 10 of 12 restarts on Docker and 2 of 2 on Hetzner. The VM reaper now
+  keeps an environment's machine while a save or close of it runs, until the environments' reaper has
+  finished a whole pass since the start or the wake, and for 15 minutes of awake time from when it first saw
+  the machine past its limit, never by the wall clock. That awake time and the "still running past its time
+  limit" notification are kept on the machine's record, so a node that restarts every few minutes still lets
+  the machine go after its 15 minutes and tells you once. The owner is no longer told "its machine is kept"
+  for a machine that is being deleted, in the notification or in `openajar local status`.
+- A machine that only stopped is started again, never deleted. A reboot or a Docker Desktop restart left
+  containers exited with their disks whole (and a Hetzner server an agent powered off was off), and openajar
+  called them gone and deleted them with the work. Now the node starts it (`docker start`, Hetzner's power
+  on; the container's new SSH port is followed) and the link comes back; one that does not start is left as
+  it is and the owner is told once. One that stops again right after each of 3 starts in 30 minutes is not
+  started again: it is gone, and you and the agent are told why. Docker that does not answer is an error, never "no such container", so a
+  node that starts before Docker Desktop marks nothing gone. A machine marked gone that runs again is not gone
+  any more, and a gone one is ended only once the provider says so again. `environment()` of a gone machine
+  shows `git.ahead`, `git.dirty` and `unsaved` as not known instead of 0, 0 and nothing.
+- openajar local does not start when `vms.toml` or `environments.toml` (or its database) cannot be read, and
+  `openajar local serve` names the file and the setting (for `vms.toml` it says to keep its provider line:
+  without it a Docker computer would use Hetzner). It served on without that service, and the other service's reaper
+  then deleted machines with no save. On a server node the reapers hold instead: the environments' reaper
+  marks nothing deleted while the VM service is missing, and the VM reaper deletes no environment's machine
+  while the environments service is missing (you get the notification for a machine past its limit).
+- One server list that missed a machine (an empty `docker ps`, a renamed node, a provider hiccup) no longer
+  deletes it: the reaper asks the provider for that server by its id, and only its own "no such server" marks
+  the record deleted outside openajar, without a delete. A record made with another provider than `vms.toml`
+  names now is ended as lost (state `deleted` with `lost: true`, which 0.8.0 and 0.7.0 still read) and you are told
+  where to look, where its id went to the new provider's delete and the server billed on. `vms/home-id` is
+  never written over after an error other than a missing file.
+- One environment's error no longer stops the reaper's pass for every other environment. Each one's step is
+  its own: logged, in the pass's `errors`, and the owner told once; the VM reaper keeps that environment's
+  machine. A save that cannot make its folder on this computer (a full disk) is a failed save the owner hears
+  of, where it stopped every pass with nobody told.
+- The snapshot sweep deletes nothing while a save does not read or the saves folder is missing, where it
+  deleted the snapshots of those saves and said "Nothing you saved was touched". Its 30 minute grace counts
+  from the sweep's own first sight of a snapshot, never from the provider's creation time. Forgetting or
+  pruning a save with a snapshot or a paused machine deletes nothing then either (the unread save may name
+  it): the save stays, and `forget` says why.
+- The file part of a save (every autosave and rescue, and a resume whose snapshot is gone) now holds work
+  that was staged with `git add`, staged deletions and renames, and the files of a repository with no commit
+  yet. It took `git ls-files -m -o`, which leaves those out, so a rescue said "saved (0 files)" and deleted
+  the machine. It also holds every other file on the disk that `git status` lists (a file untracked with
+  `git rm --cached` and then ignored, a staged change taken back in the work tree), and records as deleted
+  only what is not on the disk, so a resume never deletes a file that was there. A files-only save is not
+  called whole while `git status` lists a file on the disk that the save does not hold: it fails, and the
+  machine is kept past its time limit too, until a save holds that file or you close it; you are told so.
+- A local agent grant that replaces this computer's earlier one keeps its computers: `openajar local start` and
+  `openajar setup agents` issue it in the same environment family, after an expiry or for new default terms, and
+  it keeps the earlier grant's subject and its taint (what it read). After you revoked the grant or a freeze did,
+  the next one starts without those computers and says so: `openajar environments adopt` gives them over after a
+  look. Only this computer's own agent grant carries its family on: a grant `openajar connect` issued for another
+  computer, or one for another subject, never does. Each continuation is a `grant_family` row in the action log. The checks of who asked
+  (self-approval, a task's owner, taint) are unchanged. (S7-01, U5-01)
+- `openajar environments save-import` gives the save to this computer's agent (its agent grant now) unless
+  `--family <grant id>` names another grant, and says which agent resumes it, or that none can yet. It used to
+  keep the family in the file and say "resumes it" when no agent could. A grant `--family` names must exist on
+  the node. (U5-02)
+- Forgetting or pruning a save no longer deletes a disk snapshot (or a paused machine) that another save of this
+  node still names, as a copy `save-import` made on the same node does: only the save goes, `forget` says
+  "Kept snapshot ...", and the last save that names it deletes it. `snapshots_deleted` counts only snapshots it
+  deleted. (U5-03)
+- A save made while `openajar environments adopt` moves its environment is kept under the family and title the
+  environment has when the save is written.
+- A server, a snapshot, an SSH key, a container or an image is deleted only once its provider reads this
+  home's label back on it: Hetzner, Morph, DigitalOcean and Docker (this computer or your own machine).
+  Hetzner also changes a firewall's rules or a server's labels only on one of this home's. Deletes went by
+  bare id, and a Hetzner project can hold your production servers, so an id from a damaged or restored
+  `vms.db`, or a save imported from another node, could delete one of yours or another openajar home's. Now
+  it is refused with an error that names it and says whose it is, nothing is deleted, the VM record ends as
+  lost (it holds no machine slot and books no budget), and you are told once. (S5b-05, S5b-06)
+- Forgetting a save imported from another node no longer leaves it stuck. Its snapshot is the other node's,
+  so the delete is refused, and the save stayed for ever ("try again"). Now the save is forgotten, the snapshot
+  stays where it is, and `forget` says where it is and that openajar no longer tracks it
+  (`snapshots_left`). A prune of such a save does the same and tells you.
+- Downloads work in an environment's browser that runs on its machine (`browser = "vm"`, openajar on a
+  Mac). Every one used to fail while the click said ok and "no change". A downloaded file is now in two
+  places: the browser's outbox on the node (`browser_files`), and a plain file on the machine in
+  `/work/downloads` for the terminal, with " (1)" added when a name is taken. Its record names both
+  (`machine_path`) and says how to give it to the person (`environment_download`). The bytes cross the
+  network once: the file on the machine is the browser's own. The click's result says "a download
+  started: <name>" (and how it ended, when that was within 3 s) or "the download failed: <why>". The
+  size limit and the stall check hold while it runs, not only at the end. The PDF viewer's Save button and
+  Ctrl+S still open Firefox's Save As window (Firefox always asks there), now on `/work/downloads`: the
+  click's result and `browser_tabs` name that window and the `screen_act` call that answers it (on the
+  desktop), where before nothing said it was open, and a file saved there is brought into the outbox too. A
+  browser on the node downloads as before.
+- Your own machine (new in 0.8.0): a container or an image goes only once the machine's Docker reads this
+  home's label back on it, and `machine remove` counts only what Docker removed (any failure but its "no such
+  ..." is an error). A machine whose record on this computer does not read is waited for, never taken for
+  removed, and `machine remove` deletes no saved image there while a save on this computer does not read
+  (`--force` does). When the machine restarts, its open environments' containers stop with their disks whole,
+  and openajar starts them again (it tells you when one does not start), where 0.8.0 lost them until their
+  last save.
+- DigitalOcean (new in 0.8.0, experimental): every delete reads the Droplet or the snapshot back first and
+  refuses one without this home's tag, and a Droplet that is off is powered on again, never deleted.
+
 ## [0.8.0] - 2026-11-26
 
 This version adds two more places an environment can run: a machine you already have (`openajar environments

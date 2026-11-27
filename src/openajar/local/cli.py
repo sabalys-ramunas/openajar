@@ -81,7 +81,8 @@ def serve(home: HomeOption = None, port: PortOption = None,
         logging.getLogger("openajar.local").info("the Claude Code skills are left as they are: this home did not "
                                                 "register the clients (`openajar local start` does)")
     try:
-        asyncio.run(run(cfg))
+        # only the home `start` registered renews the agent grant the clients read (never a test's or a builder's)
+        asyncio.run(run(cfg, renew=local_home.registered(root)))
     except KeyboardInterrupt:
         pass
     except ClientError as exc:  # a setting the person can fix, in words (environments.toml browser = "node")

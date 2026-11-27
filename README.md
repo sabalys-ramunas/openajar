@@ -651,7 +651,7 @@ title replaces it with a fresh one. The skill that teaches an agent the loop:
 ## Status
 
 > [!NOTE]
-> **Alpha, at 0.8.0.** 0.5 gave the agent's computer a desktop you can watch and work with, and the
+> **Alpha, at 0.8.1.** 0.5 gave the agent's computer a desktop you can watch and work with, and the
 > new name. 0.6 gave its browser an address of your own: a static residential proxy or this computer's
 > connection, with the proxy's credentials kept off the machine. 0.7 added your own captcha-solving
 > service, off until you add one. 0.8 adds a machine of your own in place of a rented VM, and
